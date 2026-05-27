@@ -15,9 +15,9 @@ export default function App() {
     <CanvasProvider>
       <div className="flex h-full flex-col">
         <header className="flex h-10 items-center border-b bg-[var(--panel-bg)] px-3">
-          <span className="text-sm font-semibold tracking-tight">WISIWIC</span>
+          <span className="text-sm font-semibold tracking-tight">WYSIWYC</span>
           <span className="ml-2 text-xs text-muted-foreground">
-            What I See Is What I Caption
+            What You See Is What You Chat
           </span>
         </header>
         <div className="flex flex-1 overflow-hidden">
