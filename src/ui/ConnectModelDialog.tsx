@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Check, Loader2, X } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -10,85 +11,121 @@ import {
 import { Button } from './primitives/button';
 import { Input } from './primitives/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './primitives/select';
-import { useModelStore } from '@/state/modelStore';
-import { testConnection } from '@/llm/AnthropicClient';
+import { useModelStore, type ModelSelection } from '@/state/modelStore';
+import { PROVIDERS, modelsByRole, modelLabel, testKey, type ProviderId } from '@/llm/providers';
 
-const MODELS = [
-  { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-  { id: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
-  { id: 'claude-3-5-haiku-20241022', label: 'Claude 3.5 Haiku' },
-];
+type TestState = 'idle' | 'testing' | 'ok' | 'fail';
+
+function encode(sel: ModelSelection): string {
+  return `${sel.provider}:${sel.model}`;
+}
+function decode(value: string): ModelSelection {
+  const [provider, ...rest] = value.split(':');
+  return { provider: provider as ProviderId, model: rest.join(':') };
+}
 
 export function ConnectModelDialog({ children }: { children: React.ReactNode }) {
-  const { apiKey, modelId, isConnected, setApiKey, setModelId, disconnect } = useModelStore();
-  const [open, setOpen] = useState(false);
-  const [keyInput, setKeyInput] = useState(apiKey ?? '');
-  const [status, setStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const { keys, text, image, setKey, removeKey, setText, setImage } = useModelStore();
+  const [status, setStatus] = useState<Record<string, TestState>>({});
 
-  const connect = async () => {
-    if (!keyInput.trim()) return;
-    setStatus('testing');
-    setApiKey(keyInput.trim());
-    setModelId(modelId);
-    try {
-      const ok = await testConnection(keyInput.trim(), modelId);
-      setStatus(ok ? 'ok' : 'fail');
-      if (ok) setTimeout(() => setOpen(false), 600);
-    } catch {
-      setStatus('fail');
-    }
+  const test = async (provider: ProviderId) => {
+    const key = keys[provider];
+    if (!key) return;
+    setStatus((s) => ({ ...s, [provider]: 'testing' }));
+    const ok = await testKey(provider, key);
+    setStatus((s) => ({ ...s, [provider]: ok ? 'ok' : 'fail' }));
   };
 
+  const textOptions = modelsByRole('text');
+  const imageOptions = modelsByRole('image');
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Connect model</DialogTitle>
+          <DialogTitle>Connect models</DialogTitle>
           <DialogDescription>
-            Your Anthropic API key is stored only in this browser and sent directly to Anthropic.
+            Keys are stored only in this browser and sent directly to each provider. Add keys for the
+            providers you want to use, then pick a prompt-sync model and an image model.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
-          <label className="text-sm font-medium">API key</label>
-          <Input
-            type="password"
-            placeholder="sk-ant-..."
-            value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
-          />
+        <div className="flex flex-col gap-2">
+          {PROVIDERS.map((p) => {
+            const st = status[p.id] ?? 'idle';
+            return (
+              <div key={p.id} className="flex items-center gap-2">
+                <span className="w-28 shrink-0 text-xs font-medium">{p.label}</span>
+                <Input
+                  type="password"
+                  className="h-8 text-xs"
+                  placeholder={p.keyPlaceholder}
+                  value={keys[p.id] ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v) setKey(p.id, v);
+                    else removeKey(p.id);
+                    setStatus((s) => ({ ...s, [p.id]: 'idle' }));
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 w-16 shrink-0"
+                  disabled={!keys[p.id] || st === 'testing'}
+                  onClick={() => test(p.id)}
+                >
+                  {st === 'testing' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : st === 'ok' ? (
+                    <Check className="h-3.5 w-3.5 text-green-600" />
+                  ) : st === 'fail' ? (
+                    <X className="h-3.5 w-3.5 text-destructive" />
+                  ) : (
+                    'Test'
+                  )}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
 
-          <label className="text-sm font-medium">Model</label>
-          <Select value={modelId} onValueChange={setModelId}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {MODELS.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
-                  {m.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="mt-1 grid grid-cols-2 gap-3 border-t pt-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium">Prompt sync (text)</label>
+            <Select value={encode(text)} onValueChange={(v) => setText(decode(v))}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {textOptions.map(({ provider, model }) => (
+                  <SelectItem key={`${provider}:${model.id}`} value={`${provider}:${model.id}`}>
+                    {modelLabel(provider, model.id)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
 
-          {status === 'ok' && <p className="text-xs text-green-600">Connected.</p>}
-          {status === 'fail' && (
-            <p className="text-xs text-destructive">Connection failed. Check the key and try again.</p>
-          )}
-
-          <div className="mt-1 flex justify-between">
-            {isConnected ? (
-              <Button variant="outline" onClick={disconnect}>
-                Disconnect
-              </Button>
-            ) : (
-              <span />
-            )}
-            <Button onClick={connect} disabled={status === 'testing'}>
-              {status === 'testing' ? 'Testing…' : 'Connect'}
-            </Button>
+          <div>
+            <label className="mb-1 block text-xs font-medium">Image generation</label>
+            <Select
+              value={image ? encode(image) : 'local'}
+              onValueChange={(v) => setImage(v === 'local' ? null : decode(v))}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="local">Local placeholder (offline)</SelectItem>
+                {imageOptions.map(({ provider, model }) => (
+                  <SelectItem key={`${provider}:${model.id}`} value={`${provider}:${model.id}`}>
+                    {modelLabel(provider, model.id)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </DialogContent>

@@ -1,6 +1,9 @@
 import type { GeometryDelta, PromptAreaData, PromptWord, WordStyle } from '@/types';
+import type { ResolvedConfig } from '@/state/modelStore';
 import { syncPromptFromGeometry } from './AnthropicClient';
 import { imageGenClient } from './ImageGenClient';
+import { generateImage } from './providers';
+import { useModelStore } from '@/state/modelStore';
 import { tintImage } from '@/canvas/imageFilters';
 import { wordsToPrompt } from '@/lib/tokenize';
 
@@ -14,10 +17,9 @@ export interface VisualTransform {
 export async function applyGeometryDelta(
   area: PromptAreaData,
   delta: GeometryDelta,
-  apiKey: string,
-  modelId: string,
+  cfg: ResolvedConfig,
 ): Promise<string> {
-  return syncPromptFromGeometry(area.rawPrompt, delta, apiKey, modelId);
+  return syncPromptFromGeometry(area.rawPrompt, delta, cfg);
 }
 
 const COLOR_NAMES: Record<string, string> = {
@@ -74,12 +76,24 @@ export function rewritePromptForWordColor(words: PromptWord[], changed: PromptWo
   return prompt.toLowerCase().includes(name) ? prompt : `${name} ${prompt}`;
 }
 
-/** Full (re)generation for a prompt area. */
+/**
+ * Full (re)generation for a prompt area. Routes to the connected image
+ * provider (OpenAI / Gemini / Stability); falls back to the offline
+ * placeholder generator when no image model is connected.
+ */
 export async function regenerate(
   area: PromptAreaData,
   onChunk?: (partial: string) => void,
 ): Promise<{ dataURL: string; seed: number }> {
   const seed = area.generationSeed ?? Math.floor(Math.random() * 1_000_000);
+
+  const img = useModelStore.getState().imageConfig();
+  if (img) {
+    const opts = { seed, width: 1024, height: 1024 };
+    const dataURL = await generateImage(img.provider, img.model, img.apiKey, area.rawPrompt, opts);
+    return { dataURL, seed };
+  }
+
   const opts = { seed, width: 512, height: 512 };
   let dataURL: string;
   if (onChunk && imageGenClient.generateStream) {

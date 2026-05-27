@@ -95,7 +95,7 @@ export class PromptAreaManager {
         prompt: area.rawPrompt,
         imageDataURL: dataURL,
         seed,
-        modelId: useModelStore.getState().modelId,
+        modelId: useModelStore.getState().image?.model ?? 'local',
       };
       const history = [...area.generationHistory, snapshot].slice(-20);
       usePromptStore.getState().updateArea(id, {
@@ -172,13 +172,13 @@ export class PromptAreaManager {
 
   private async runSync(id: string, delta: GeometryDelta): Promise<void> {
     this.syncTimers.delete(id);
-    const { apiKey, modelId, isConnected } = useModelStore.getState();
+    const cfg = useModelStore.getState().textConfig();
     const area = usePromptStore.getState().areas[id];
     if (!area || !area.rawPrompt.trim()) return;
-    if (!isConnected || !apiKey) return;
+    if (!cfg) return;
 
     try {
-      const updated = await applyGeometryDelta(area, delta, apiKey, modelId);
+      const updated = await applyGeometryDelta(area, delta, cfg);
       usePromptStore.getState().updateArea(id, {
         rawPrompt: updated,
         words: tokenizePrompt(updated),
