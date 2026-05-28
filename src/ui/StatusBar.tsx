@@ -2,13 +2,20 @@ import { Circle } from 'lucide-react';
 import { useCanvasStore } from '@/state/canvasStore';
 import { usePromptStore } from '@/state/promptStore';
 import { useModelStore } from '@/state/modelStore';
+import { providerOf } from '@/llm/providers';
 import { ConnectModelDialog } from './ConnectModelDialog';
 
 export function StatusBar() {
   const zoom = useCanvasStore((s) => s.zoom);
   const cursor = useCanvasStore((s) => s.cursor);
   const areaCount = usePromptStore((s) => s.order.length);
-  const { modelId, isConnected } = useModelStore();
+  const keys = useModelStore((s) => s.keys);
+  const text = useModelStore((s) => s.text);
+  const image = useModelStore((s) => s.image);
+  const isConnected = Boolean(keys[text.provider]);
+  const imageLabel = image
+    ? providerOf(image.provider).models.find((m) => m.id === image.model)?.label ?? image.model
+    : 'Local';
 
   return (
     <div className="flex h-7 items-center gap-4 border-t bg-[var(--panel-bg)] px-3 text-[11px] text-muted-foreground">
@@ -17,7 +24,8 @@ export function StatusBar() {
         Cursor: {cursor.x}, {cursor.y}
       </span>
       <span>Areas: {areaCount}</span>
-      <span>Model: {modelId.replace('claude-', '').replace(/-\d+$/, '')}</span>
+      <span>Text: {providerOf(text.provider).label}</span>
+      <span>Image: {imageLabel}</span>
       <ConnectModelDialog>
         <button className="ml-auto flex items-center gap-1.5 hover:text-foreground">
           <Circle
