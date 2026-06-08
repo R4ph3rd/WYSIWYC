@@ -4,9 +4,57 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WYSIWYC</title>
-    <script type="module" crossorigin src="./assets/index-QRYWqDOP.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CRzE6yLf.css">
+    <title>WYSIWYC — What You See Is What You Chat</title>
+
+    <!--
+      Tailwind Play CDN (in-browser compiler). WYSIWYC renders LLM-authored
+      Tailwind className strings at runtime, so build-time JIT purging cannot
+      know them. The Play CDN compiles arbitrary classes on the fly. A
+      production build would instead compile a constrained design-token subset
+      (or run the Tailwind compiler server-side per generation).
+    -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              border: 'hsl(var(--border))',
+              input: 'hsl(var(--input))',
+              ring: 'hsl(var(--ring))',
+              background: 'hsl(var(--background))',
+              foreground: 'hsl(var(--foreground))',
+              primary: {
+                DEFAULT: 'hsl(var(--primary))',
+                foreground: 'hsl(var(--primary-foreground))',
+              },
+              secondary: {
+                DEFAULT: 'hsl(var(--secondary))',
+                foreground: 'hsl(var(--secondary-foreground))',
+              },
+              muted: {
+                DEFAULT: 'hsl(var(--muted))',
+                foreground: 'hsl(var(--muted-foreground))',
+              },
+              accent: {
+                DEFAULT: 'hsl(var(--accent))',
+                foreground: 'hsl(var(--accent-foreground))',
+              },
+              destructive: {
+                DEFAULT: 'hsl(var(--destructive))',
+                foreground: 'hsl(var(--destructive-foreground))',
+              },
+              popover: {
+                DEFAULT: 'hsl(var(--popover))',
+                foreground: 'hsl(var(--popover-foreground))',
+              },
+            },
+          },
+        },
+      };
+    </script>
+    <script type="module" crossorigin src="./assets/index-By6KNKpH.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-tpp72YGc.css">
   </head>
   <body>
     <div id="root"></div>
