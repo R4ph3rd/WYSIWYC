@@ -1,97 +1,121 @@
 # WYSIWYC — What You See Is What You Chat
 
 A bidirectional **prompt ⇄ UI** editor. A natural-language prompt generates a
-polished UI mockup; the UI can be directly manipulated; manipulations propagate
-back into a human-readable, synchronized prompt — with element-level provenance
-linking both directions.
+polished UI mockup; you can directly draw, edit, and restyle elements with
+Figma-style tools; manipulations propagate back into a human-readable,
+synchronized prompt — with element-level provenance linking both directions.
 
 ## The core idea
 
-There are **three artifacts and one source of truth**:
+Three artifacts and **one source of truth**:
 
 ```
 PROMPT (structured NL)  ⇄  IR (JSON scene graph = SOURCE OF TRUTH)  ⇄  RENDER (React + Tailwind)
 ```
 
-- **The IR is the single source of truth.** The prompt view and the rendered UI
+- **IR is the single source of truth.** The prompt view and the rendered UI
   are both *projections* of it.
-- **Prompt → IR** (`src/llm` Call A): an LLM emits a **patch** (list of ops)
-  against the current IR — never a full regeneration unless the IR is empty.
-- **IR → Render** (`src/render`): a pure, deterministic function. No LLM.
-- **Render → IR** (`src/ir/manipulate.ts`): drag / resize / recolor / align /
-  delete write **deterministically** to the IR. No LLM in the manipulation.
-- **IR → Prompt** (Call B, the lossy back-channel): after a manipulation an LLM
-  proposes an updated prompt plus a one-sentence description of the delta. This
-  direction is **lossy and user-confirmed** (the Diff Ribbon).
+- **Prompt → IR** (Call A): the LLM emits a *patch* (add / update / remove /
+  reorder), never a full regeneration unless the IR is empty.
+- **IR → Render**: deterministic, pure function — no LLM.
+- **Render → IR**: direct manipulation (drawing tools, properties panel,
+  drag-to-reorder) writes **deterministically** — no LLM.
+- **IR → Prompt** (Call B, the lossy back-channel): after a manipulation the
+  LLM proposes a one-sentence prompt delta the user **accepts or rejects** (the
+  Diff Ribbon). Rejecting keeps the IR change but marks the node *diverged*.
 
 **The asymmetry is intentional and visible in the UX:** prompt→output is
-authoritative; output→prompt is a *proposal* you accept or reject. Rejecting
-keeps the UI change but marks the node *diverged* (dashed amber outline,
-`provenance.source = "user"`, `promptClauseId = null`).
-
-Visual richness lives entirely in LLM-authored data: each IR node carries a
-free-form `tailwind` className string. The schema constrains *structure and
-identity* (flat nodes, stable ids), not *aesthetics*.
+authoritative; output→prompt is a *proposal*, never auto-applied.
 
 ## Layout
 
-- **Left — Prompt pane:** the spec as editable, categorized clauses
-  (layout / component / style / content). Editing a clause → debounced Call A.
-  Hovering a clause highlights the UI nodes it owns (and vice versa).
-- **Center — Canvas:** the live, deterministic render. Select a node for a
-  floating toolbar (recolor, resize, align, delete); drag siblings to reorder.
-- **Bottom — Diff Ribbon:** the honest back-channel. Shows the proposed
-  prompt delta + a confidence badge with **Accept / Reject**. Never auto-applies.
+- **Top bar** — branding, examples, **Connect** button (pick provider + paste
+  key), and global actions (New / Undo / Log).
+- **Left rail** — *Prompt* (editable categorized clauses; hover ⇄ highlights
+  the UI nodes they own) on top, *Layers* (hierarchical tree) below.
+- **Center** — Canvas with floating **tool palette** (Pointer / Rectangle /
+  Circle / Line / Text) — draw shapes by click-drag, Figma-style.
+- **Right rail** — *Properties* panel with structured controls for the
+  selected node: fill, stroke, border radius, opacity, font family / size /
+  weight / colour, text align, shadow presets, and exact x/y/w/h.
+- **Bottom** — *Diff Ribbon*: the proposed prompt delta + confidence badge
+  with **Accept / Reject**.
 
-## Running locally (with LLM generation)
+## LLM providers (Connect button)
 
-The Anthropic API key is held **server-side** by a tiny dev/preview proxy
-(`server/llmProxy.ts`, mounted at `/api/llm`) — it never reaches client code.
+Browser-direct calls to four providers — no backend, keys stay in
+`localStorage`:
+
+| Provider | Default model | Structured output mode |
+|---|---|---|
+| Anthropic | `claude-opus-4-8` | `output_config.format` (json_schema) |
+| OpenAI | `gpt-4o` | `response_format` (json_schema, strict) |
+| Mistral | `mistral-large-latest` | `response_format` (json_schema, strict) |
+| Groq | `llama-3.3-70b-versatile` | `response_format: {json_object}` + schema-in-prompt + client-side validation |
+
+Switching active provider is a single click in the Connect dialog. Each
+provider stores its own key, so you can have all four loaded and switch on the
+fly.
+
+## The IR schema
+
+Nodes are **flat** with `parentId` references (not deeply nested) — deep
+nesting degrades structured-output reliability. Each node carries:
+
+- `role` — `frame` / `container` / `text` / `heading` / `button` / `input` /
+  `image` / `icon` / `divider` / `badge` / `rectangle` / `circle` / `line`
+- `tailwind` — LLM-authored className (where visual richness lives)
+- `style` — structured visual properties written by the Properties panel
+  (fill / stroke / strokeWidth / borderRadius / fontFamily / fontSize /
+  fontWeight / fontColor / italic / underline / textAlign / shadow / opacity)
+- `layout` — optional absolute `x / y / w / h` (drawn shapes use this)
+- `provenance` — `{ promptClauseId, source: "llm" | "user" }`
+
+The split between `tailwind` and `style` is intentional: tailwind is what the
+LLM authors freely; style is what the user dialled in by hand and we don't
+want to round-trip through tokens. The renderer applies both.
+
+## Running locally
 
 ```bash
 npm install
-export ANTHROPIC_API_KEY=sk-ant-...
 npm run dev        # http://localhost:5173
 ```
 
-Call A and Call B use `claude-opus-4-8` with **structured outputs**
-(`output_config.format`) so the JSON is schema-valid by construction.
+Open the app, click **Connect**, paste an API key, pick a model. No backend
+required — all LLM calls go from the browser directly to the provider.
 
-## Deployment note (GitHub Pages)
+## Deploying
 
-The CI workflow builds and publishes the static app to `gh-pages`. A static host
-has **no backend**, so Call A / Call B are unavailable there — the deployed demo
-runs the fully-deterministic half (renderer, direct manipulation, provenance
-highlighting, undo, and the three seed examples). Prompt⇄UI generation requires
-running locally with `ANTHROPIC_API_KEY`, or porting `server/llmProxy.ts` to a
-serverless function.
+CI publishes to `gh-pages` automatically (`.github/workflows/deploy.yml`). The
+deployed demo is fully functional: bring your own key on the live site.
 
 ## Tailwind at runtime
 
 Because the LLM authors arbitrary Tailwind classes **at runtime**, build-time
-JIT purging cannot know them. This PoC uses the **Tailwind Play CDN** (in-browser
-compiler, see `index.html`) so any class compiles on the fly. A production build
-would instead compile a constrained design-token subset, or run the Tailwind
-compiler server-side per generation.
+JIT purging cannot know them. This PoC uses the **Tailwind Play CDN**
+(in-browser compiler, see `index.html`) so any class compiles on the fly. A
+production build would instead compile a constrained design-token subset, or
+run the Tailwind compiler server-side per generation.
 
 ## Research framing (spec §7)
 
-Every Call B is logged as `{ manipulation, proposal, accepted, confidence }`
-(localStorage; **Log** button downloads JSON). The dependent measure for a future
-study is the **acceptance rate of inferred prompt deltas by manipulation type and
-confidence**. The intellectual contribution is the **IR-mediated bidirectional
-sync** and the **studied lossy back-channel** — not direct manipulation alone.
+Every Call B back-channel is logged as `{ manipulation, proposal, accepted,
+confidence }` (localStorage; **Log** button downloads JSON). The dependent
+measure for a future study is the **acceptance rate of inferred prompt deltas
+by manipulation type and confidence**. The intellectual contribution is the
+**IR-mediated bidirectional sync** and the **studied lossy back-channel** —
+not direct manipulation alone.
 
 ## Project layout
 
 ```
 src/
-  ir/        types, applyPatch, tree, manipulate, tailwindEdit, ids, samples
-  render/    Renderer (pure IR → React+Tailwind)
-  llm/       schemas, prompts, client (Call A / Call B)
-  store/     appStore (Zustand: the one source of truth + actions)
-  ui/        PromptPane, Canvas, SelectionToolbar, DiffRibbon, primitives
+  ir/        types, applyPatch, tree, manipulate (createNode, updateStyle…), samples
+  render/    Renderer (pure IR → React+Tailwind, applies tailwind + style)
+  llm/       schemas, prompts, providers (4-provider abstraction), client
+  store/     appStore (one source of truth + actions), settingsStore (keys, models)
+  ui/        App shell, PromptPane, Canvas, ToolPalette, LayersPanel,
+             PropertiesPanel, DiffRibbon, ConnectDialog, primitives
   lib/       utils, log (research instrumentation)
-server/
-  llmProxy.ts   dev/preview /api/llm proxy (holds the API key)
 ```

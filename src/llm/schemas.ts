@@ -10,7 +10,41 @@ const nullableString = { anyOf: [{ type: 'string' }, { type: 'null' }] };
 
 const roleEnum = {
   type: 'string',
-  enum: ['frame', 'container', 'text', 'heading', 'button', 'input', 'image', 'icon', 'divider', 'badge'],
+  enum: [
+    'frame',
+    'container',
+    'text',
+    'heading',
+    'button',
+    'input',
+    'image',
+    'icon',
+    'divider',
+    'badge',
+    'rectangle',
+    'circle',
+    'line',
+  ],
+};
+
+const styleSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    fill: { type: 'string' },
+    stroke: { type: 'string' },
+    strokeWidth: { type: 'number' },
+    borderRadius: { type: 'number' },
+    fontFamily: { type: 'string' },
+    fontSize: { type: 'number' },
+    fontWeight: { type: ['number', 'string'] },
+    fontColor: { type: 'string' },
+    italic: { type: 'boolean' },
+    underline: { type: 'boolean' },
+    textAlign: { type: 'string', enum: ['left', 'center', 'right'] },
+    shadow: { type: 'string' },
+    opacity: { type: 'number' },
+  },
 };
 
 const layoutSchema = {
@@ -45,6 +79,7 @@ const nodeSchema = {
     content: { type: 'string' },
     tailwind: { type: 'string', description: 'Production-quality Tailwind className authored by you.' },
     layout: layoutSchema,
+    style: styleSchema,
     provenance: provenanceSchema,
   },
   required: ['id', 'role', 'parentId', 'order', 'tailwind', 'provenance'],
@@ -60,6 +95,7 @@ const partialNodeSchema = {
     content: { type: 'string' },
     tailwind: { type: 'string' },
     layout: layoutSchema,
+    style: styleSchema,
     provenance: provenanceSchema,
   },
 };

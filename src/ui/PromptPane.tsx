@@ -36,10 +36,10 @@ export function PromptPane() {
   };
 
   return (
-    <div className="flex w-80 shrink-0 flex-col border-r bg-white">
-      <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold tracking-tight text-slate-900">Prompt</h2>
-        <p className="text-[11px] text-slate-500">A living spec. Edit a clause to regenerate; hover to trace it.</p>
+    <div className="flex h-full flex-col bg-white">
+      <div className="border-b border-slate-100 px-3 py-2">
+        <h2 className="text-xs font-semibold tracking-tight text-slate-700">Prompt</h2>
+        <p className="text-[10px] text-slate-500">A living spec. Edit to regenerate; hover to trace.</p>
       </div>
 
       <div className="flex-1 space-y-1.5 overflow-y-auto p-3">
