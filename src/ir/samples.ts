@@ -150,7 +150,7 @@ const dashboard: Sample = {
       node('node_14', 'heading', 'node_12', 1, 'text-2xl font-bold text-slate-900', 'clause_6', '2,318'),
       node('node_15', 'container', 'node_8', 2, 'bg-white rounded-xl shadow-sm ring-1 ring-slate-100 p-5 flex flex-col gap-1', 'clause_6'),
       node('node_16', 'text', 'node_15', 0, 'text-xs font-medium uppercase tracking-wide text-slate-400', 'clause_6', 'Churn'),
-      node('node_17', 'heading', 'node_15', 1, 'text-2xl font-bold text-slate-900', 'clause_6', '$48.2k')
+      node('node_17', 'heading', 'node_15', 1, 'text-2xl font-bold text-slate-900', 'clause_6', '1.4%'),
     ],
   },
 };
