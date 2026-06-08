@@ -1,38 +1,39 @@
 import type { IR, IRPatch, PromptUpdateProposal, StructuredPrompt, ManipulationOp } from '@/ir/types';
 import { IR_PATCH_SCHEMA, PROMPT_UPDATE_SCHEMA } from './schemas';
 import { CALL_A_SYSTEM, CALL_B_SYSTEM, callAUser, callBUser } from './prompts';
+import { callJSON, LLMError } from './providers';
+import { useSettingsStore } from '@/store/settingsStore';
 
-/** Thrown when the LLM proxy isn't reachable (e.g. static GitHub Pages host). */
-export class LLMUnavailableError extends Error {}
-
-interface LLMRequest {
-  system: string;
-  user: string;
-  schema: unknown;
-  schemaName: string;
-  maxTokens: number;
+/** Thrown when no provider is connected. The UI surfaces this with the Connect dialog. */
+export class NotConnectedError extends Error {
+  constructor() {
+    super('No model connected. Open the Connect dialog and paste an API key.');
+  }
 }
 
-async function callLLM<T>(req: LLMRequest): Promise<T> {
-  let res: Response;
+async function callConnected<T>(
+  system: string,
+  user: string,
+  schema: unknown,
+  schemaName: string,
+  maxTokens: number,
+): Promise<T> {
+  const active = useSettingsStore.getState().active();
+  if (!active) throw new NotConnectedError();
   try {
-    res = await fetch('/api/llm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
-    });
-  } catch {
-    throw new LLMUnavailableError('Could not reach the LLM backend.');
+    return (await callJSON(active.provider, {
+      apiKey: active.apiKey,
+      model: active.model,
+      system,
+      user,
+      schema,
+      schemaName,
+      maxTokens,
+    })) as T;
+  } catch (err) {
+    if (err instanceof LLMError) throw err;
+    throw new LLMError((err as Error).message);
   }
-
-  if (res.status === 404) {
-    throw new LLMUnavailableError('No LLM backend on this host. Run locally with ANTHROPIC_API_KEY.');
-  }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(body?.error ?? `LLM request failed (${res.status}).`);
-  }
-  return body.data as T;
 }
 
 /** Call A — Prompt → IR patch. */
@@ -41,13 +42,13 @@ export function generatePatch(
   prompt: StructuredPrompt,
   changedClauseIds: string[],
 ): Promise<IRPatch> {
-  return callLLM<IRPatch>({
-    system: CALL_A_SYSTEM,
-    user: callAUser(ir, prompt, changedClauseIds),
-    schema: IR_PATCH_SCHEMA,
-    schemaName: 'ir_patch',
-    maxTokens: 8000,
-  });
+  return callConnected<IRPatch>(
+    CALL_A_SYSTEM,
+    callAUser(ir, prompt, changedClauseIds),
+    IR_PATCH_SCHEMA,
+    'ir_patch',
+    8000,
+  );
 }
 
 /** Call B — IR delta → Prompt update proposal (the lossy back-channel). */
@@ -57,11 +58,11 @@ export function proposePromptUpdate(
   prevPrompt: StructuredPrompt,
   op: ManipulationOp,
 ): Promise<PromptUpdateProposal> {
-  return callLLM<PromptUpdateProposal>({
-    system: CALL_B_SYSTEM,
-    user: callBUser(prevIR, nextIR, prevPrompt, op),
-    schema: PROMPT_UPDATE_SCHEMA,
-    schemaName: 'prompt_update',
-    maxTokens: 1500,
-  });
+  return callConnected<PromptUpdateProposal>(
+    CALL_B_SYSTEM,
+    callBUser(prevIR, nextIR, prevPrompt, op),
+    PROMPT_UPDATE_SCHEMA,
+    'prompt_update',
+    1500,
+  );
 }
