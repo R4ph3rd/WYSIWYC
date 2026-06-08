@@ -24,7 +24,13 @@ export type NodeRole =
   | 'image'
   | 'icon'
   | 'divider'
-  | 'badge';
+  | 'badge'
+  // Figma-style drawing primitives. These are produced by the tool palette
+  // (deterministic, no LLM) and rendered with absolute positioning + the
+  // `style` block below.
+  | 'rectangle'
+  | 'circle'
+  | 'line';
 
 export const NODE_ROLES: NodeRole[] = [
   'frame',
@@ -37,6 +43,9 @@ export const NODE_ROLES: NodeRole[] = [
   'icon',
   'divider',
   'badge',
+  'rectangle',
+  'circle',
+  'line',
 ];
 
 export type ProvenanceSource = 'llm' | 'user';
@@ -56,6 +65,29 @@ export interface NodeLayout {
   h?: number;
 }
 
+/**
+ * Structured visual style. Written by the Properties panel (Figma-style
+ * controls) and applied as inline CSS on top of `tailwind`. The split is
+ * intentional: `tailwind` is what the LLM authors freely; `style` is what the
+ * user dialled in by hand and we don't want to round-trip through tokens.
+ */
+export interface NodeStyle {
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
+  borderRadius?: number;
+  fontFamily?: string;
+  fontSize?: number;
+  fontWeight?: number | string;
+  fontColor?: string;
+  italic?: boolean;
+  underline?: boolean;
+  textAlign?: 'left' | 'center' | 'right';
+  /** CSS box-shadow value (or '' for none). */
+  shadow?: string;
+  opacity?: number;
+}
+
 export interface IRNode {
   /** Stable id, e.g. "node_7" — NEVER reused or renumbered. */
   id: string;
@@ -69,6 +101,7 @@ export interface IRNode {
   /** LLM-authored className — the source of visual richness. */
   tailwind: string;
   layout?: NodeLayout;
+  style?: NodeStyle;
   provenance: NodeProvenance;
 }
 
