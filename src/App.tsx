@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Undo2, Download, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon } from 'lucide-react';
-import { useAppStore } from './store/appStore';
+import { useAppStore, type Tool } from './store/appStore';
 import { useSettingsStore } from './store/settingsStore';
 import { SAMPLES } from './ir/samples';
 import { downloadBackChannelLog } from './lib/log';
@@ -28,6 +28,45 @@ export default function App() {
   useEffect(() => {
     if (needsConnect) setConnectOpen(true);
   }, [needsConnect]);
+
+  // Figma-style keyboard shortcuts: V/R/O/L/P/T pick tools, Delete removes the
+  // selection (a manipulation — it runs the back-channel), ⌘Z undoes.
+  useEffect(() => {
+    const TOOL_KEYS: Record<string, Tool> = {
+      v: 'pointer', r: 'rectangle', o: 'circle', l: 'line', p: 'path', t: 'text',
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+      const store = useAppStore.getState();
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        store.undo();
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const toolKey = TOOL_KEYS[e.key.toLowerCase()];
+      if (toolKey) {
+        store.setTool(toolKey);
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && store.selectedNodeId) {
+        e.preventDefault();
+        store.manipulate({ kind: 'delete', id: store.selectedNodeId });
+      }
+      if (e.key === 'Escape' && store.tool === 'pointer') {
+        store.selectNode(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   return (
     <div className="flex h-full flex-col">

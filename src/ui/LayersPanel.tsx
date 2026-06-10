@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import {
   ChevronRight, Box, Type as TypeIcon, MousePointer2, Image as ImageIcon,
-  Square, Circle, Minus, Layers as LayersIcon, Eye, EyeOff, Trash2,
+  Square, Circle, Minus, PenTool, Layers as LayersIcon, Eye, EyeOff, Trash2,
 } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import { buildTree, type IRTreeNode } from '@/ir/tree';
@@ -22,6 +22,7 @@ const ROLE_ICON: Record<NodeRole, React.ReactNode> = {
   rectangle: <Square className="h-3.5 w-3.5" />,
   circle: <Circle className="h-3.5 w-3.5" />,
   line: <Minus className="h-3.5 w-3.5" />,
+  path: <PenTool className="h-3.5 w-3.5" />,
 };
 
 export function LayersPanel() {

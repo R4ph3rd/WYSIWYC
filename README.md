@@ -1,43 +1,66 @@
 # WYSIWYC — What You See Is What You Chat
 
-A bidirectional **prompt ⇄ UI** editor. A natural-language prompt generates a
-polished UI mockup; you can directly draw, edit, and restyle elements with
-Figma-style tools; manipulations propagate back into a human-readable,
-synchronized prompt — with element-level provenance linking both directions.
+A bidirectional **prompt ⇄ UI** editor. You describe a UI in plain natural
+language (Lovable-style); it becomes a polished mockup you can directly draw
+on, drag, resize, and restyle with Figma-style tools; every manipulation
+propagates back into a human-readable, synchronized prompt — with
+element-level provenance linking both directions.
 
 ## The core idea
 
 Three artifacts and **one source of truth**:
 
 ```
-PROMPT (structured NL)  ⇄  IR (JSON scene graph = SOURCE OF TRUTH)  ⇄  RENDER (React + Tailwind)
+PROMPT (natural-language living spec)  ⇄  IR (JSON scene graph = SOURCE OF TRUTH)  ⇄  RENDER (React + Tailwind)
 ```
 
 - **IR is the single source of truth.** The prompt view and the rendered UI
   are both *projections* of it.
-- **Prompt → IR** (Call A): the LLM emits a *patch* (add / update / remove /
-  reorder), never a full regeneration unless the IR is empty.
-- **IR → Render**: deterministic, pure function — no LLM.
-- **Render → IR**: direct manipulation (drawing tools, properties panel,
-  drag-to-reorder) writes **deterministically** — no LLM.
+- **Instruction → Spec + IR** (Compose): the Lovable-style entry point. You
+  just *talk* ("a pricing page with three plans…", "make the button green");
+  one LLM call folds the instruction into the living spec (clause upserts) AND
+  emits the IR patch realizing it, so provenance lines up clause-by-node.
+- **Prompt → IR** (Call A): editing a spec sentence in place makes the LLM
+  emit a *patch* (add / update / remove / reorder), never a full regeneration
+  unless the IR is empty.
+- **IR → Render**: deterministic, pure function — no LLM, no SVG generation;
+  the LLM authors *data* (Tailwind classNames), the renderer projects it.
+- **Render → IR**: direct manipulation (drawing tools, drag-move, resize
+  handles, properties panel, drag-to-reorder) writes **deterministically** —
+  no LLM in the gesture itself.
 - **IR → Prompt** (Call B, the lossy back-channel): after a manipulation the
   LLM proposes a one-sentence prompt delta the user **accepts or rejects** (the
   Diff Ribbon). Rejecting keeps the IR change but marks the node *diverged*.
+  This covers *every* manipulation: canvas drags, hand-drawn shapes, and
+  (debounced per editing burst) Properties-panel changes.
 
 **The asymmetry is intentional and visible in the UX:** prompt→output is
 authoritative; output→prompt is a *proposal*, never auto-applied.
 
+**The prompt reads like a person, not a config file.** The spec is rendered
+as flowing sentences (each one a hoverable, editable span) and both LLM
+directions are instructed to use *semantic* values first — "place the CTA
+below the form", "a softer pink" — never raw pixels or hex codes unless the
+user typed them.
+
 ## Layout
 
+- **Empty project** — a Lovable-style hero: one big "What do you want to
+  build?" input over the canvas, plus seed examples.
 - **Top bar** — branding, examples, **Connect** button (pick provider + paste
   key), and global actions (New / Undo / Log).
-- **Left rail** — *Prompt* (editable categorized clauses; hover ⇄ highlights
-  the UI nodes they own) on top, *Layers* (hierarchical tree) below.
+- **Left rail** — *Prompt* (the living spec as natural prose: hover a sentence
+  ⇄ highlights the UI nodes it owns, click to edit in place, composer below to
+  fold in new instructions) on top, *Layers* (hierarchical tree) below.
 - **Center** — Canvas with floating **tool palette** (Pointer / Rectangle /
-  Circle / Line / Text) — draw shapes by click-drag, Figma-style.
+  Circle / Line / **Pen** / Text — shortcuts V R O L P T). Draw by click-drag;
+  pen paths by clicking anchor points (double-click / ⏎ to finish). Drawn
+  shapes drag to move and resize with corner handles; flow elements drag to
+  reorder; Delete removes the selection.
 - **Right rail** — *Properties* panel with structured controls for the
   selected node: fill, stroke, border radius, opacity, font family / size /
-  weight / colour, text align, shadow presets, and exact x/y/w/h.
+  weight / colour, text align, shadow presets, and exact x/y/w/h. Edits land
+  immediately and propose a prompt update once the burst settles.
 - **Bottom** — *Diff Ribbon*: the proposed prompt delta + confidence badge
   with **Accept / Reject**.
 
@@ -63,7 +86,8 @@ Nodes are **flat** with `parentId` references (not deeply nested) — deep
 nesting degrades structured-output reliability. Each node carries:
 
 - `role` — `frame` / `container` / `text` / `heading` / `button` / `input` /
-  `image` / `icon` / `divider` / `badge` / `rectangle` / `circle` / `line`
+  `image` / `icon` / `divider` / `badge` / `rectangle` / `circle` / `line` /
+  `path` (pen-tool paths carry a `points` array relative to their bounding box)
 - `tailwind` — LLM-authored className (where visual richness lives)
 - `style` — structured visual properties written by the Properties panel
   (fill / stroke / strokeWidth / borderRadius / fontFamily / fontSize /

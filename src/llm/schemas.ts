@@ -24,7 +24,18 @@ const roleEnum = {
     'rectangle',
     'circle',
     'line',
+    'path',
   ],
+};
+
+const pointsSchema = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { x: { type: 'number' }, y: { type: 'number' } },
+    required: ['x', 'y'],
+  },
 };
 
 const styleSchema = {
@@ -80,6 +91,7 @@ const nodeSchema = {
     tailwind: { type: 'string', description: 'Production-quality Tailwind className authored by you.' },
     layout: layoutSchema,
     style: styleSchema,
+    points: pointsSchema,
     provenance: provenanceSchema,
   },
   required: ['id', 'role', 'parentId', 'order', 'tailwind', 'provenance'],
@@ -96,54 +108,55 @@ const partialNodeSchema = {
     tailwind: { type: 'string' },
     layout: layoutSchema,
     style: styleSchema,
+    points: pointsSchema,
     provenance: provenanceSchema,
+  },
+};
+
+const patchOpsSchema = {
+  type: 'array',
+  items: {
+    anyOf: [
+      {
+        type: 'object',
+        additionalProperties: false,
+        properties: { type: { type: 'string', enum: ['add'] }, node: nodeSchema },
+        required: ['type', 'node'],
+      },
+      {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          type: { type: 'string', enum: ['update'] },
+          id: { type: 'string' },
+          props: partialNodeSchema,
+        },
+        required: ['type', 'id', 'props'],
+      },
+      {
+        type: 'object',
+        additionalProperties: false,
+        properties: { type: { type: 'string', enum: ['remove'] }, id: { type: 'string' } },
+        required: ['type', 'id'],
+      },
+      {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          type: { type: 'string', enum: ['reorder'] },
+          id: { type: 'string' },
+          order: { type: 'integer' },
+        },
+        required: ['type', 'id', 'order'],
+      },
+    ],
   },
 };
 
 export const IR_PATCH_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  properties: {
-    ops: {
-      type: 'array',
-      items: {
-        anyOf: [
-          {
-            type: 'object',
-            additionalProperties: false,
-            properties: { type: { type: 'string', enum: ['add'] }, node: nodeSchema },
-            required: ['type', 'node'],
-          },
-          {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              type: { type: 'string', enum: ['update'] },
-              id: { type: 'string' },
-              props: partialNodeSchema,
-            },
-            required: ['type', 'id', 'props'],
-          },
-          {
-            type: 'object',
-            additionalProperties: false,
-            properties: { type: { type: 'string', enum: ['remove'] }, id: { type: 'string' } },
-            required: ['type', 'id'],
-          },
-          {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              type: { type: 'string', enum: ['reorder'] },
-              id: { type: 'string' },
-              order: { type: 'integer' },
-            },
-            required: ['type', 'id', 'order'],
-          },
-        ],
-      },
-    },
-  },
+  properties: { ops: patchOpsSchema },
   required: ['ops'],
 } as const;
 
@@ -168,4 +181,24 @@ export const PROMPT_UPDATE_SCHEMA = {
     confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
   },
   required: ['updatedClauses', 'removedClauseIds', 'deltaDescription', 'confidence'],
+} as const;
+
+/**
+ * The "compose" call (Lovable-style entry point): a freeform instruction is
+ * folded into the living spec AND realized as an IR patch in a single call so
+ * that new nodes can point their provenance at the clauses created alongside.
+ */
+export const COMPOSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    updatedClauses: {
+      type: 'array',
+      items: clauseSchema,
+      description: 'Clauses to add or replace (reuse ids when refining an existing clause).',
+    },
+    removedClauseIds: { type: 'array', items: { type: 'string' } },
+    ops: patchOpsSchema,
+  },
+  required: ['updatedClauses', 'removedClauseIds', 'ops'],
 } as const;

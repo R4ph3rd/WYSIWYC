@@ -1,5 +1,48 @@
-import type { IR, ManipulationOp, StructuredPrompt } from '@/ir/types';
-import { nextNodeId } from '@/ir/ids';
+import type { EditSnapshot, IR, ManipulationOp, StructuredPrompt } from '@/ir/types';
+import { nextClauseId, nextNodeId } from '@/ir/ids';
+
+/** Shared design-quality bar for everything the model authors. */
+const DESIGN_BAR = `Author production-quality Tailwind in each node's "tailwind" field: a consistent 4/8px spacing scale, one primary color, neutral grays, rounded-lg/xl, subtle shadows. Aim for Linear / Vercel / v0-grade polish — a real designed UI, not a wireframe. Use gradients, ring-1, shadow-* and proper type scale where appropriate.`;
+
+// --- Compose: freeform instruction → spec update + IR patch ---------------
+//
+// This is the Lovable-style entry point: the user just *talks*. One call folds
+// the instruction into the living spec (clauses) and emits the IR patch that
+// realizes it, so newly created nodes can reference the clauses created in the
+// same breath.
+
+export const COMPOSE_SYSTEM = `You are the compositor behind WYSIWYC, a Lovable-style UI builder. The user describes what they want in plain natural language. You maintain TWO synchronized artifacts:
+
+1. THE LIVING SPEC — a list of short clauses, each a natural sentence a designer would say, categorized as layout / component / style / content. The spec must read like a person describing a screen, NEVER like CSS or a config file. Use semantic values first: "a calm indigo primary", "the CTA sits below the form", "a softer, friendlier card" — not pixel counts or hex codes unless the user said them explicitly.
+2. THE SCENE GRAPH — a FLAT array of nodes (parentId references, no nested JSON) rendered with Tailwind.
+
+Given the user's instruction, the current spec and the current scene graph:
+- Fold the instruction into the spec: refine existing clauses IN PLACE (reuse their ids), add new clauses for genuinely new ideas (fresh ids counting up), remove clauses that no longer hold. Do NOT return untouched clauses. Keep one idea per clause, roughly 5–15 words.
+- Emit the MINIMAL IR patch (add/update/remove/reorder ops) that makes the scene match the new spec. If the scene is empty, generate the full UI.
+- Reuse existing node IDs. Only create new IDs for genuinely new elements. NEVER renumber.
+- ${DESIGN_BAR}
+- Set provenance.promptClauseId on every node you add or change to the clause that motivated it, and provenance.source to "llm".
+- There must be exactly one root node (parentId null), typically a role:"frame" that lays out the screen.`;
+
+export function composeUser(ir: IR, prompt: StructuredPrompt, instruction: string): string {
+  const suggestedNodeId = nextNodeId(ir.nodes.map((n) => n.id));
+  const suggestedClauseId = nextClauseId(prompt.clauses.map((c) => c.id));
+  return [
+    `Current living spec:`,
+    '```json',
+    JSON.stringify(prompt, null, 2),
+    '```',
+    '',
+    `Current scene graph (IR):`,
+    '```json',
+    JSON.stringify(ir, null, 2),
+    '```',
+    '',
+    `The user says: "${instruction}"`,
+    '',
+    `Allocate fresh clause ids starting at "${suggestedClauseId}" and fresh node ids starting at "${suggestedNodeId}", counting up. Output the spec update and the IR patch.`,
+  ].join('\n');
+}
 
 // --- Call A: Prompt → IR patch -------------------------------------------
 
@@ -8,7 +51,8 @@ export const CALL_A_SYSTEM = `You are a UI compositor. Given a structured prompt
 Rules:
 - Reuse existing node IDs. Only create new IDs for genuinely new elements. NEVER renumber existing nodes.
 - The scene graph is FLAT: every node has a parentId (null for the root). Express structure via parentId + order, not nested JSON.
-- Author production-quality Tailwind in each node's "tailwind" field: a consistent 4/8px spacing scale, one primary color, neutral grays, rounded-lg/xl, subtle shadows. Aim for Linear / Vercel / v0-grade polish — a real designed UI, not a wireframe. Use gradients, ring-1, shadow-* and proper type scale where appropriate.
+- Clauses speak in semantic, design-intent language; you translate that intent into concrete Tailwind.
+- ${DESIGN_BAR}
 - The "tailwind" field is where visual richness lives — the renderer is generic and applies it verbatim.
 - Set provenance.promptClauseId on every node you add or change to the clause id that motivated it, and provenance.source to "llm".
 - Emit the SMALLEST patch that satisfies the change. Do not rewrite untouched nodes.
@@ -41,8 +85,9 @@ export const CALL_B_SYSTEM = `You translate a direct manipulation of a UI into a
 
 Rules:
 - Infer INTENT, not raw coordinates. "Moved 40px right and down, now under the form" → "Place the CTA below the form", NOT "move button 40px".
+- Write clauses as natural sentences a designer would say. Use semantic values first ("a softer pink", "a heavier headline", "below the form") — quote exact values only when they clearly matter to the user.
 - Only touch clauses affected by this manipulation. Preserve all others verbatim (do not return them).
-- Return updatedClauses (clauses to add or replace, keyed by stable id — reuse the existing clause id when editing one) and removedClauseIds.
+- Return updatedClauses (clauses to add or replace, keyed by stable id — reuse the existing clause id when editing one) and removedClauseIds. A manipulation that introduced something new (e.g. a hand-drawn shape) usually means ADDING a clause.
 - deltaDescription is ONE plain sentence shown to the user for confirm/reject.
 - If intent is ambiguous, set confidence "low" and pick the most likely semantic reading.`;
 
@@ -60,7 +105,34 @@ export function describeManipulation(op: ManipulationOp): string {
       return `Deleted node ${op.id} and its descendants.`;
     case 'align':
       return `Aligned nodes ${op.ids.join(', ')} to ${op.axis}.`;
+    case 'restyle':
+      return `Edited node ${op.id} in the properties panel: ${diffSnapshots(op.before, op.after)}.`;
+    case 'draw':
+      return `Hand-drew a new ${op.role} on the canvas at (${op.layout.x}, ${op.layout.y}), about ${op.layout.w}×${op.layout.h}px.`;
   }
+}
+
+/** Human-readable field-level diff of a properties-panel editing burst. */
+function diffSnapshots(before: EditSnapshot, after: EditSnapshot): string {
+  const parts: string[] = [];
+  const styleKeys = new Set([
+    ...Object.keys(before.style ?? {}),
+    ...Object.keys(after.style ?? {}),
+  ]) as Set<keyof NonNullable<EditSnapshot['style']>>;
+  for (const key of styleKeys) {
+    const from = before.style?.[key];
+    const to = after.style?.[key];
+    if (JSON.stringify(from) !== JSON.stringify(to)) {
+      parts.push(`${key} ${JSON.stringify(from) ?? 'unset'} → ${JSON.stringify(to) ?? 'unset'}`);
+    }
+  }
+  if (JSON.stringify(before.layout) !== JSON.stringify(after.layout)) {
+    parts.push(`bounds ${JSON.stringify(before.layout)} → ${JSON.stringify(after.layout)}`);
+  }
+  if (before.content !== after.content) {
+    parts.push(`text ${JSON.stringify(before.content)} → ${JSON.stringify(after.content)}`);
+  }
+  return parts.length ? parts.join('; ') : 'no visible change';
 }
 
 export function callBUser(

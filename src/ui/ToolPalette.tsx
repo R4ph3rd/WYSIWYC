@@ -1,4 +1,4 @@
-import { MousePointer2, Square, Circle, Minus, Type } from 'lucide-react';
+import { MousePointer2, Square, Circle, Minus, PenTool, Type } from 'lucide-react';
 import { useAppStore, type Tool } from '@/store/appStore';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './primitives/tooltip';
@@ -8,6 +8,7 @@ const TOOLS: { tool: Tool; icon: React.ReactNode; label: string; shortcut: strin
   { tool: 'rectangle', icon: <Square        className="h-4 w-4" />, label: 'Rectangle', shortcut: 'R' },
   { tool: 'circle',    icon: <Circle        className="h-4 w-4" />, label: 'Circle', shortcut: 'O' },
   { tool: 'line',      icon: <Minus         className="h-4 w-4" />, label: 'Line', shortcut: 'L' },
+  { tool: 'path',      icon: <PenTool       className="h-4 w-4" />, label: 'Pen', shortcut: 'P' },
   { tool: 'text',      icon: <Type          className="h-4 w-4" />, label: 'Text', shortcut: 'T' },
 ];
 

@@ -24,15 +24,17 @@ function isTextRole(role: IRNode['role']): boolean {
   return role === 'text' || role === 'heading' || role === 'button' || role === 'badge' || role === 'icon';
 }
 function isShapeRole(role: IRNode['role']): boolean {
-  return role === 'rectangle' || role === 'circle' || role === 'line';
+  return role === 'rectangle' || role === 'circle' || role === 'line' || role === 'path';
 }
 
 export function PropertiesPanel() {
   const selectedId = useAppStore((s) => s.selectedNodeId);
   const node = useAppStore((s) => selectedId ? s.ir.nodes.find((n) => n.id === selectedId) ?? null : null);
-  const updateStyle = useAppStore((s) => s.updateStyle);
-  const updateLayout = useAppStore((s) => s.updateLayout);
-  const updateContent = useAppStore((s) => s.updateContent);
+  // edit* write the IR immediately and, once the burst settles, run the Call B
+  // back-channel so panel edits propose prompt updates like any manipulation.
+  const editStyle = useAppStore((s) => s.editStyle);
+  const editLayout = useAppStore((s) => s.editLayout);
+  const editContent = useAppStore((s) => s.editContent);
   const manipulate = useAppStore((s) => s.manipulate);
 
   if (!selectedId || !node) {
@@ -46,9 +48,9 @@ export function PropertiesPanel() {
     );
   }
 
-  const set = (patch: Partial<NodeStyle>) => updateStyle(node.id, patch);
+  const set = (patch: Partial<NodeStyle>) => editStyle(node.id, patch);
   const setLayout = (patch: Partial<{ x: number; y: number; w: number; h: number }>) =>
-    updateLayout(node.id, patch);
+    editLayout(node.id, patch);
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -60,7 +62,7 @@ export function PropertiesPanel() {
             <ContentEditor
               key={node.id}
               value={node.content ?? ''}
-              onChange={(v) => updateContent(node.id, v)}
+              onChange={(v) => editContent(node.id, v)}
             />
           </Section>
         )}

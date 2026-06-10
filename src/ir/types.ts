@@ -30,7 +30,8 @@ export type NodeRole =
   // `style` block below.
   | 'rectangle'
   | 'circle'
-  | 'line';
+  | 'line'
+  | 'path';
 
 export const NODE_ROLES: NodeRole[] = [
   'frame',
@@ -46,6 +47,7 @@ export const NODE_ROLES: NodeRole[] = [
   'rectangle',
   'circle',
   'line',
+  'path',
 ];
 
 export type ProvenanceSource = 'llm' | 'user';
@@ -88,6 +90,12 @@ export interface NodeStyle {
   opacity?: number;
 }
 
+/** An anchor point of a pen-tool path, relative to the node's bounding box. */
+export interface PathPoint {
+  x: number;
+  y: number;
+}
+
 export interface IRNode {
   /** Stable id, e.g. "node_7" — NEVER reused or renumbered. */
   id: string;
@@ -102,6 +110,8 @@ export interface IRNode {
   tailwind: string;
   layout?: NodeLayout;
   style?: NodeStyle;
+  /** Pen-tool anchors (role "path"), relative to layout x/y. */
+  points?: PathPoint[];
   provenance: NodeProvenance;
 }
 
@@ -158,7 +168,27 @@ export interface PromptUpdateProposal {
   confidence: ProposalConfidence;
 }
 
+// --- Instruction → spec + IR (the Lovable-style entry point) ---
+
+/**
+ * Output of the "compose" call: a freeform natural-language instruction is
+ * folded into the living spec (clause upserts/removals) AND realized as a
+ * minimal IR patch in one shot, so provenance clause ids stay consistent.
+ */
+export interface ComposeResult {
+  updatedClauses: PromptClause[];
+  removedClauseIds: string[];
+  ops: IRPatchOp[];
+}
+
 // --- Direct-manipulation ops (deterministic IR writes, no LLM) ---
+
+/** The before/after view of a Properties-panel editing burst. */
+export interface EditSnapshot {
+  style?: NodeStyle;
+  layout?: NodeLayout;
+  content?: string;
+}
 
 export type ManipulationOp =
   | { kind: 'move'; id: string; from: NodeLayout; to: NodeLayout }
@@ -166,4 +196,8 @@ export type ManipulationOp =
   | { kind: 'resize'; id: string; from: NodeLayout; to: NodeLayout }
   | { kind: 'recolor'; id: string; from: string; to: string; token: string }
   | { kind: 'delete'; id: string }
-  | { kind: 'align'; ids: string[]; axis: 'left' | 'center' | 'right' };
+  | { kind: 'align'; ids: string[]; axis: 'left' | 'center' | 'right' }
+  /** A burst of structured style/layout/content edits from the Properties panel. */
+  | { kind: 'restyle'; id: string; before: EditSnapshot; after: EditSnapshot }
+  /** A shape/text/path hand-drawn on the canvas with the tool palette. */
+  | { kind: 'draw'; id: string; role: NodeRole; layout: NodeLayout };

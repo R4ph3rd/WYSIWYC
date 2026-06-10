@@ -12,7 +12,9 @@ export interface RendererProps {
 }
 
 const SELF_CLOSING: IRNode['role'][] = ['input', 'image', 'divider', 'line'];
-const SHAPE_ROLES: IRNode['role'][] = ['rectangle', 'circle', 'line'];
+const SHAPE_ROLES: IRNode['role'][] = ['rectangle', 'circle', 'line', 'path'];
+/** Stroke-only shapes where `fill` is drawn by SVG, not as a CSS background. */
+const STROKE_ROLES: IRNode['role'][] = ['line', 'path'];
 
 function isDiverged(node: IRNode): boolean {
   return node.provenance.source === 'user' && node.provenance.promptClauseId === null;
@@ -22,15 +24,11 @@ function isDiverged(node: IRNode): boolean {
 function structuredStyle(node: IRNode): CSSProperties {
   const s: NodeStyle = node.style ?? {};
   const out: CSSProperties = {};
-  if (s.fill) {
-    if (node.role === 'text' || node.role === 'heading') {
-      // Text doesn't have a meaningful "fill" — treat as background.
-      out.background = s.fill;
-    } else {
-      out.background = s.fill;
-    }
+  if (s.fill && !STROKE_ROLES.includes(node.role)) {
+    // Lines/paths paint fill inside the SVG; everything else as background.
+    out.background = s.fill;
   }
-  if (s.stroke && (s.strokeWidth ?? 0) > 0) {
+  if (s.stroke && (s.strokeWidth ?? 0) > 0 && !STROKE_ROLES.includes(node.role)) {
     out.border = `${s.strokeWidth}px solid ${s.stroke}`;
   } else if (s.strokeWidth === 0 && SHAPE_ROLES.includes(node.role)) {
     out.border = 'none';
@@ -117,6 +115,30 @@ function renderLineShape(
   );
 }
 
+/** Pen-tool path: anchors stored relative to the node's bounding box. */
+function renderPathShape(
+  node: IRNode,
+  baseProps: Record<string, unknown>,
+  style: CSSProperties,
+): ReactNode {
+  const w = Math.max(1, (node.layout?.w ?? 80) as number);
+  const h = Math.max(1, (node.layout?.h ?? 80) as number);
+  const points = node.points ?? [];
+  const d = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x} ${p.y}`).join(' ');
+  return createElement(
+    'svg',
+    { ...baseProps, viewBox: `0 0 ${w} ${h}`, style: { ...style, overflow: 'visible' } },
+    createElement('path', {
+      d,
+      fill: node.style?.fill ?? 'none',
+      stroke: node.style?.stroke ?? '#171717',
+      strokeWidth: node.style?.strokeWidth ?? 2,
+      strokeLinecap: 'round',
+      strokeLinejoin: 'round',
+    }),
+  );
+}
+
 function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
   const { node } = tree;
   const selected = props.selectedId === node.id;
@@ -135,13 +157,17 @@ function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
     .filter(Boolean)
     .join(' ');
 
+  // Absolute-positioned nodes (drawn shapes) move with pointer drag on the
+  // canvas; only flow nodes use HTML5 drag for sibling reordering.
+  const isAbsolute = node.layout?.x !== undefined || node.layout?.y !== undefined;
+
   const handlers = props.onSelect
     ? {
         onClick: (e: React.MouseEvent) => {
           e.stopPropagation();
           props.onSelect?.(node.id);
         },
-        draggable: true,
+        draggable: !isAbsolute,
         onDragStart: (e: React.DragEvent) => {
           e.stopPropagation();
           e.dataTransfer.setData('text/wysiwyc-node', node.id);
@@ -191,6 +217,9 @@ function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
 
   if (role === 'line') {
     return renderLineShape(node, baseProps, combinedStyle);
+  }
+  if (role === 'path') {
+    return renderPathShape(node, baseProps, combinedStyle);
   }
 
   baseProps.style = combinedStyle;

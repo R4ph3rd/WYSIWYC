@@ -1,18 +1,40 @@
-import { useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowUp, Loader2, Sparkles } from 'lucide-react';
 import { useAppStore, toolToRole } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
+import type { IR, IRNode, PathPoint } from '@/ir/types';
+import { SAMPLES } from '@/ir/samples';
 import { ToolPalette } from './ToolPalette';
 
-interface DragState {
-  id: string;
-  startX: number;
-  startY: number;
+type DragState =
+  | { mode: 'draw'; id: string; role: IRNode['role']; startX: number; startY: number; prevIR: IR }
+  | { mode: 'move'; id: string; startX: number; startY: number; origX: number; origY: number; moved: boolean; prevIR: IR }
+  | {
+      mode: 'resize';
+      id: string;
+      handle: 'nw' | 'ne' | 'sw' | 'se';
+      startX: number;
+      startY: number;
+      orig: { x: number; y: number; w: number; h: number };
+      prevIR: IR;
+    };
+
+interface PenState {
+  points: PathPoint[]; // stage coordinates
+  prevIR: IR;
 }
+
+/** Default footprint when a drawing tool is clicked without dragging. */
+const CLICK_SIZE: Partial<Record<IRNode['role'], { w: number; h: number }>> = {
+  rectangle: { w: 96, h: 96 },
+  circle: { w: 96, h: 96 },
+  line: { w: 120, h: 24 },
+};
 
 export function Canvas() {
   const ir = useAppStore((s) => s.ir);
+  const prompt = useAppStore((s) => s.prompt);
   const tool = useAppStore((s) => s.tool);
   const selectedNodeId = useAppStore((s) => s.selectedNodeId);
   const hoveredClauseId = useAppStore((s) => s.hoveredClauseId);
@@ -21,48 +43,223 @@ export function Canvas() {
   const selectNode = useAppStore((s) => s.selectNode);
   const setTool = useAppStore((s) => s.setTool);
   const manipulate = useAppStore((s) => s.manipulate);
+  const proposeManipulation = useAppStore((s) => s.proposeManipulation);
   const createShape = useAppStore((s) => s.createShape);
   const updateLayout = useAppStore((s) => s.updateLayout);
 
   const stageRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [pen, setPen] = useState<PenState | null>(null);
+  const [penCursor, setPenCursor] = useState<PathPoint | null>(null);
+  // Mirror for event listeners (keydown) that outlive a render's closure.
+  const penRef = useRef<PenState | null>(null);
+  penRef.current = pen;
 
   const role = toolToRole(tool);
+  const drawing = Boolean(role) || tool === 'path';
+  // The Lovable-style hero greets an empty project — but steps aside the
+  // moment a drawing tool is picked, so starting by hand is always possible.
+  const isEmpty = ir.nodes.length === 0 && prompt.clauses.length === 0 && !drawing;
 
-  function relativePoint(e: React.MouseEvent): { x: number; y: number } | null {
+  function nodeById(id: string): IRNode | undefined {
+    return useAppStore.getState().ir.nodes.find((n) => n.id === id);
+  }
+
+  function relativePoint(e: React.MouseEvent): PathPoint | null {
     const el = stageRef.current;
     if (!el) return null;
     const rect = el.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }
 
+  // --- Pen tool (multi-click path) ----------------------------------------
+
+  function commitPen(cancel: boolean): void {
+    const current = penRef.current;
+    setPen(null);
+    setPenCursor(null);
+    setTool('pointer');
+    if (cancel || !current || current.points.length < 2) return;
+    // Drop duplicate anchors left by the double-click that commits.
+    const pts = current.points.filter(
+      (p, i, arr) => i === 0 || Math.hypot(p.x - arr[i - 1].x, p.y - arr[i - 1].y) > 2,
+    );
+    if (pts.length < 2) return;
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    const w = Math.max(2, Math.max(...xs) - x);
+    const h = Math.max(2, Math.max(...ys) - y);
+    const id = createShape({
+      role: 'path',
+      x, y, w, h,
+      points: pts.map((p) => ({ x: p.x - x, y: p.y - y })),
+    });
+    proposeManipulation({ kind: 'draw', id, role: 'path', layout: { x, y, w, h } }, current.prevIR);
+  }
+
+  useEffect(() => {
+    if (!pen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') commitPen(false);
+      if (e.key === 'Escape') commitPen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pen !== null]);
+
+  // --- Stage mouse handling -------------------------------------------------
+
   function onStageMouseDown(e: React.MouseEvent) {
-    if (!role) return;
-    e.preventDefault();
-    e.stopPropagation();
     const p = relativePoint(e);
     if (!p) return;
-    const defaultSize = role === 'text' ? { w: 120, h: 28 } : { w: 2, h: 2 };
-    const id = createShape({ role, x: p.x, y: p.y, ...defaultSize });
-    setDrag({ id, startX: p.x, startY: p.y });
+
+    if (tool === 'path') {
+      e.preventDefault();
+      setPen((current) =>
+        current
+          ? { ...current, points: [...current.points, p] }
+          : { points: [p], prevIR: useAppStore.getState().ir },
+      );
+      return;
+    }
+
+    if (role) {
+      e.preventDefault();
+      e.stopPropagation();
+      const prevIR = useAppStore.getState().ir;
+      const defaultSize = role === 'text' ? { w: 120, h: 28 } : { w: 2, h: 2 };
+      const id = createShape({ role, x: p.x, y: p.y, ...defaultSize });
+      setDrag({ mode: 'draw', id, role, startX: p.x, startY: p.y, prevIR });
+      return;
+    }
+
+    // Pointer tool: start a move-drag when pressing an absolute-positioned
+    // node (drawn shapes). Flow nodes keep HTML5 drag-to-reorder.
+    const target = (e.target as HTMLElement).closest('[data-node-id]');
+    const id = target?.getAttribute('data-node-id');
+    const node = id ? nodeById(id) : undefined;
+    if (node && node.layout?.x !== undefined && node.layout?.y !== undefined) {
+      e.preventDefault();
+      selectNode(node.id);
+      setDrag({
+        mode: 'move',
+        id: node.id,
+        startX: p.x,
+        startY: p.y,
+        origX: node.layout.x,
+        origY: node.layout.y,
+        moved: false,
+        prevIR: useAppStore.getState().ir,
+      });
+    }
   }
 
   function onStageMouseMove(e: React.MouseEvent) {
-    if (!drag) return;
     const p = relativePoint(e);
     if (!p) return;
-    const x = Math.min(p.x, drag.startX);
-    const y = Math.min(p.y, drag.startY);
-    const w = Math.max(2, Math.abs(p.x - drag.startX));
-    const h = Math.max(2, Math.abs(p.y - drag.startY));
-    updateLayout(drag.id, { x, y, w, h });
+    if (pen) setPenCursor(p);
+    if (!drag) return;
+
+    if (drag.mode === 'draw') {
+      const x = Math.min(p.x, drag.startX);
+      const y = Math.min(p.y, drag.startY);
+      const w = Math.max(2, Math.abs(p.x - drag.startX));
+      const h = Math.max(2, Math.abs(p.y - drag.startY));
+      updateLayout(drag.id, { x, y, w, h });
+    } else if (drag.mode === 'move') {
+      const dx = p.x - drag.startX;
+      const dy = p.y - drag.startY;
+      if (!drag.moved && Math.hypot(dx, dy) > 3) setDrag({ ...drag, moved: true });
+      updateLayout(drag.id, { x: Math.round(drag.origX + dx), y: Math.round(drag.origY + dy) });
+    } else {
+      const dx = p.x - drag.startX;
+      const dy = p.y - drag.startY;
+      const { orig, handle } = drag;
+      let { x, y, w, h } = orig;
+      if (handle.includes('e')) w = orig.w + dx;
+      if (handle.includes('s')) h = orig.h + dy;
+      if (handle.includes('w')) { w = orig.w - dx; x = orig.x + dx; }
+      if (handle.includes('n')) { h = orig.h - dy; y = orig.y + dy; }
+      if (w < 8) { if (handle.includes('w')) x = orig.x + orig.w - 8; w = 8; }
+      if (h < 8) { if (handle.includes('n')) y = orig.y + orig.h - 8; h = 8; }
+      updateLayout(drag.id, {
+        x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h),
+      });
+    }
   }
 
   function onStageMouseUp() {
-    if (drag) {
-      setDrag(null);
+    if (!drag) return;
+    const node = nodeById(drag.id);
+    setDrag(null);
+
+    if (drag.mode === 'draw') {
       setTool('pointer');
+      if (!node) return;
+      let layout = node.layout ?? {};
+      // A click without a drag: give the shape a sensible default footprint.
+      const clickSize = CLICK_SIZE[drag.role];
+      if (clickSize && (layout.w ?? 0) <= 4 && (layout.h ?? 0) <= 4) {
+        updateLayout(drag.id, clickSize);
+        layout = { ...layout, ...clickSize };
+      }
+      proposeManipulation(
+        { kind: 'draw', id: drag.id, role: drag.role, layout },
+        drag.prevIR,
+      );
+    } else if (drag.mode === 'move') {
+      if (!node || !drag.moved) return;
+      proposeManipulation(
+        {
+          kind: 'move',
+          id: drag.id,
+          from: { x: drag.origX, y: drag.origY },
+          to: { x: node.layout?.x ?? 0, y: node.layout?.y ?? 0 },
+        },
+        drag.prevIR,
+      );
+    } else {
+      if (!node) return;
+      proposeManipulation(
+        {
+          kind: 'resize',
+          id: drag.id,
+          from: { ...drag.orig },
+          to: {
+            x: node.layout?.x ?? 0,
+            y: node.layout?.y ?? 0,
+            w: node.layout?.w ?? 0,
+            h: node.layout?.h ?? 0,
+          },
+        },
+        drag.prevIR,
+      );
     }
+  }
+
+  function startResize(e: React.MouseEvent, handle: 'nw' | 'ne' | 'sw' | 'se') {
+    const node = selectedNodeId ? nodeById(selectedNodeId) : undefined;
+    const p = relativePoint(e);
+    if (!node || !p || node.layout?.x === undefined) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDrag({
+      mode: 'resize',
+      id: node.id,
+      handle,
+      startX: p.x,
+      startY: p.y,
+      orig: {
+        x: node.layout.x,
+        y: node.layout.y ?? 0,
+        w: node.layout.w ?? 80,
+        h: node.layout.h ?? 80,
+      },
+      prevIR: useAppStore.getState().ir,
+    });
   }
 
   const onReorder = (draggedId: string, targetId: string) => {
@@ -76,7 +273,11 @@ export function Canvas() {
     manipulate({ kind: 'reorder', id: draggedId, parentId: dragged.parentId, from, to });
   };
 
-  const drawing = Boolean(role);
+  const selectedNode = selectedNodeId ? ir.nodes.find((n) => n.id === selectedNodeId) : undefined;
+  const showHandles =
+    tool === 'pointer' &&
+    selectedNode?.layout?.x !== undefined &&
+    selectedNode?.layout?.y !== undefined;
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
@@ -87,9 +288,15 @@ export function Canvas() {
         </div>
       </div>
 
-      {generating && (
+      {generating && !isEmpty && (
         <div className="absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-600 shadow">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Composing…
+        </div>
+      )}
+
+      {pen && (
+        <div className="absolute left-1/2 top-14 z-20 -translate-x-1/2 rounded-full bg-slate-900/85 px-3 py-1 text-[11px] text-white shadow">
+          Click to add points — double-click or ⏎ to finish, Esc to cancel
         </div>
       )}
 
@@ -109,6 +316,7 @@ export function Canvas() {
           onClick={(e) => {
             if (e.target === e.currentTarget && !drawing) selectNode(null);
           }}
+          onDoubleClick={() => { if (pen) commitPen(false); }}
           onMouseDown={onStageMouseDown}
           onMouseMove={onStageMouseMove}
           onMouseUp={onStageMouseUp}
@@ -122,6 +330,142 @@ export function Canvas() {
             onSelect={drawing ? undefined : selectNode}
             onReorder={drawing ? undefined : onReorder}
           />
+
+          {/* Pen preview: committed segments + rubber band to the cursor. */}
+          {pen && (
+            <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+              <polyline
+                points={[...pen.points, ...(penCursor ? [penCursor] : [])]
+                  .map((p) => `${p.x},${p.y}`)
+                  .join(' ')}
+                fill="none"
+                stroke="#4f46e5"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              {pen.points.map((p, i) => (
+                <circle key={i} cx={p.x} cy={p.y} r={3} fill="#fff" stroke="#4f46e5" strokeWidth={1.5} />
+              ))}
+            </svg>
+          )}
+
+          {/* Resize handles for the selected drawn shape. */}
+          {showHandles && selectedNode?.layout && (
+            <SelectionHandles layout={selectedNode.layout} onStart={startResize} />
+          )}
+
+          {isEmpty && <HeroComposer />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SelectionHandles({
+  layout,
+  onStart,
+}: {
+  layout: { x?: number; y?: number; w?: number; h?: number };
+  onStart: (e: React.MouseEvent, handle: 'nw' | 'ne' | 'sw' | 'se') => void;
+}) {
+  const x = layout.x ?? 0;
+  const y = layout.y ?? 0;
+  const w = layout.w ?? 80;
+  const h = layout.h ?? 80;
+  const handles: { id: 'nw' | 'ne' | 'sw' | 'se'; left: number; top: number; cursor: string }[] = [
+    { id: 'nw', left: x, top: y, cursor: 'nwse-resize' },
+    { id: 'ne', left: x + w, top: y, cursor: 'nesw-resize' },
+    { id: 'sw', left: x, top: y + h, cursor: 'nesw-resize' },
+    { id: 'se', left: x + w, top: y + h, cursor: 'nwse-resize' },
+  ];
+  return (
+    <>
+      {handles.map((hd) => (
+        <div
+          key={hd.id}
+          onMouseDown={(e) => onStart(e, hd.id)}
+          className="absolute z-10 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-indigo-600 bg-white shadow-sm"
+          style={{ left: hd.left, top: hd.top, cursor: hd.cursor }}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * Lovable-style hero: an empty project greets you with one big natural-language
+ * input, not an empty spec table.
+ */
+function HeroComposer() {
+  const instruct = useAppStore((s) => s.instruct);
+  const generating = useAppStore((s) => s.generating);
+  const loadSample = useAppStore((s) => s.loadSample);
+  const [draft, setDraft] = useState('');
+
+  const submit = () => {
+    const text = draft.trim();
+    if (!text || generating) return;
+    instruct(text);
+    setDraft('');
+  };
+
+  return (
+    <div
+      className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 backdrop-blur-sm"
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="w-full max-w-xl px-6 text-center">
+        <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-[11px] font-medium text-indigo-600 ring-1 ring-indigo-100">
+          <Sparkles className="h-3 w-3" /> WYSIWYC
+        </div>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+          What do you want to build?
+        </h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Describe a UI in plain words. Then edit it directly — the prompt keeps itself in sync.
+        </p>
+
+        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-2 text-left shadow-lg shadow-slate-200/60 focus-within:border-indigo-300 focus-within:ring-4 focus-within:ring-indigo-50">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            rows={3}
+            autoFocus
+            disabled={generating}
+            placeholder="A pricing page with three plans, the middle one highlighted…"
+            className="w-full resize-none bg-transparent px-2 py-1.5 text-sm text-slate-800 outline-none placeholder:text-slate-400"
+          />
+          <div className="flex items-center justify-end px-1 pb-1">
+            <button
+              onClick={submit}
+              disabled={generating || !draft.trim()}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400"
+              aria-label="Generate"
+            >
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
+          <span className="text-[11px] text-slate-400">Try:</span>
+          {SAMPLES.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => loadSample(s.id)}
+              disabled={generating}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+            >
+              {s.title}
+            </button>
+          ))}
         </div>
       </div>
     </div>

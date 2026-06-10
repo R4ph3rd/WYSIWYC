@@ -1,4 +1,4 @@
-import type { IR, IRNode, ManipulationOp, NodeRole, NodeStyle } from './types';
+import type { IR, IRNode, ManipulationOp, NodeRole, NodeStyle, PathPoint } from './types';
 import { siblingsOf } from './tree';
 import { setUtility, setAlignment } from './tailwindEdit';
 import { nextNodeId } from './ids';
@@ -42,6 +42,20 @@ export function applyManipulation(ir: IR, op: ManipulationOp): ManipulationResul
 
     case 'align':
       return align(ir, op.ids, op.axis);
+
+    // restyle / draw are applied incrementally as the user works (the panel
+    // and the canvas write through editStyle/createShape); re-applying the
+    // "after" state here keeps the op idempotent for undo/replay.
+    case 'restyle':
+      return patchNodes(ir, [op.id], (n) => ({
+        ...n,
+        content: op.after.content !== undefined ? op.after.content : n.content,
+        layout: op.after.layout ? { ...n.layout, ...op.after.layout } : n.layout,
+        style: op.after.style ? { ...n.style, ...op.after.style } : n.style,
+      }));
+
+    case 'draw':
+      return { ir, affectedIds: [op.id] };
   }
 }
 
@@ -117,6 +131,7 @@ const DEFAULT_STYLE: Record<NodeRole, NodeStyle> = {
   rectangle: { fill: '#e0e7ff', stroke: '#4f46e5', strokeWidth: 2, borderRadius: 4 },
   circle: { fill: '#fce7f3', stroke: '#db2777', strokeWidth: 2 },
   line: { stroke: '#0f172a', strokeWidth: 2 },
+  path: { stroke: '#0f172a', strokeWidth: 2 },
 };
 
 const DEFAULT_CONTENT: Partial<Record<NodeRole, string>> = {
@@ -136,6 +151,7 @@ export function createNode(
     parentId: string | null;
     layout: { x: number; y: number; w: number; h: number };
     content?: string;
+    points?: PathPoint[];
   },
 ): { ir: IR; id: string } {
   const id = nextNodeId(ir.nodes.map((n) => n.id));
@@ -151,6 +167,7 @@ export function createNode(
     tailwind: '',
     layout: params.layout,
     style: { ...DEFAULT_STYLE[params.role] },
+    points: params.points,
     provenance: { promptClauseId: null, source: 'user' },
   };
   return { ir: { ...ir, nodes: [...ir.nodes, node] }, id };

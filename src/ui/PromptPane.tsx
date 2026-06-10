@@ -1,22 +1,42 @@
-import { useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowUp, Loader2, X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
-import { CLAUSE_CATEGORIES, type ClauseCategory } from '@/ir/types';
+import type { ClauseCategory, PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
-import { Button } from './primitives/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './primitives/select';
 
-const CATEGORY_STYLE: Record<ClauseCategory, string> = {
-  layout: 'bg-sky-100 text-sky-700',
-  component: 'bg-violet-100 text-violet-700',
-  style: 'bg-amber-100 text-amber-700',
-  content: 'bg-emerald-100 text-emerald-700',
+/**
+ * The prompt is a LIVING SPEC, but it must read like a person describing a
+ * screen — flowing sentences, not a config table. Each sentence is a clause
+ * span: hover traces its UI elements, click edits it in place, and the
+ * composer below folds new natural-language instructions into it.
+ */
+
+const CATEGORY_UNDERLINE: Record<ClauseCategory, string> = {
+  layout: 'decoration-sky-400/60',
+  component: 'decoration-violet-400/60',
+  style: 'decoration-amber-400/60',
+  content: 'decoration-emerald-400/60',
 };
+
+const CATEGORY_DOT: Record<ClauseCategory, string> = {
+  layout: 'bg-sky-400',
+  component: 'bg-violet-400',
+  style: 'bg-amber-400',
+  content: 'bg-emerald-400',
+};
+
+function sentence(text: string): string {
+  const t = text.trim();
+  if (!t) return t;
+  const capped = t[0].toUpperCase() + t.slice(1);
+  return /[.!?…]$/.test(capped) ? capped : `${capped}.`;
+}
 
 export function PromptPane() {
   const clauses = useAppStore((s) => s.prompt.clauses);
+  const generating = useAppStore((s) => s.generating);
+  const instruct = useAppStore((s) => s.instruct);
   const editClause = useAppStore((s) => s.editClause);
-  const addClause = useAppStore((s) => s.addClause);
   const removeClause = useAppStore((s) => s.removeClause);
   const hoverClause = useAppStore((s) => s.hoverClause);
   const recentIds = useAppStore((s) => s.recentIds);
@@ -25,13 +45,13 @@ export function PromptPane() {
     selectedNodeId ? (s.ir.nodes.find((n) => n.id === selectedNodeId)?.provenance.promptClauseId ?? null) : null,
   );
 
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  const [draftCat, setDraftCat] = useState<ClauseCategory>('component');
 
   const submit = () => {
     const text = draft.trim();
-    if (!text) return;
-    addClause(text, draftCat);
+    if (!text || generating) return;
+    instruct(text);
     setDraft('');
   };
 
@@ -39,75 +59,157 @@ export function PromptPane() {
     <div className="flex h-full flex-col bg-white">
       <div className="border-b border-slate-100 px-3 py-2">
         <h2 className="text-xs font-semibold tracking-tight text-slate-700">Prompt</h2>
-        <p className="text-[10px] text-slate-500">A living spec. Edit to regenerate; hover to trace.</p>
+        <p className="text-[10px] text-slate-500">
+          A living description of your UI. It writes itself as you edit the canvas.
+        </p>
       </div>
 
-      <div className="flex-1 space-y-1.5 overflow-y-auto p-3">
-        {clauses.length === 0 && (
+      <div className="flex-1 overflow-y-auto px-3 py-2.5">
+        {clauses.length === 0 ? (
           <p className="px-1 py-6 text-center text-xs text-slate-400">
-            No clauses yet. Add one below or load an example to begin.
+            Nothing here yet — describe what you want below, or pick an example.
+          </p>
+        ) : (
+          <p className="text-[13px] leading-7 text-slate-700">
+            {clauses.map((c) =>
+              editingId === c.id ? (
+                <ClauseEditor
+                  key={c.id}
+                  clause={c}
+                  onDone={(text) => {
+                    setEditingId(null);
+                    if (text !== null && text.trim() && text !== c.text) editClause(c.id, text);
+                  }}
+                />
+              ) : (
+                <ClauseSpan
+                  key={c.id}
+                  clause={c}
+                  selected={selectedClauseId === c.id}
+                  flash={recentIds.includes(c.id)}
+                  onHover={hoverClause}
+                  onEdit={() => setEditingId(c.id)}
+                  onRemove={() => removeClause(c.id)}
+                />
+              ),
+            )}
           </p>
         )}
-        {clauses.map((c) => (
-          <div
-            key={c.id}
-            onMouseEnter={() => hoverClause(c.id)}
-            onMouseLeave={() => hoverClause(null)}
-            className={cn(
-              'group rounded-lg border p-2 transition-colors',
-              selectedClauseId === c.id ? 'border-indigo-300 bg-indigo-50/60' : 'border-slate-200 hover:border-slate-300',
-              recentIds.includes(c.id) && 'wysiwyc-flash',
-            )}
-          >
-            <div className="mb-1 flex items-center justify-between">
-              <span className={cn('rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide', CATEGORY_STYLE[c.category])}>
-                {c.category}
-              </span>
-              <button
-                onClick={() => removeClause(c.id)}
-                className="opacity-0 transition-opacity group-hover:opacity-100"
-                aria-label="Remove clause"
-              >
-                <X className="h-3.5 w-3.5 text-slate-400 hover:text-rose-500" />
-              </button>
-            </div>
-            <textarea
-              value={c.text}
-              onChange={(e) => editClause(c.id, e.target.value)}
-              rows={2}
-              className="w-full resize-none bg-transparent text-xs leading-snug text-slate-700 outline-none"
-            />
-          </div>
-        ))}
       </div>
 
-      <div className="border-t p-3">
-        <Select value={draftCat} onValueChange={(v) => setDraftCat(v as ClauseCategory)}>
-          <SelectTrigger className="mb-1.5">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {CLAUSE_CATEGORIES.map((cat) => (
-              <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex gap-1.5">
+      {clauses.length > 0 && (
+        <div className="flex items-center gap-2.5 border-t border-slate-100 px-3 py-1.5">
+          {(Object.keys(CATEGORY_DOT) as ClauseCategory[]).map((cat) => (
+            <span key={cat} className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-slate-400">
+              <span className={cn('h-1.5 w-1.5 rounded-full', CATEGORY_DOT[cat])} /> {cat}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div className="border-t border-slate-100 p-2.5">
+        <div className="rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-50">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit();
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
             }}
             rows={2}
-            placeholder="Describe a part of the UI…"
-            className="flex-1 resize-none rounded-md border border-slate-200 px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-indigo-100"
+            disabled={generating}
+            placeholder={clauses.length ? 'Describe a change…' : 'Describe the UI you want…'}
+            className="w-full resize-none bg-transparent px-1.5 py-1 text-xs text-slate-800 outline-none placeholder:text-slate-400"
           />
-          <Button size="icon" className="h-auto self-stretch" onClick={submit} aria-label="Add clause">
-            <Plus className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center justify-between px-1 pb-0.5">
+            <span className="text-[9px] text-slate-300">⏎ to send</span>
+            <button
+              onClick={submit}
+              disabled={generating || !draft.trim()}
+              className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400"
+              aria-label="Send"
+            >
+              {generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowUp className="h-3 w-3" />}
+            </button>
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function ClauseSpan({
+  clause,
+  selected,
+  flash,
+  onHover,
+  onEdit,
+  onRemove,
+}: {
+  clause: PromptClause;
+  selected: boolean;
+  flash: boolean;
+  onHover: (id: string | null) => void;
+  onEdit: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <span
+      onMouseEnter={() => onHover(clause.id)}
+      onMouseLeave={() => onHover(null)}
+      onClick={onEdit}
+      className={cn(
+        'group -mx-0.5 cursor-text rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
+        CATEGORY_UNDERLINE[clause.category],
+        selected ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-slate-50',
+        flash && 'wysiwyc-flash',
+      )}
+    >
+      {sentence(clause.text)}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="ml-0.5 hidden align-baseline group-hover:inline-block"
+        aria-label="Remove sentence"
+      >
+        <X className="inline h-3 w-3 text-slate-300 hover:text-rose-500" />
+      </button>{' '}
+    </span>
+  );
+}
+
+function ClauseEditor({
+  clause,
+  onDone,
+}: {
+  clause: PromptClause;
+  onDone: (text: string | null) => void;
+}) {
+  const [text, setText] = useState(clause.text);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  return (
+    <textarea
+      ref={ref}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => onDone(text)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          onDone(text);
+        }
+        if (e.key === 'Escape') onDone(null);
+      }}
+      rows={2}
+      className="my-0.5 w-full resize-none rounded-md border border-indigo-200 bg-indigo-50/40 px-1.5 py-1 text-xs leading-snug text-slate-800 outline-none focus:ring-2 focus:ring-indigo-100"
+    />
   );
 }
