@@ -67,6 +67,14 @@ function primaryProvenance(signals: GestureProvenance[]): GestureProvenance {
   return PROVENANCE_RANK.find((p) => signals.includes(p)) ?? 'typed';
 }
 
+/** A short verb-phrase label for a recipe pill (v1: first few words, sentence-cased). */
+function deriveRecipeLabel(instruction: string): string {
+  const cleaned = instruction.replace(/\{selection\}/g, '').replace(/\s+/g, ' ').trim();
+  const words = cleaned.split(' ').slice(0, 5).join(' ');
+  const label = words.length > 32 ? `${words.slice(0, 32).trim()}…` : words;
+  return label ? label[0].toUpperCase() + label.slice(1) : 'Saved command';
+}
+
 /** Tool palette modes (deterministic drawing). */
 export type Tool = 'pointer' | 'rectangle' | 'circle' | 'line' | 'path' | 'text';
 export const DRAWING_TOOLS: Tool[] = ['rectangle', 'circle', 'line', 'path', 'text'];
@@ -97,6 +105,10 @@ interface AppState {
   selectedNodeIds: string[];
   /** True while a composer input holds focus — drives the scope-preview outline. */
   composerFocused: boolean;
+  /** Saved reusable commands (DirectGPT toolbar). Project-scoped, not persisted. */
+  recipes: Recipe[];
+  /** The marker-interpolated text of the last successful compose send (for "Save as recipe"). */
+  lastSent: string | null;
   hoveredClauseId: string | null;
   recentIds: string[];
   history: Snapshot[];
@@ -125,6 +137,11 @@ interface AppState {
   editClause: (id: string, text: string) => void;
   removeClause: (id: string) => void;
   regenerate: () => void;
+
+  /** Save the last sent (or a given) instruction as a reusable Recipe. */
+  addRecipe: (fromInstruction: string, label?: string) => void;
+  /** Re-apply a Recipe to the current selection (requires a non-empty selection). */
+  applyRecipe: (recipeId: string) => void;
 
   manipulate: (op: ManipulationOp) => void;
   /**
@@ -316,6 +333,8 @@ export const useAppStore = create<AppState>((set, get) => {
       selectedNodeId: null,
       selectedNodeIds: [],
       composerFocused: false,
+      recipes: [],
+      lastSent: null,
       hoveredClauseId: null,
       recentIds: [],
       history: [],
@@ -331,6 +350,8 @@ export const useAppStore = create<AppState>((set, get) => {
     selectedNodeId: null,
     selectedNodeIds: [],
     composerFocused: false,
+    recipes: [],
+    lastSent: null,
     hoveredClauseId: null,
     recentIds: [],
     history: [],
@@ -406,12 +427,53 @@ export const useAppStore = create<AppState>((set, get) => {
               ...result.updatedClauses.map((c) => c.id),
               ...patchedIds({ ops: result.ops }),
             ],
+            lastSent: text,
             generating: false,
           }));
         } catch (err) {
           handleLLMError(set, err, 'generating');
         }
       })();
+    },
+
+    addRecipe: (fromInstruction, label) => {
+      const instruction = fromInstruction.trim();
+      if (!instruction) return;
+      // v1 abstraction (no LLM): store verbatim, with chip markers collapsed to a
+      // {selection} slot so the command re-targets whatever is selected later.
+      const templated = instruction.replace(/«ref_\d+»/g, '{selection}');
+      set((s) => {
+        const id = nextRecipeId(s.recipes.map((r) => r.id));
+        const recipe: Recipe = {
+          id,
+          label: label?.trim() || deriveRecipeLabel(templated),
+          instruction: templated,
+          createdFrom: instruction,
+          uses: 0,
+        };
+        return { recipes: [...s.recipes, recipe] };
+      });
+    },
+
+    applyRecipe: (recipeId) => {
+      const { recipes, selectedNodeIds } = get();
+      const recipe = recipes.find((r) => r.id === recipeId);
+      if (!recipe || selectedNodeIds.length === 0) return;
+      // Re-applying a recipe IS a logged manipulation (study metric), even though
+      // its realization goes through the prompt-authoritative compose path.
+      logBackChannel({
+        timestamp: Date.now(),
+        manipulationKind: 'recipe',
+        manipulation: { kind: 'recipe', id: `recipe_apply_${Date.now()}`, recipeId, instruction: recipe.instruction },
+        proposal: null,
+        accepted: null,
+        confidence: null,
+      });
+      set((s) => ({
+        recipes: s.recipes.map((r) => (r.id === recipeId ? { ...r, uses: r.uses + 1 } : r)),
+      }));
+      const text = recipe.instruction.replace(/\{selection\}/g, 'the selection');
+      get().instruct(text, { scopeNodeIds: selectedNodeIds, viaRecipe: true });
     },
 
     editClause: (id, text) => {

@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/appStore';
 import type { ClauseCategory, ComposerValue, PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
 import { RefComposer } from './RefComposer';
+import { RecipesRail } from './RecipesRail';
 import { emptyComposer } from '@/lib/composer';
 
 /**
@@ -106,6 +107,7 @@ export function PromptPane() {
       )}
 
       <div className="border-t border-slate-100 p-2.5">
+        <RecipesRail />
         {composerFocused && selectedNodeIds.length > 0 && (
           <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-medium text-violet-600">
             <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />

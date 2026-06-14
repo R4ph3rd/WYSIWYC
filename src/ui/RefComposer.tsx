@@ -51,7 +51,7 @@ function ChipIcon({ kind }: { kind: PromptRef['kind'] }) {
 }
 
 /** A label for a dropped node chip: role + a short content snippet. */
-function nodeLabel(nodeId: string): string {
+function getNodeLabel(nodeId: string): string {
   const node = useAppStore.getState().ir.nodes.find((n) => n.id === nodeId);
   if (!node) return nodeId;
   const snip = node.content?.trim().slice(0, 16);
@@ -84,7 +84,7 @@ export function RefComposer({
   };
 
   const insertNodeRef = (nodeId: string) => {
-    insertChip({ kind: 'node', refId: nextComposerRefId(value), nodeId, label: nodeLabel(nodeId) });
+    insertChip({ kind: 'node', refId: nextComposerRefId(value), nodeId, label: getNodeLabel(nodeId) });
   };
 
   const insertAttributeRef = (nodeId: string, kind: ExtractKind) => {
