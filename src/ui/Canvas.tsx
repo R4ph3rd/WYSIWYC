@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Loader2, Sparkles } from 'lucide-react';
+import { Loader2, Sparkles } from 'lucide-react';
 import { useAppStore, toolToRole } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
-import type { IR, IRNode, PathPoint } from '@/ir/types';
+import type { ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
 import { SAMPLES } from '@/ir/samples';
 import { ToolPalette } from './ToolPalette';
+import { RefComposer } from './RefComposer';
+import { emptyComposer } from '@/lib/composer';
 
 type DragState =
   | { mode: 'draw'; id: string; role: IRNode['role']; startX: number; startY: number; prevIR: IR }
@@ -410,14 +412,7 @@ function HeroComposer() {
   const instruct = useAppStore((s) => s.instruct);
   const generating = useAppStore((s) => s.generating);
   const loadSample = useAppStore((s) => s.loadSample);
-  const [draft, setDraft] = useState('');
-
-  const submit = () => {
-    const text = draft.trim();
-    if (!text || generating) return;
-    instruct(text);
-    setDraft('');
-  };
+  const [composer, setComposer] = useState<ComposerValue>(emptyComposer());
 
   return (
     <div
@@ -435,32 +430,16 @@ function HeroComposer() {
           Describe a UI in plain words. Then edit it directly — the prompt keeps itself in sync.
         </p>
 
-        <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-2 text-left shadow-lg shadow-slate-200/60 focus-within:border-indigo-300 focus-within:ring-4 focus-within:ring-indigo-50">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            rows={3}
+        <div className="mt-5 text-left">
+          <RefComposer
+            value={composer}
+            onChange={setComposer}
+            onSend={(text, refs) => instruct(text, { refs })}
+            busy={generating}
+            size="lg"
             autoFocus
-            disabled={generating}
             placeholder="A pricing page with three plans, the middle one highlighted…"
-            className="w-full resize-none bg-transparent px-2 py-1.5 text-sm text-slate-800 outline-none placeholder:text-slate-400"
           />
-          <div className="flex items-center justify-end px-1 pb-1">
-            <button
-              onClick={submit}
-              disabled={generating || !draft.trim()}
-              className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400"
-              aria-label="Generate"
-            >
-              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
-            </button>
-          </div>
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">

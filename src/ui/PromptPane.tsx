@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUp, Loader2, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
-import type { ClauseCategory, PromptClause } from '@/ir/types';
+import type { ClauseCategory, ComposerValue, PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
+import { RefComposer } from './RefComposer';
+import { emptyComposer } from '@/lib/composer';
 
 /**
  * The prompt is a LIVING SPEC, but it must read like a person describing a
@@ -49,14 +51,7 @@ export function PromptPane() {
   );
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-
-  const submit = () => {
-    const text = draft.trim();
-    if (!text || generating) return;
-    instruct(text, { scopeNodeIds: selectedNodeIds });
-    setDraft('');
-  };
+  const [composer, setComposer] = useState<ComposerValue>(emptyComposer());
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -117,35 +112,14 @@ export function PromptPane() {
             Editing {selectedNodeIds.length} selected element{selectedNodeIds.length > 1 ? 's' : ''}
           </div>
         )}
-        <div className="rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-50">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onFocus={() => setComposerFocused(true)}
-            onBlur={() => setComposerFocused(false)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            rows={2}
-            disabled={generating}
-            placeholder={clauses.length ? 'Describe a change…' : 'Describe the UI you want…'}
-            className="w-full resize-none bg-transparent px-1.5 py-1 text-xs text-slate-800 outline-none placeholder:text-slate-400"
-          />
-          <div className="flex items-center justify-between px-1 pb-0.5">
-            <span className="text-[9px] text-slate-300">⏎ to send</span>
-            <button
-              onClick={submit}
-              disabled={generating || !draft.trim()}
-              className="flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-white transition-colors hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400"
-              aria-label="Send"
-            >
-              {generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowUp className="h-3 w-3" />}
-            </button>
-          </div>
-        </div>
+        <RefComposer
+          value={composer}
+          onChange={setComposer}
+          onSend={(text, refs) => instruct(text, { scopeNodeIds: selectedNodeIds, refs })}
+          onFocusChange={setComposerFocused}
+          busy={generating}
+          placeholder={clauses.length ? 'Describe a change…' : 'Describe the UI you want…'}
+        />
       </div>
     </div>
   );

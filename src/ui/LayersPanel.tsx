@@ -91,6 +91,13 @@ function TreeNode({ tree, depth, selectedId, selectedIds, onSelect, onHoverClaus
   return (
     <>
       <div
+        draggable
+        onDragStart={(e) => {
+          // Same payload as canvas nodes, so a Layers row can be dropped into
+          // the composer as a reference chip (DirectGPT "refer").
+          e.dataTransfer.setData('text/wysiwyc-node', node.id);
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
         onClick={(e) => onSelect(node.id, e.shiftKey)}
         onMouseEnter={() => onHoverClause(node.provenance.promptClauseId)}
         onMouseLeave={() => onHoverClause(null)}
