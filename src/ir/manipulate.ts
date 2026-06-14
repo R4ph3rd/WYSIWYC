@@ -56,6 +56,12 @@ export function applyManipulation(ir: IR, op: ManipulationOp): ManipulationResul
 
     case 'draw':
       return { ir, affectedIds: [op.id] };
+
+    // A recipe re-applies a saved instruction through the compose path (not a
+    // deterministic IR write), so there is nothing to apply here — it exists as
+    // a ManipulationOp purely so the re-application is logged like any other.
+    case 'recipe':
+      return { ir, affectedIds: [] };
   }
 }
 

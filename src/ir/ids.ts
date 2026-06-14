@@ -22,3 +22,12 @@ export function nextNodeId(existing: string[]): string {
 export function nextClauseId(existing: string[]): string {
   return `clause_${maxNumericSuffix(existing, 'clause_') + 1}`;
 }
+
+export function nextRecipeId(existing: string[]): string {
+  return `recipe_${maxNumericSuffix(existing, 'recipe_') + 1}`;
+}
+
+/** Local, composer-scoped reference-chip id (ref_1, …). NOT an IR id. */
+export function nextRefId(existing: string[]): string {
+  return `ref_${maxNumericSuffix(existing, 'ref_') + 1}`;
+}

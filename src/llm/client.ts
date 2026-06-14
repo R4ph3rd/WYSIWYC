@@ -7,7 +7,15 @@ import type {
   StructuredPrompt,
 } from '@/ir/types';
 import { COMPOSE_SCHEMA, IR_PATCH_SCHEMA, PROMPT_UPDATE_SCHEMA } from './schemas';
-import { CALL_A_SYSTEM, CALL_B_SYSTEM, COMPOSE_SYSTEM, callAUser, callBUser, composeUser } from './prompts';
+import {
+  CALL_A_SYSTEM,
+  CALL_B_SYSTEM,
+  COMPOSE_SYSTEM,
+  callAUser,
+  callBUser,
+  composeUser,
+  type ComposeOptions,
+} from './prompts';
 import { callJSON, LLMError } from './providers';
 import { useSettingsStore } from '@/store/settingsStore';
 
@@ -24,6 +32,7 @@ async function callConnected<T>(
   schema: unknown,
   schemaName: string,
   maxTokens: number,
+  images?: string[],
 ): Promise<T> {
   const active = useSettingsStore.getState().active();
   if (!active) throw new NotConnectedError();
@@ -36,6 +45,7 @@ async function callConnected<T>(
       schema,
       schemaName,
       maxTokens,
+      images,
     })) as T;
   } catch (err) {
     if (err instanceof LLMError) throw err;
@@ -52,13 +62,18 @@ export function composeFromInstruction(
   ir: IR,
   prompt: StructuredPrompt,
   instruction: string,
+  opts: ComposeOptions = {},
 ): Promise<ComposeResult> {
+  const images = (opts.refs ?? [])
+    .filter((r): r is Extract<typeof r, { kind: 'image' }> => r.kind === 'image')
+    .map((r) => r.dataUrl);
   return callConnected<ComposeResult>(
     COMPOSE_SYSTEM,
-    composeUser(ir, prompt, instruction),
+    composeUser(ir, prompt, instruction, opts),
     COMPOSE_SCHEMA,
     'compose',
     8000,
+    images,
   );
 }
 

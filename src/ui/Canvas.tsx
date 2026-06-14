@@ -37,10 +37,13 @@ export function Canvas() {
   const prompt = useAppStore((s) => s.prompt);
   const tool = useAppStore((s) => s.tool);
   const selectedNodeId = useAppStore((s) => s.selectedNodeId);
+  const selectedNodeIds = useAppStore((s) => s.selectedNodeIds);
+  const composerFocused = useAppStore((s) => s.composerFocused);
   const hoveredClauseId = useAppStore((s) => s.hoveredClauseId);
   const recentIds = useAppStore((s) => s.recentIds);
   const generating = useAppStore((s) => s.generating);
   const selectNode = useAppStore((s) => s.selectNode);
+  const toggleSelection = useAppStore((s) => s.toggleSelection);
   const setTool = useAppStore((s) => s.setTool);
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
@@ -325,9 +328,15 @@ export function Canvas() {
           <Renderer
             ir={ir}
             selectedId={selectedNodeId}
+            selectedIds={selectedNodeIds}
+            scopeIds={composerFocused ? selectedNodeIds : []}
             hoveredClauseId={hoveredClauseId}
             recentIds={recentIds}
-            onSelect={drawing ? undefined : selectNode}
+            onSelect={
+              drawing
+                ? undefined
+                : (id, additive) => (additive ? toggleSelection(id) : selectNode(id))
+            }
             onReorder={drawing ? undefined : onReorder}
           />
 

@@ -41,6 +41,9 @@ export function PromptPane() {
   const hoverClause = useAppStore((s) => s.hoverClause);
   const recentIds = useAppStore((s) => s.recentIds);
   const selectedNodeId = useAppStore((s) => s.selectedNodeId);
+  const selectedNodeIds = useAppStore((s) => s.selectedNodeIds);
+  const composerFocused = useAppStore((s) => s.composerFocused);
+  const setComposerFocused = useAppStore((s) => s.setComposerFocused);
   const selectedClauseId = useAppStore((s) =>
     selectedNodeId ? (s.ir.nodes.find((n) => n.id === selectedNodeId)?.provenance.promptClauseId ?? null) : null,
   );
@@ -51,7 +54,7 @@ export function PromptPane() {
   const submit = () => {
     const text = draft.trim();
     if (!text || generating) return;
-    instruct(text);
+    instruct(text, { scopeNodeIds: selectedNodeIds });
     setDraft('');
   };
 
@@ -108,10 +111,18 @@ export function PromptPane() {
       )}
 
       <div className="border-t border-slate-100 p-2.5">
+        {composerFocused && selectedNodeIds.length > 0 && (
+          <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-medium text-violet-600">
+            <span className="h-1.5 w-1.5 rounded-full bg-violet-500" />
+            Editing {selectedNodeIds.length} selected element{selectedNodeIds.length > 1 ? 's' : ''}
+          </div>
+        )}
         <div className="rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-50">
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => setComposerFocused(false)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

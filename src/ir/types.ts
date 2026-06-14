@@ -200,4 +200,56 @@ export type ManipulationOp =
   /** A burst of structured style/layout/content edits from the Properties panel. */
   | { kind: 'restyle'; id: string; before: EditSnapshot; after: EditSnapshot }
   /** A shape/text/path hand-drawn on the canvas with the tool palette. */
-  | { kind: 'draw'; id: string; role: NodeRole; layout: NodeLayout };
+  | { kind: 'draw'; id: string; role: NodeRole; layout: NodeLayout }
+  /** Re-applying a saved Recipe (an abstracted prior instruction) to a selection. */
+  | { kind: 'recipe'; id: string; recipeId: string; instruction: string };
+
+// --- DirectGPT interaction layer (CHI 2024, Masson et al.) ----------------
+//
+// Direct-manipulation additions on top of the prompt⇄IR⇄render pipeline. The
+// composer becomes a RICH value (text + reference chips), selections scope a
+// prompt's effect, and accepted instructions can be saved as one-click Recipes.
+
+/** A category of property that can be extracted from a node or image. */
+export type ExtractKind =
+  | 'layout'        // position, size, spacing, flex/grid arrangement
+  | 'hierarchy'     // parent/child + sibling order, structural role
+  | 'colorScheme'   // fill/stroke/background palette
+  | 'fontStyling'   // family, size, weight, color, italic/underline, align
+  | 'componentStyle'// borders, radius, shadow/elevation, fills together
+  | 'interaction'   // role-implied behavior (button→click, input→entry)
+  | 'content';      // the text/label/placeholder
+
+export const EXTRACT_KINDS: ExtractKind[] = [
+  'layout', 'hierarchy', 'colorScheme', 'fontStyling', 'componentStyle', 'interaction', 'content',
+];
+
+/** A chip embedded in the composer input. */
+export type PromptRef =
+  | { kind: 'node'; refId: string; nodeId: string; label: string }
+  // ^ a bare object reference (DirectGPT "drag object into prompt")
+  | { kind: 'attribute'; refId: string; nodeId: string; extract: ExtractKind; label: string; value: string }
+  // ^ a semantic value extracted from a node on drop
+  | { kind: 'param'; refId: string; nodeId: string; path: string; label: string; value: string }
+  // ^ a single numeric/string parameter dragged from the inspector (e.g. "x", "fontSize")
+  | { kind: 'image'; refId: string; label: string; dataUrl: string };
+  // ^ an image pasted/dropped into the prompt (thumbnail inline)
+
+/** The composer value: interleaved text and chips, in document order. */
+export type ComposerSegment =
+  | { type: 'text'; text: string }
+  | { type: 'ref'; ref: PromptRef };
+
+export type ComposerValue = ComposerSegment[];
+
+/**
+ * A reusable, re-applicable command abstracted from an accepted instruction
+ * (DirectGPT principle d). Lives in the store, NOT in the IR.
+ */
+export interface Recipe {
+  id: string;            // recipe_1, …
+  label: string;         // short verb phrase, e.g. "Make rounder & softer"
+  instruction: string;   // the natural-language instruction, with {selection} placeholder
+  createdFrom: string;   // the clause id or compose instruction it was abstracted from
+  uses: number;          // times re-applied (study metric)
+}
