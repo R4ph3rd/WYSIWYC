@@ -427,7 +427,10 @@ export const useAppStore = create<AppState>((set, get) => {
               ...result.updatedClauses.map((c) => c.id),
               ...patchedIds({ ops: result.ops }),
             ],
-            lastSent: text,
+            // A recipe re-application must not overwrite the user's last typed
+            // instruction — otherwise "Save as recipe" would offer the already
+            // expanded recipe text (with {selection} collapsed to literal prose).
+            lastSent: opts.viaRecipe ? s.lastSent : text,
             generating: false,
           }));
         } catch (err) {
@@ -555,6 +558,7 @@ export const useAppStore = create<AppState>((set, get) => {
           history: [...s.history, snapshot(s)].slice(-50),
           ir: result.ir,
           selectedNodeId: newId,
+          selectedNodeIds: [newId],
           recentIds: [newId],
         };
       });

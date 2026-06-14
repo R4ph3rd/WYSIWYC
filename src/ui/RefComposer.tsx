@@ -71,20 +71,26 @@ export function RefComposer({
 }: RefComposerProps) {
   // The caret position of the last-focused text segment, for drop insertion.
   const caretRef = useRef<{ segIndex: number; caret: number } | null>(null);
+  // Mirror the latest value so chained / async inserts (e.g. dropping several
+  // images at once, whose FileReader callbacks fire across ticks) each build on
+  // the previous insertion instead of a stale closed-over `value`.
+  const valueRef = useRef(value);
+  valueRef.current = value;
   const [dragOver, setDragOver] = useState(false);
   const [menu, setMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
 
   const segments = normalizeComposer(value);
   const lg = size === 'lg';
+  const inputsDisabled = disabled || busy;
 
   const insertChip = (ref: PromptRef) => {
     const at = caretRef.current;
-    onChange(insertRef(value, ref, at?.segIndex, at?.caret));
+    onChange(insertRef(valueRef.current, ref, at?.segIndex, at?.caret));
     caretRef.current = null;
   };
 
   const insertNodeRef = (nodeId: string) => {
-    insertChip({ kind: 'node', refId: nextComposerRefId(value), nodeId, label: getNodeLabel(nodeId) });
+    insertChip({ kind: 'node', refId: nextComposerRefId(valueRef.current), nodeId, label: getNodeLabel(nodeId) });
   };
 
   const insertAttributeRef = (nodeId: string, kind: ExtractKind) => {
@@ -93,7 +99,7 @@ export function RefComposer({
     const { label, value: extracted } = extractAttribute(node, kind);
     insertChip({
       kind: 'attribute',
-      refId: nextComposerRefId(value),
+      refId: nextComposerRefId(valueRef.current),
       nodeId,
       extract: kind,
       label: `${node.role} · ${label}`,
@@ -105,7 +111,7 @@ export function RefComposer({
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = String(reader.result);
-      insertChip({ kind: 'image', refId: nextComposerRefId(value), label: file.name || 'image', dataUrl });
+      insertChip({ kind: 'image', refId: nextComposerRefId(valueRef.current), label: file.name || 'image', dataUrl });
     };
     reader.readAsDataURL(file);
   };
@@ -139,7 +145,7 @@ export function RefComposer({
         const leaf = String(path).split('.').pop() ?? path;
         insertChip({
           kind: 'param',
-          refId: nextComposerRefId(value),
+          refId: nextComposerRefId(valueRef.current),
           nodeId: pid,
           path,
           label: `${leaf} ${pval}`,
@@ -188,14 +194,21 @@ export function RefComposer({
       onPaste={onPaste}
     >
       <div className={cn('flex flex-wrap items-center gap-1', lg ? 'px-2 py-1.5' : 'px-1.5 py-1')}>
-        {segments.map((seg, i) =>
-          seg.type === 'text' ? (
+        {segments.map((seg, i) => {
+          if (seg.type === 'ref') {
+            return <Chip key={seg.ref.refId} ref0={seg.ref} onRemove={() => onChange(removeRef(value, seg.ref.refId))} />;
+          }
+          // Stable key tied to the adjacent chip so removing one chip does not
+          // remount (and steal focus from) the text inputs around other chips.
+          const prev = segments[i - 1];
+          const key = i === 0 ? 'lead' : prev && prev.type === 'ref' ? `after_${prev.ref.refId}` : `t${i}`;
+          return (
             <TextSegment
-              key={`t${i}`}
+              key={key}
               text={seg.text}
               last={i === segments.length - 1}
               size={size}
-              disabled={disabled}
+              disabled={inputsDisabled}
               autoFocus={autoFocus && i === 0}
               placeholder={i === 0 && segments.length === 1 ? placeholder : undefined}
               onFocus={() => onFocusChange?.(true)}
@@ -207,15 +220,12 @@ export function RefComposer({
               }}
               onBackspaceEmpty={() => {
                 // Remove the chip immediately preceding this empty text segment.
-                const prev = segments[i - 1];
                 if (prev && prev.type === 'ref') onChange(removeRef(value, prev.ref.refId));
               }}
               onEnter={send}
             />
-          ) : (
-            <Chip key={seg.ref.refId} ref0={seg.ref} onRemove={() => onChange(removeRef(value, seg.ref.refId))} />
-          ),
-        )}
+          );
+        })}
       </div>
 
       <div className={cn('flex items-center justify-between', lg ? 'px-2 pb-1' : 'px-1 pb-0.5')}>
@@ -327,7 +337,9 @@ function TextSegment({
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           onEnter();
-        } else if (e.key === 'Backspace' && ref.current?.selectionStart === 0 && ref.current?.selectionEnd === 0) {
+        } else if (e.key === 'Backspace' && text === '') {
+          // Only an empty segment swallows Backspace into removing the chip
+          // before it — a non-empty segment with the caret at 0 must not.
           onBackspaceEmpty();
         }
       }}
