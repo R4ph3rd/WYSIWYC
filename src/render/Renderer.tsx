@@ -5,9 +5,13 @@ import { buildTree, type IRTreeNode } from '@/ir/tree';
 export interface RendererProps {
   ir: IR;
   selectedId: string | null;
+  /** Full multi-selection; falls back to [selectedId] when omitted. */
+  selectedIds?: string[];
+  /** Nodes a focused composer's prompt would be scoped to (dashed preview). */
+  scopeIds?: string[];
   hoveredClauseId: string | null;
   recentIds?: string[];
-  onSelect?: (id: string) => void;
+  onSelect?: (id: string, additive?: boolean) => void;
   onReorder?: (draggedId: string, targetId: string) => void;
 }
 
@@ -51,6 +55,7 @@ function structuredStyle(node: IRNode): CSSProperties {
 function overlayStyle(node: IRNode, opts: {
   selected: boolean;
   clauseHover: boolean;
+  scopePreview: boolean;
 }): CSSProperties {
   const style: CSSProperties = {};
 
@@ -76,8 +81,13 @@ function overlayStyle(node: IRNode, opts: {
     if (h === undefined) style.height = 80;
   }
 
-  // Selection / provenance / divergence overlays use outline (no layout impact).
-  if (opts.selected) {
+  // Selection / scope-preview / provenance / divergence overlays use outline
+  // (no layout impact). Scope preview takes precedence over plain selection: it
+  // is the DirectGPT "these elements are about to be modified" feedback.
+  if (opts.scopePreview) {
+    style.outline = '2px dashed #8b5cf6';
+    style.outlineOffset = '2px';
+  } else if (opts.selected) {
     style.outline = '2px solid #4f46e5';
     style.outlineOffset = '2px';
   } else if (opts.clauseHover) {
@@ -141,7 +151,10 @@ function renderPathShape(
 
 function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
   const { node } = tree;
-  const selected = props.selectedId === node.id;
+  const selected = props.selectedIds
+    ? props.selectedIds.includes(node.id)
+    : props.selectedId === node.id;
+  const scopePreview = props.scopeIds?.includes(node.id) ?? false;
   const clauseHover =
     props.hoveredClauseId != null && node.provenance.promptClauseId === props.hoveredClauseId;
 
@@ -165,7 +178,7 @@ function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
     ? {
         onClick: (e: React.MouseEvent) => {
           e.stopPropagation();
-          props.onSelect?.(node.id);
+          props.onSelect?.(node.id, e.shiftKey);
         },
         draggable: !isAbsolute,
         onDragStart: (e: React.DragEvent) => {
@@ -203,7 +216,7 @@ function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
                 : 'div';
 
   const combinedStyle: CSSProperties = {
-    ...overlayStyle(node, { selected, clauseHover }),
+    ...overlayStyle(node, { selected, clauseHover, scopePreview }),
     ...structuredStyle(node),
   };
 

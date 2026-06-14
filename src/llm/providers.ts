@@ -87,9 +87,18 @@ export interface CallJSONOptions {
   schema: unknown;
   schemaName: string;
   maxTokens: number;
+  /** Optional image data URLs (from composer image chips) sent as vision blocks. */
+  images?: string[];
 }
 
 export class LLMError extends Error {}
+
+/** Split a `data:<mime>;base64,<data>` URL into its parts (for Anthropic blocks). */
+function parseDataUrl(dataUrl: string): { mediaType: string; data: string } | null {
+  const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+  if (!m) return null;
+  return { mediaType: m[1], data: m[2] };
+}
 
 function parseJSON(text: string): unknown {
   // Strip fenced ```json blocks if a model added them despite instructions.
@@ -121,6 +130,19 @@ async function fetchJSON(url: string, init: RequestInit): Promise<unknown> {
 // --- Anthropic Claude ---
 
 async function callAnthropic(opts: CallJSONOptions): Promise<unknown> {
+  // Vision: when image chips are present, send a content-block array (images
+  // first, then the text) instead of a bare string.
+  const imageBlocks = (opts.images ?? [])
+    .map(parseDataUrl)
+    .filter((p): p is { mediaType: string; data: string } => p !== null)
+    .map((p) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: p.mediaType, data: p.data },
+    }));
+  const content = imageBlocks.length
+    ? [...imageBlocks, { type: 'text', text: opts.user }]
+    : opts.user;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data: any = await fetchJSON('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -134,7 +156,7 @@ async function callAnthropic(opts: CallJSONOptions): Promise<unknown> {
       model: opts.model,
       max_tokens: opts.maxTokens,
       system: opts.system,
-      messages: [{ role: 'user', content: opts.user }],
+      messages: [{ role: 'user', content }],
       output_config: {
         format: { type: 'json_schema', name: opts.schemaName, schema: opts.schema },
       },
@@ -148,6 +170,13 @@ async function callAnthropic(opts: CallJSONOptions): Promise<unknown> {
 // --- OpenAI (Chat Completions, json_schema strict) ---
 
 async function callOpenAI(opts: CallJSONOptions): Promise<unknown> {
+  // Vision: OpenAI takes image_url parts (data URLs allowed) in the user turn.
+  const userContent = (opts.images ?? []).length
+    ? [
+        { type: 'text', text: opts.user },
+        ...(opts.images ?? []).map((url) => ({ type: 'image_url', image_url: { url } })),
+      ]
+    : opts.user;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data: any = await fetchJSON('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -159,7 +188,7 @@ async function callOpenAI(opts: CallJSONOptions): Promise<unknown> {
       model: opts.model,
       messages: [
         { role: 'system', content: opts.system },
-        { role: 'user', content: opts.user },
+        { role: 'user', content: userContent },
       ],
       max_tokens: opts.maxTokens,
       response_format: {
@@ -176,6 +205,9 @@ async function callOpenAI(opts: CallJSONOptions): Promise<unknown> {
 // --- Mistral (Chat Completions, json_schema) ---
 
 async function callMistral(opts: CallJSONOptions): Promise<unknown> {
+  if (opts.images?.length) {
+    throw new LLMError('The Mistral connection here does not support image references. Remove the image chip or switch to Anthropic / OpenAI.');
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data: any = await fetchJSON('https://api.mistral.ai/v1/chat/completions', {
     method: 'POST',
@@ -204,6 +236,9 @@ async function callMistral(opts: CallJSONOptions): Promise<unknown> {
 // --- Groq (json_object mode + prompt-conditioning; validate client-side) ---
 
 async function callGroq(opts: CallJSONOptions): Promise<unknown> {
+  if (opts.images?.length) {
+    throw new LLMError('The Groq connection here does not support image references. Remove the image chip or switch to Anthropic / OpenAI.');
+  }
   // Groq supports JSON mode, not full json_schema for most models. Inject the
   // schema as a tail constraint and rely on the model to honour it.
   const reinforcedSystem = `${opts.system}

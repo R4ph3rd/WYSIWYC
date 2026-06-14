@@ -20,6 +20,29 @@ const FONT_FAMILIES = [
   'Fraunces, Georgia, serif',
 ];
 
+/** A draggable inspector parameter (DirectGPT: drag a coordinate into prose). */
+interface ParamDrag {
+  nodeId: string;
+  path: string;
+  value: number | string | undefined;
+}
+
+/** Drag-source props for a field label. Returns {} when there is no value. */
+function paramDragProps(param?: ParamDrag): React.HTMLAttributes<HTMLElement> & { draggable?: boolean } {
+  if (!param || param.value === undefined || param.value === '') return {};
+  return {
+    draggable: true,
+    onDragStart: (e) => {
+      e.dataTransfer.setData(
+        'text/wysiwyc-param',
+        JSON.stringify({ nodeId: param.nodeId, path: param.path, value: param.value }),
+      );
+      e.dataTransfer.effectAllowed = 'copy';
+    },
+    title: 'Drag into the prompt to refer to this value',
+  };
+}
+
 function isTextRole(role: IRNode['role']): boolean {
   return role === 'text' || role === 'heading' || role === 'button' || role === 'badge' || role === 'icon';
 }
@@ -70,16 +93,20 @@ export function PropertiesPanel() {
         {/* Position */}
         <Section title="Position & size" icon={<MoveHorizontal className="h-3 w-3" />}>
           <div className="grid grid-cols-2 gap-1.5">
-            <NumberField label="X" value={node.layout?.x} onChange={(v) => setLayout({ x: v })} />
-            <NumberField label="Y" value={node.layout?.y} onChange={(v) => setLayout({ y: v })} />
-            <NumberField label="W" value={node.layout?.w} onChange={(v) => setLayout({ w: v })} />
-            <NumberField label="H" value={node.layout?.h} onChange={(v) => setLayout({ h: v })} />
+            <NumberField label="X" value={node.layout?.x} onChange={(v) => setLayout({ x: v })}
+              param={{ nodeId: node.id, path: 'layout.x', value: node.layout?.x }} />
+            <NumberField label="Y" value={node.layout?.y} onChange={(v) => setLayout({ y: v })}
+              param={{ nodeId: node.id, path: 'layout.y', value: node.layout?.y }} />
+            <NumberField label="W" value={node.layout?.w} onChange={(v) => setLayout({ w: v })}
+              param={{ nodeId: node.id, path: 'layout.w', value: node.layout?.w }} />
+            <NumberField label="H" value={node.layout?.h} onChange={(v) => setLayout({ h: v })}
+              param={{ nodeId: node.id, path: 'layout.h', value: node.layout?.h }} />
           </div>
         </Section>
 
         {/* Appearance */}
         <Section title="Appearance" icon={<SquareIcon className="h-3 w-3" />}>
-          <Row label="Fill">
+          <Row label="Fill" param={{ nodeId: node.id, path: 'style.fill', value: node.style?.fill }}>
             <ColorField value={node.style?.fill ?? ''} onChange={(v) => set({ fill: v })} />
           </Row>
           <Row label="Stroke">
@@ -94,7 +121,7 @@ export function PropertiesPanel() {
             />
           </Row>
           {!isShapeRole(node.role) || node.role === 'rectangle' ? (
-            <Row label="Radius">
+            <Row label="Radius" param={{ nodeId: node.id, path: 'style.borderRadius', value: node.style?.borderRadius }}>
               <NumberField
                 value={node.style?.borderRadius}
                 onChange={(v) => set({ borderRadius: v })}
@@ -128,7 +155,7 @@ export function PropertiesPanel() {
                 ))}
               </select>
             </Row>
-            <Row label="Size">
+            <Row label="Size" param={{ nodeId: node.id, path: 'style.fontSize', value: node.style?.fontSize }}>
               <NumberField value={node.style?.fontSize} onChange={(v) => set({ fontSize: v })} min={8} max={200} />
             </Row>
             <Row label="Weight">
@@ -142,7 +169,7 @@ export function PropertiesPanel() {
                 ))}
               </select>
             </Row>
-            <Row label="Color">
+            <Row label="Color" param={{ nodeId: node.id, path: 'style.fontColor', value: node.style?.fontColor }}>
               <ColorField value={node.style?.fontColor ?? ''} onChange={(v) => set({ fontColor: v })} />
             </Row>
             <Row label="Style">
@@ -208,28 +235,49 @@ function Section({ title, icon, children }: { title: string; icon: React.ReactNo
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({ label, param, children }: { label: string; param?: ParamDrag; children: React.ReactNode }) {
+  const drag = paramDragProps(param);
   return (
     <div className="mb-1.5 flex items-center gap-2">
-      <span className="w-16 shrink-0 text-[10px] text-slate-500">{label}</span>
+      <span
+        {...drag}
+        className={
+          'w-16 shrink-0 text-[10px] text-slate-500' +
+          (drag.draggable ? ' cursor-grab rounded hover:bg-sky-50 hover:text-sky-600 active:cursor-grabbing' : '')
+        }
+      >
+        {label}
+      </span>
       <div className="flex-1">{children}</div>
     </div>
   );
 }
 
 function NumberField({
-  value, onChange, label, min, max, step,
+  value, onChange, label, param, min, max, step,
 }: {
   value: number | undefined;
   onChange: (v: number) => void;
   label?: string;
+  param?: ParamDrag;
   min?: number; max?: number; step?: number;
 }) {
   const [draft, setDraft] = useState<string>(value === undefined ? '' : String(value));
   useEffect(() => { setDraft(value === undefined ? '' : String(value)); }, [value]);
+  const drag = paramDragProps(param);
   return (
     <div className="flex items-center gap-1 rounded border border-slate-200 bg-white px-1.5 py-1">
-      {label && <span className="text-[9px] uppercase text-slate-400">{label}</span>}
+      {label && (
+        <span
+          {...drag}
+          className={
+            'text-[9px] uppercase text-slate-400' +
+            (drag.draggable ? ' cursor-grab rounded hover:bg-sky-50 hover:text-sky-600 active:cursor-grabbing' : '')
+          }
+        >
+          {label}
+        </span>
+      )}
       <input
         type="number"
         value={draft}
