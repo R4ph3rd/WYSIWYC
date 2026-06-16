@@ -132,11 +132,22 @@ export type ClauseCategory = 'layout' | 'component' | 'style' | 'content';
 
 export const CLAUSE_CATEGORIES: ClauseCategory[] = ['layout', 'component', 'style', 'content'];
 
+/**
+ * Where a clause's information came from: the user stated it ('explicit') or the
+ * model filled it in / guessed a sensible default ('inferred'). Inferred clauses
+ * are flagged in the UI so the user can confirm or swap the guess.
+ */
+export type ClauseOrigin = 'explicit' | 'inferred';
+
 export interface PromptClause {
   /** Stable id, e.g. "clause_3". */
   id: string;
   text: string;
   category: ClauseCategory;
+  /** Provenance of the information (default 'explicit' when absent, e.g. samples). */
+  origin?: ClauseOrigin;
+  /** Up to 3 plausible alternative values/phrasings the user can swap in. */
+  alternatives?: string[];
 }
 
 export interface StructuredPrompt {
@@ -232,8 +243,10 @@ export type PromptRef =
   // ^ a semantic value extracted from a node on drop
   | { kind: 'param'; refId: string; nodeId: string; path: string; label: string; value: string }
   // ^ a single numeric/string parameter dragged from the inspector (e.g. "x", "fontSize")
-  | { kind: 'image'; refId: string; label: string; dataUrl: string };
+  | { kind: 'image'; refId: string; label: string; dataUrl: string }
   // ^ an image pasted/dropped into the prompt (thumbnail inline)
+  | { kind: 'location'; refId: string; x: number; y: number; label: string; nearNodeId?: string };
+  // ^ a point on the canvas (DirectGPT "here"/"there"), captured by clicking
 
 /** The composer value: interleaved text and chips, in document order. */
 export type ComposerSegment =

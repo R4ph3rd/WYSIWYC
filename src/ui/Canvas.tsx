@@ -5,9 +5,10 @@ import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
 import type { ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
 import { SAMPLES } from '@/ir/samples';
+import { composerIsEmpty, composerRefs, emptyComposer, serializeComposer } from '@/lib/composer';
 import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
-import { emptyComposer } from '@/lib/composer';
+import { PromptTargetOverlay } from './PromptTargetOverlay';
 
 type DragState =
   | { mode: 'draw'; id: string; role: IRNode['role']; startX: number; startY: number; prevIR: IR }
@@ -41,18 +42,34 @@ export function Canvas() {
   const selectedNodeId = useAppStore((s) => s.selectedNodeId);
   const selectedNodeIds = useAppStore((s) => s.selectedNodeIds);
   const composerFocused = useAppStore((s) => s.composerFocused);
+  const composerValue = useAppStore((s) => s.composerValue);
   const hoveredClauseId = useAppStore((s) => s.hoveredClauseId);
   const recentIds = useAppStore((s) => s.recentIds);
   const generating = useAppStore((s) => s.generating);
   const selectNode = useAppStore((s) => s.selectNode);
   const toggleSelection = useAppStore((s) => s.toggleSelection);
+  const addComposerNodeRef = useAppStore((s) => s.addComposerNodeRef);
+  const addComposerLocationRef = useAppStore((s) => s.addComposerLocationRef);
   const setTool = useAppStore((s) => s.setTool);
+
+  // Composing context: the canvas feeds the single composer when the user is
+  // mid-prompt (focused, or a draft exists). Clicking an element then refers to
+  // it; clicking empty space while the draft says "here"/"there" drops a pin.
+  const isComposing = composerFocused || !composerIsEmpty(composerValue);
+  const draftText = serializeComposer(composerValue).text;
+  const wantsLocation = /\b(here|there)\b/i.test(draftText);
+  const promptRefs = composerRefs(composerValue);
+  const referencedNodeIds = promptRefs.flatMap((r) => ('nodeId' in r && r.nodeId ? [r.nodeId] : []));
+  const locationRefs = promptRefs.flatMap((r) => (r.kind === 'location' ? [r] : []));
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
   const createShape = useAppStore((s) => s.createShape);
   const updateLayout = useAppStore((s) => s.updateLayout);
 
   const stageRef = useRef<HTMLDivElement>(null);
+  // Set when a move/resize drag actually moved, to swallow the synthetic click
+  // the browser fires afterwards (which would otherwise add a stray ref chip).
+  const draggedRef = useRef(false);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pen, setPen] = useState<PenState | null>(null);
   const [penCursor, setPenCursor] = useState<PathPoint | null>(null);
@@ -75,6 +92,26 @@ export function Canvas() {
     if (!el) return null;
     const rect = el.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  /** The rendered node whose center is closest to a stage point (for here/there). */
+  function nearestNodeId(p: PathPoint): string | undefined {
+    const stage = stageRef.current;
+    if (!stage) return undefined;
+    const srect = stage.getBoundingClientRect();
+    let best: string | undefined;
+    let bestD = Infinity;
+    stage.querySelectorAll<HTMLElement>('[data-node-id]').forEach((el) => {
+      const r = el.getBoundingClientRect();
+      const cx = r.left - srect.left + r.width / 2;
+      const cy = r.top - srect.top + r.height / 2;
+      const d = Math.hypot(cx - p.x, cy - p.y);
+      if (d < bestD) {
+        bestD = d;
+        best = el.dataset.nodeId;
+      }
+    });
+    return best;
   }
 
   // --- Pen tool (multi-click path) ----------------------------------------
@@ -120,6 +157,8 @@ export function Canvas() {
   function onStageMouseDown(e: React.MouseEvent) {
     const p = relativePoint(e);
     if (!p) return;
+    // Every fresh press starts a clean gesture; a real move will re-arm this.
+    draggedRef.current = false;
 
     if (tool === 'path') {
       e.preventDefault();
@@ -199,6 +238,11 @@ export function Canvas() {
   function onStageMouseUp() {
     if (!drag) return;
     const node = nodeById(drag.id);
+    // A move/resize that actually changed geometry should swallow the trailing
+    // click so it doesn't get read as a "refer to this element" tap.
+    if ((drag.mode === 'move' && drag.moved) || drag.mode === 'resize') {
+      draggedRef.current = true;
+    }
     setDrag(null);
 
     if (drag.mode === 'draw') {
@@ -319,7 +363,17 @@ export function Canvas() {
             cursor: drawing ? 'crosshair' : 'default',
           }}
           onClick={(e) => {
-            if (e.target === e.currentTarget && !drawing) selectNode(null);
+            if (e.target !== e.currentTarget || drawing) return;
+            // "here"/"there" + click on empty canvas → capture the point as a
+            // location reference rather than clearing the selection.
+            if (isComposing && wantsLocation) {
+              const p = relativePoint(e);
+              if (p) {
+                addComposerLocationRef(p.x, p.y, nearestNodeId(p));
+                return;
+              }
+            }
+            selectNode(null);
           }}
           onDoubleClick={() => { if (pen) commitPen(false); }}
           onMouseDown={onStageMouseDown}
@@ -337,10 +391,24 @@ export function Canvas() {
             onSelect={
               drawing
                 ? undefined
-                : (id, additive) => (additive ? toggleSelection(id) : selectNode(id))
+                : (id, additive) => {
+                    // Ignore the synthetic click that follows a reposition drag.
+                    if (draggedRef.current) {
+                      draggedRef.current = false;
+                      return;
+                    }
+                    // Mid-prompt, a click also refers to the element (DirectGPT
+                    // "this"/"it" binding) by dropping a chip into the composer.
+                    if (isComposing) addComposerNodeRef(id);
+                    if (additive) toggleSelection(id);
+                    else selectNode(id);
+                  }
             }
             onReorder={drawing ? undefined : onReorder}
           />
+
+          {/* Labeled borders on elements referred to by the prompt + here/there pins. */}
+          <PromptTargetOverlay stageRef={stageRef} nodeIds={referencedNodeIds} locations={locationRefs} />
 
           {/* Pen preview: committed segments + rubber band to the cursor. */}
           {pen && (
@@ -412,6 +480,8 @@ function HeroComposer() {
   const instruct = useAppStore((s) => s.instruct);
   const generating = useAppStore((s) => s.generating);
   const loadSample = useAppStore((s) => s.loadSample);
+  // The empty-state hero keeps its OWN draft: there are no canvas elements to
+  // refer to yet, so it must not mirror the populated PromptPane's store value.
   const [composer, setComposer] = useState<ComposerValue>(emptyComposer());
 
   return (

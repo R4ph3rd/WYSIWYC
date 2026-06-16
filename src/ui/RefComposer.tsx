@@ -1,5 +1,5 @@
 import { useRef, useState, type CSSProperties } from 'react';
-import { ArrowUp, Loader2, Link2, Sparkles, Hash, Image as ImageIcon, X } from 'lucide-react';
+import { ArrowUp, Loader2, Link2, Sparkles, Hash, Image as ImageIcon, MapPin, X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { ComposerValue, ExtractKind, PromptRef } from '@/ir/types';
 import { extractAttribute } from '@/ir/extract';
@@ -40,6 +40,7 @@ const CHIP_STYLE: Record<PromptRef['kind'], string> = {
   attribute: 'bg-violet-50 text-violet-700 ring-violet-200',
   param: 'bg-sky-50 text-sky-700 ring-sky-200',
   image: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  location: 'bg-amber-50 text-amber-700 ring-amber-200',
 };
 
 function ChipIcon({ kind }: { kind: PromptRef['kind'] }) {
@@ -47,6 +48,7 @@ function ChipIcon({ kind }: { kind: PromptRef['kind'] }) {
   if (kind === 'node') return <Link2 className={cls} />;
   if (kind === 'attribute') return <Sparkles className={cls} />;
   if (kind === 'param') return <Hash className={cls} />;
+  if (kind === 'location') return <MapPin className={cls} />;
   return <ImageIcon className={cls} />;
 }
 

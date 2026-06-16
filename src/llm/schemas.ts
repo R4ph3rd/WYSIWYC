@@ -167,8 +167,18 @@ const clauseSchema = {
     id: { type: 'string' },
     text: { type: 'string' },
     category: { type: 'string', enum: ['layout', 'component', 'style', 'content'] },
+    origin: {
+      type: 'string',
+      enum: ['explicit', 'inferred'],
+      description: "'explicit' if the user stated it; 'inferred' if you guessed/filled it in.",
+    },
+    alternatives: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Up to 3 plausible alternative values/phrasings the user might prefer.',
+    },
   },
-  required: ['id', 'text', 'category'],
+  required: ['id', 'text', 'category', 'origin'],
 };
 
 export const PROMPT_UPDATE_SCHEMA = {
