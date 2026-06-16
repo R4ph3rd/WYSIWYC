@@ -412,8 +412,9 @@ export const useAppStore = create<AppState>((set, get) => {
 
     addComposerNodeRef: (nodeId) =>
       set((s) => {
-        // Dedupe: clicking an already-referenced node is a no-op.
-        if (composerRefs(s.composerValue).some((r) => 'nodeId' in r && r.nodeId === nodeId)) {
+        // Dedupe against existing NODE chips only (attribute/param chips also
+        // carry a nodeId but represent a different reference).
+        if (composerRefs(s.composerValue).some((r) => r.kind === 'node' && r.nodeId === nodeId)) {
           return {};
         }
         const node = s.ir.nodes.find((n) => n.id === nodeId);
@@ -430,13 +431,24 @@ export const useAppStore = create<AppState>((set, get) => {
 
     addComposerLocationRef: (x, y, nearNodeId) =>
       set((s) => {
+        const label = `here (${Math.round(x)}, ${Math.round(y)})`;
+        // A draft has a single "here/there" pin — repeated clicks MOVE it rather
+        // than stacking new chips (which the word "here" in the draft would spam).
+        if (composerRefs(s.composerValue).some((r) => r.kind === 'location')) {
+          const composerValue = s.composerValue.map((seg) =>
+            seg.type === 'ref' && seg.ref.kind === 'location'
+              ? { ...seg, ref: { ...seg.ref, x, y, nearNodeId, label } }
+              : seg,
+          );
+          return { composerValue };
+        }
         const ref: PromptRef = {
           kind: 'location',
           refId: nextComposerRefId(s.composerValue),
           x,
           y,
           nearNodeId,
-          label: `here (${Math.round(x)}, ${Math.round(y)})`,
+          label,
         };
         return { composerValue: insertRef(s.composerValue, ref) };
       }),

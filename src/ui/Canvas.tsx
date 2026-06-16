@@ -3,9 +3,9 @@ import { Loader2, Sparkles } from 'lucide-react';
 import { useAppStore, toolToRole } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
-import type { IR, IRNode, PathPoint } from '@/ir/types';
+import type { ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
 import { SAMPLES } from '@/ir/samples';
-import { composerIsEmpty, composerRefs, serializeComposer } from '@/lib/composer';
+import { composerIsEmpty, composerRefs, emptyComposer, serializeComposer } from '@/lib/composer';
 import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
@@ -67,6 +67,9 @@ export function Canvas() {
   const updateLayout = useAppStore((s) => s.updateLayout);
 
   const stageRef = useRef<HTMLDivElement>(null);
+  // Set when a move/resize drag actually moved, to swallow the synthetic click
+  // the browser fires afterwards (which would otherwise add a stray ref chip).
+  const draggedRef = useRef(false);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pen, setPen] = useState<PenState | null>(null);
   const [penCursor, setPenCursor] = useState<PathPoint | null>(null);
@@ -154,6 +157,8 @@ export function Canvas() {
   function onStageMouseDown(e: React.MouseEvent) {
     const p = relativePoint(e);
     if (!p) return;
+    // Every fresh press starts a clean gesture; a real move will re-arm this.
+    draggedRef.current = false;
 
     if (tool === 'path') {
       e.preventDefault();
@@ -233,6 +238,11 @@ export function Canvas() {
   function onStageMouseUp() {
     if (!drag) return;
     const node = nodeById(drag.id);
+    // A move/resize that actually changed geometry should swallow the trailing
+    // click so it doesn't get read as a "refer to this element" tap.
+    if ((drag.mode === 'move' && drag.moved) || drag.mode === 'resize') {
+      draggedRef.current = true;
+    }
     setDrag(null);
 
     if (drag.mode === 'draw') {
@@ -382,6 +392,11 @@ export function Canvas() {
               drawing
                 ? undefined
                 : (id, additive) => {
+                    // Ignore the synthetic click that follows a reposition drag.
+                    if (draggedRef.current) {
+                      draggedRef.current = false;
+                      return;
+                    }
                     // Mid-prompt, a click also refers to the element (DirectGPT
                     // "this"/"it" binding) by dropping a chip into the composer.
                     if (isComposing) addComposerNodeRef(id);
@@ -465,8 +480,9 @@ function HeroComposer() {
   const instruct = useAppStore((s) => s.instruct);
   const generating = useAppStore((s) => s.generating);
   const loadSample = useAppStore((s) => s.loadSample);
-  const composerValue = useAppStore((s) => s.composerValue);
-  const setComposerValue = useAppStore((s) => s.setComposerValue);
+  // The empty-state hero keeps its OWN draft: there are no canvas elements to
+  // refer to yet, so it must not mirror the populated PromptPane's store value.
+  const [composer, setComposer] = useState<ComposerValue>(emptyComposer());
 
   return (
     <div
@@ -486,8 +502,8 @@ function HeroComposer() {
 
         <div className="mt-5 text-left">
           <RefComposer
-            value={composerValue}
-            onChange={setComposerValue}
+            value={composer}
+            onChange={setComposer}
             onSend={(text, refs) => instruct(text, { refs })}
             busy={generating}
             size="lg"
