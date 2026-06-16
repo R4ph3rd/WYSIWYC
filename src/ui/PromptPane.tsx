@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
-import type { ClauseCategory, ComposerValue, PromptClause } from '@/ir/types';
+import type { ClauseCategory, PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
 import { RefComposer } from './RefComposer';
 import { RecipesRail } from './RecipesRail';
-import { emptyComposer } from '@/lib/composer';
+import { AlternativesMenu } from './AlternativesMenu';
 
 /**
  * The prompt is a LIVING SPEC, but it must read like a person describing a
@@ -47,12 +47,15 @@ export function PromptPane() {
   const selectedNodeIds = useAppStore((s) => s.selectedNodeIds);
   const composerFocused = useAppStore((s) => s.composerFocused);
   const setComposerFocused = useAppStore((s) => s.setComposerFocused);
+  const composerValue = useAppStore((s) => s.composerValue);
+  const setComposerValue = useAppStore((s) => s.setComposerValue);
+  const chooseAlternative = useAppStore((s) => s.chooseAlternative);
   const selectedClauseId = useAppStore((s) =>
     selectedNodeId ? (s.ir.nodes.find((n) => n.id === selectedNodeId)?.provenance.promptClauseId ?? null) : null,
   );
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [composer, setComposer] = useState<ComposerValue>(emptyComposer());
+  const [altMenu, setAltMenu] = useState<{ clauseId: string; x: number; y: number } | null>(null);
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -87,7 +90,7 @@ export function PromptPane() {
                   selected={selectedClauseId === c.id}
                   flash={recentIds.includes(c.id)}
                   onHover={hoverClause}
-                  onEdit={() => setEditingId(c.id)}
+                  onOpenMenu={(x, y) => setAltMenu({ clauseId: c.id, x, y })}
                   onRemove={() => removeClause(c.id)}
                 />
               ),
@@ -95,6 +98,22 @@ export function PromptPane() {
           </p>
         )}
       </div>
+
+      {altMenu && (() => {
+        const clause = clauses.find((c) => c.id === altMenu.clauseId);
+        if (!clause) return null;
+        return (
+          <AlternativesMenu
+            clause={clause}
+            x={altMenu.x}
+            y={altMenu.y}
+            onPick={(text) => { chooseAlternative(clause.id, text); setAltMenu(null); }}
+            onEdit={() => { setEditingId(clause.id); setAltMenu(null); }}
+            onRemove={() => { removeClause(clause.id); setAltMenu(null); }}
+            onClose={() => setAltMenu(null)}
+          />
+        );
+      })()}
 
       {clauses.length > 0 && (
         <div className="flex items-center gap-2.5 border-t border-slate-100 px-3 py-1.5">
@@ -115,8 +134,8 @@ export function PromptPane() {
           </div>
         )}
         <RefComposer
-          value={composer}
-          onChange={setComposer}
+          value={composerValue}
+          onChange={setComposerValue}
           onSend={(text, refs) => instruct(text, { scopeNodeIds: selectedNodeIds, refs })}
           onFocusChange={setComposerFocused}
           busy={generating}
@@ -132,28 +151,36 @@ function ClauseSpan({
   selected,
   flash,
   onHover,
-  onEdit,
+  onOpenMenu,
   onRemove,
 }: {
   clause: PromptClause;
   selected: boolean;
   flash: boolean;
   onHover: (id: string | null) => void;
-  onEdit: () => void;
+  onOpenMenu: (x: number, y: number) => void;
   onRemove: () => void;
 }) {
+  const inferred = clause.origin === 'inferred';
   return (
     <span
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
-      onClick={onEdit}
+      onClick={(e) => onOpenMenu(e.clientX, e.clientY)}
+      title={inferred ? 'Inferred — click to confirm or swap an alternative' : 'Click for alternatives'}
       className={cn(
-        'group -mx-0.5 cursor-text rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
+        'group -mx-0.5 cursor-pointer rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
         CATEGORY_UNDERLINE[clause.category],
         selected ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
     >
+      {inferred && (
+        <span
+          className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle ring-2 ring-amber-100"
+          aria-label="inferred"
+        />
+      )}
       {sentence(clause.text)}
       <button
         onClick={(e) => {

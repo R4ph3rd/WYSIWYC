@@ -26,8 +26,20 @@ export const COMPOSE_SYSTEM = `You are the compositor behind WYSIWYC, a Lovable-
 1. THE LIVING SPEC — a list of short clauses, each a natural sentence a designer would say, categorized as layout / component / style / content. The spec must read like a person describing a screen, NEVER like CSS or a config file. Use semantic values first: "a calm indigo primary", "the CTA sits below the form", "a softer, friendlier card" — not pixel counts or hex codes unless the user said them explicitly.
 2. THE SCENE GRAPH — a FLAT array of nodes (parentId references, no nested JSON) rendered with Tailwind.
 
+WRITE A COMPLETE, WELL-STRUCTURED SPEC. A good spec makes the design's reasoning explicit. Where relevant to the screen, ensure clauses cover these facets (one idea per clause, do not force empty ones):
+- Context & purpose: what this screen is and who/what it is for.
+- Required features: the key elements/capabilities the screen must have.
+- Layout & structure: arrangement, hierarchy, alignment, responsiveness.
+- Color theme: the palette and how colors are used (primary, neutrals, accents).
+- Typography / font styling: type family character, scale, weight, emphasis.
+- Spacing rhythm: density and the consistent spacing scale.
+- Elevation / shadow styling: depth, cards, layering treatment.
+- General mood / tone: the overall feel (e.g. calm, playful, premium, technical).
+
 Given the user's instruction, the current spec and the current scene graph:
 - Fold the instruction into the spec: refine existing clauses IN PLACE (reuse their ids), add new clauses for genuinely new ideas (fresh ids counting up), remove clauses that no longer hold. Do NOT return untouched clauses. Keep one idea per clause, roughly 5–15 words.
+- ORIGIN: set "origin" on every clause you return. Use "explicit" when the user stated the information (even loosely); use "inferred" when YOU chose it — a sensible default, a guess, or a facet the user never mentioned. Be honest: default palettes, fonts, spacing and moods you invented are "inferred", not "explicit".
+- ALTERNATIVES: for each clause, optionally give up to 3 short "alternatives" — other plausible values/phrasings the user might pick instead (e.g. other palettes, fonts, layouts, moods). ALWAYS provide alternatives for "inferred" clauses so the user can swap a guess in one click. Each alternative is a full replacement sentence for that clause.
 - Emit the MINIMAL IR patch (add/update/remove/reorder ops) that makes the scene match the new spec. If the scene is empty, generate the full UI.
 - Reuse existing node IDs. Only create new IDs for genuinely new elements. NEVER renumber.
 - ${DESIGN_BAR}
@@ -59,7 +71,7 @@ export function composeUser(
   if (opts.scopeNodeIds && opts.scopeNodeIds.length > 0) {
     lines.push(
       '',
-      `The user's instruction applies specifically to these existing nodes: [${opts.scopeNodeIds.join(', ')}]. Prefer 'update' ops on them and their descendants. Do not restructure the rest of the screen.`,
+      `The user's instruction applies specifically to these existing nodes: [${opts.scopeNodeIds.join(', ')}]. Deictic words in the instruction — "this", "it", "that", "these", "them", or a verb with no named subject — refer to these nodes. Prefer 'update' ops on them and their descendants. Do not restructure the rest of the screen.`,
     );
   }
 
@@ -95,10 +107,15 @@ function referencedElementsBlock(refs: PromptRef[]): string {
       case 'image':
         lines.push(`- «${ref.refId}» → see attached image (${ref.label}).`);
         break;
+      case 'location':
+        lines.push(
+          `- «${ref.refId}» → a point on the canvas at (${Math.round(ref.x)}, ${Math.round(ref.y)})${ref.nearNodeId ? `, nearest existing element ${ref.nearNodeId}` : ''}. This is where "here"/"there" points — place or move content to this position/region.`,
+        );
+        break;
     }
   }
   lines.push(
-    'When the prose contains a marker, treat it as pointing at that concrete element or value. Prefer "update" ops on referenced nodes, reuse their ids, and never renumber.',
+    'When the prose contains a marker, treat it as pointing at that concrete element, value, or location. Prefer "update" ops on referenced nodes, reuse their ids, and never renumber.',
   );
   return lines.join('\n');
 }
@@ -147,6 +164,7 @@ Rules:
 - Write clauses as natural sentences a designer would say. Use semantic values first ("a softer pink", "a heavier headline", "below the form") — quote exact values only when they clearly matter to the user.
 - Only touch clauses affected by this manipulation. Preserve all others verbatim (do not return them).
 - Return updatedClauses (clauses to add or replace, keyed by stable id — reuse the existing clause id when editing one) and removedClauseIds. A manipulation that introduced something new (e.g. a hand-drawn shape) usually means ADDING a clause.
+- Set "origin" on every clause you return to "explicit" — a direct manipulation is the user explicitly stating intent. You may add up to 3 short "alternatives" (other plausible readings of the manipulation).
 - deltaDescription is ONE plain sentence shown to the user for confirm/reject.
 - If intent is ambiguous, set confidence "low" and pick the most likely semantic reading.`;
 

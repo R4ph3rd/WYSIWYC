@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type {
+  ComposerValue,
   IR,
   IRPatch,
   ManipulationOp,
@@ -11,6 +12,7 @@ import type {
   Recipe,
   StructuredPrompt,
 } from '@/ir/types';
+import { composerRefs, emptyComposer, insertRef, nextComposerRefId } from '@/lib/composer';
 import { applyPatch } from '@/ir/applyPatch';
 import {
   applyManipulation,
@@ -105,6 +107,12 @@ interface AppState {
   selectedNodeIds: string[];
   /** True while a composer input holds focus — drives the scope-preview outline. */
   composerFocused: boolean;
+  /**
+   * The live composer value (text + reference chips), lifted into the store so
+   * canvas interactions (click-to-refer, here/there location) can feed the
+   * single composer. Both PromptPane and HeroComposer bind to it.
+   */
+  composerValue: ComposerValue;
   /** Saved reusable commands (DirectGPT toolbar). Project-scoped, not persisted. */
   recipes: Recipe[];
   /** The marker-interpolated text of the last successful compose send (for "Save as recipe"). */
@@ -125,6 +133,13 @@ interface AppState {
   /** Shift-click: toggle a node in/out of the multi-selection. */
   toggleSelection: (id: string) => void;
   setComposerFocused: (focused: boolean) => void;
+  setComposerValue: (v: ComposerValue) => void;
+  /** Append a node reference chip to the composer (click-to-refer); dedupes by node. */
+  addComposerNodeRef: (nodeId: string) => void;
+  /** Append a canvas-location chip to the composer (DirectGPT here/there). */
+  addComposerLocationRef: (x: number, y: number, nearNodeId?: string) => void;
+  /** Replace a clause's text with one of its model-proposed alternatives. */
+  chooseAlternative: (clauseId: string, text: string) => void;
   hoverClause: (id: string | null) => void;
   setTool: (tool: Tool) => void;
 
@@ -333,6 +348,7 @@ export const useAppStore = create<AppState>((set, get) => {
       selectedNodeId: null,
       selectedNodeIds: [],
       composerFocused: false,
+      composerValue: emptyComposer(),
       recipes: [],
       lastSent: null,
       hoveredClauseId: null,
@@ -350,6 +366,7 @@ export const useAppStore = create<AppState>((set, get) => {
     selectedNodeId: null,
     selectedNodeIds: [],
     composerFocused: false,
+    composerValue: emptyComposer(),
     recipes: [],
     lastSent: null,
     hoveredClauseId: null,
@@ -391,6 +408,49 @@ export const useAppStore = create<AppState>((set, get) => {
       }),
 
     setComposerFocused: (composerFocused) => set({ composerFocused }),
+    setComposerValue: (composerValue) => set({ composerValue }),
+
+    addComposerNodeRef: (nodeId) =>
+      set((s) => {
+        // Dedupe: clicking an already-referenced node is a no-op.
+        if (composerRefs(s.composerValue).some((r) => 'nodeId' in r && r.nodeId === nodeId)) {
+          return {};
+        }
+        const node = s.ir.nodes.find((n) => n.id === nodeId);
+        const snip = node?.content?.trim().slice(0, 16);
+        const label = node ? (snip ? `${node.role} “${snip}”` : node.role) : nodeId;
+        const ref: PromptRef = {
+          kind: 'node',
+          refId: nextComposerRefId(s.composerValue),
+          nodeId,
+          label,
+        };
+        return { composerValue: insertRef(s.composerValue, ref) };
+      }),
+
+    addComposerLocationRef: (x, y, nearNodeId) =>
+      set((s) => {
+        const ref: PromptRef = {
+          kind: 'location',
+          refId: nextComposerRefId(s.composerValue),
+          x,
+          y,
+          nearNodeId,
+          label: `here (${Math.round(x)}, ${Math.round(y)})`,
+        };
+        return { composerValue: insertRef(s.composerValue, ref) };
+      }),
+
+    chooseAlternative: (clauseId, text) => {
+      set((s) => ({
+        prompt: {
+          clauses: s.prompt.clauses.map((c) =>
+            c.id === clauseId ? { ...c, text, origin: 'explicit' } : c,
+          ),
+        },
+      }));
+      scheduleCallA([clauseId]);
+    },
 
     hoverClause: (hoveredClauseId) => set({ hoveredClauseId }),
     setTool: (tool) => set({ tool }),
