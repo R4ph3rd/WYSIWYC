@@ -6,7 +6,9 @@ import type {
   NodeRole,
   NodeStyle,
   PathPoint,
+  PromptRef,
   PromptUpdateProposal,
+  Recipe,
   StructuredPrompt,
 } from '@/ir/types';
 import { applyPatch } from '@/ir/applyPatch';
@@ -26,7 +28,52 @@ import {
   NotConnectedError,
 } from '@/llm/client';
 import { LLMError } from '@/llm/providers';
-import { logBackChannel, setLastDecision } from '@/lib/log';
+import {
+  logBackChannel,
+  logComposeGesture,
+  setLastDecision,
+  type GestureProvenance,
+} from '@/lib/log';
+import { nextRecipeId } from '@/ir/ids';
+
+/** Options for a compose send (DirectGPT scope + reference chips + recipe). */
+export interface InstructOptions {
+  scopeNodeIds?: string[];
+  refs?: PromptRef[];
+  /** True when this send was triggered by re-applying a Recipe. */
+  viaRecipe?: boolean;
+}
+
+/** Derive the gesture-provenance signals present in a compose send (study log). */
+function gestureSignals(opts: InstructOptions): GestureProvenance[] {
+  const signals: GestureProvenance[] = [];
+  if (opts.viaRecipe) signals.push('recipe');
+  for (const ref of opts.refs ?? []) {
+    if (ref.kind === 'node') signals.push('dragRef');
+    else if (ref.kind === 'attribute') signals.push('attributeRef');
+    else if (ref.kind === 'param') signals.push('paramRef');
+    else if (ref.kind === 'image') signals.push('image');
+  }
+  if (opts.scopeNodeIds && opts.scopeNodeIds.length > 0) signals.push('scopedSelection');
+  if (signals.length === 0) signals.push('typed');
+  return Array.from(new Set(signals));
+}
+
+/** The single strongest signal, for at-a-glance grouping. */
+const PROVENANCE_RANK: GestureProvenance[] = [
+  'recipe', 'image', 'attributeRef', 'paramRef', 'dragRef', 'scopedSelection', 'typed',
+];
+function primaryProvenance(signals: GestureProvenance[]): GestureProvenance {
+  return PROVENANCE_RANK.find((p) => signals.includes(p)) ?? 'typed';
+}
+
+/** A short verb-phrase label for a recipe pill (v1: first few words, sentence-cased). */
+function deriveRecipeLabel(instruction: string): string {
+  const cleaned = instruction.replace(/\{selection\}/g, '').replace(/\s+/g, ' ').trim();
+  const words = cleaned.split(' ').slice(0, 5).join(' ');
+  const label = words.length > 32 ? `${words.slice(0, 32).trim()}…` : words;
+  return label ? label[0].toUpperCase() + label.slice(1) : 'Saved command';
+}
 
 /** Tool palette modes (deterministic drawing). */
 export type Tool = 'pointer' | 'rectangle' | 'circle' | 'line' | 'path' | 'text';
@@ -52,7 +99,16 @@ interface AppState {
   prompt: StructuredPrompt;
   pendingProposal: PromptUpdateProposal | null;
   pendingAffectedIds: string[];
+  /** Primary selection (first of selectedNodeIds) — kept for existing call sites. */
   selectedNodeId: string | null;
+  /** Full multi-selection (DirectGPT selection-scoped prompting). */
+  selectedNodeIds: string[];
+  /** True while a composer input holds focus — drives the scope-preview outline. */
+  composerFocused: boolean;
+  /** Saved reusable commands (DirectGPT toolbar). Project-scoped, not persisted. */
+  recipes: Recipe[];
+  /** The marker-interpolated text of the last successful compose send (for "Save as recipe"). */
+  lastSent: string | null;
   hoveredClauseId: string | null;
   recentIds: string[];
   history: Snapshot[];
@@ -66,14 +122,26 @@ interface AppState {
   loadSample: (id: string) => void;
   newBlank: () => void;
   selectNode: (id: string | null) => void;
+  /** Shift-click: toggle a node in/out of the multi-selection. */
+  toggleSelection: (id: string) => void;
+  setComposerFocused: (focused: boolean) => void;
   hoverClause: (id: string | null) => void;
   setTool: (tool: Tool) => void;
 
-  /** Lovable-style entry point: a freeform NL instruction → spec + IR, one call. */
-  instruct: (message: string) => void;
+  /**
+   * Lovable-style entry point: a freeform NL instruction → spec + IR, one call.
+   * `opts` carries the DirectGPT additions — a selection scope, resolved
+   * reference chips, and whether the send came from a Recipe.
+   */
+  instruct: (message: string, opts?: InstructOptions) => void;
   editClause: (id: string, text: string) => void;
   removeClause: (id: string) => void;
   regenerate: () => void;
+
+  /** Save the last sent (or a given) instruction as a reusable Recipe. */
+  addRecipe: (fromInstruction: string, label?: string) => void;
+  /** Re-apply a Recipe to the current selection (requires a non-empty selection). */
+  applyRecipe: (recipeId: string) => void;
 
   manipulate: (op: ManipulationOp) => void;
   /**
@@ -263,6 +331,10 @@ export const useAppStore = create<AppState>((set, get) => {
       pendingProposal: null,
       pendingAffectedIds: [],
       selectedNodeId: null,
+      selectedNodeIds: [],
+      composerFocused: false,
+      recipes: [],
+      lastSent: null,
       hoveredClauseId: null,
       recentIds: [],
       history: [],
@@ -276,6 +348,10 @@ export const useAppStore = create<AppState>((set, get) => {
     pendingProposal: null,
     pendingAffectedIds: [],
     selectedNodeId: null,
+    selectedNodeIds: [],
+    composerFocused: false,
+    recipes: [],
+    lastSent: null,
     hoveredClauseId: null,
     recentIds: [],
     history: [],
@@ -302,18 +378,47 @@ export const useAppStore = create<AppState>((set, get) => {
         ...resetTransients(),
       }),
 
-    selectNode: (selectedNodeId) => set({ selectedNodeId }),
+    selectNode: (selectedNodeId) =>
+      set({ selectedNodeId, selectedNodeIds: selectedNodeId ? [selectedNodeId] : [] }),
+
+    toggleSelection: (id) =>
+      set((s) => {
+        const has = s.selectedNodeIds.includes(id);
+        const selectedNodeIds = has
+          ? s.selectedNodeIds.filter((x) => x !== id)
+          : [...s.selectedNodeIds, id];
+        return { selectedNodeIds, selectedNodeId: selectedNodeIds[selectedNodeIds.length - 1] ?? null };
+      }),
+
+    setComposerFocused: (composerFocused) => set({ composerFocused }),
+
     hoverClause: (hoveredClauseId) => set({ hoveredClauseId }),
     setTool: (tool) => set({ tool }),
 
-    instruct: (message) => {
+    instruct: (message, opts = {}) => {
       const text = message.trim();
       if (!text) return;
+      const scopeNodeIds = opts.scopeNodeIds?.filter(Boolean) ?? [];
+      const refs = opts.refs ?? [];
+
+      // Study log: one compose-gesture row per send, recording how it was
+      // composed (typed vs. dragged/extracted/scoped/recipe). Logged up front so
+      // even an errored send is counted as an attempted gesture.
+      const signals = gestureSignals({ scopeNodeIds, refs, viaRecipe: opts.viaRecipe });
+      logComposeGesture({
+        timestamp: Date.now(),
+        provenance: primaryProvenance(signals),
+        signals,
+        chipCount: refs.length,
+        scoped: scopeNodeIds.length > 0,
+        promptLength: text.length,
+      });
+
       set({ generating: true, error: null });
       void (async () => {
         try {
           const { ir, prompt } = get();
-          const result = await composeFromInstruction(ir, prompt, text);
+          const result = await composeFromInstruction(ir, prompt, text, { scopeNodeIds, refs });
           set((s) => ({
             history: [...s.history, snapshot(s)].slice(-50),
             prompt: mergeClauses(s.prompt, result.updatedClauses, result.removedClauseIds),
@@ -322,12 +427,56 @@ export const useAppStore = create<AppState>((set, get) => {
               ...result.updatedClauses.map((c) => c.id),
               ...patchedIds({ ops: result.ops }),
             ],
+            // A recipe re-application must not overwrite the user's last typed
+            // instruction — otherwise "Save as recipe" would offer the already
+            // expanded recipe text (with {selection} collapsed to literal prose).
+            lastSent: opts.viaRecipe ? s.lastSent : text,
             generating: false,
           }));
         } catch (err) {
           handleLLMError(set, err, 'generating');
         }
       })();
+    },
+
+    addRecipe: (fromInstruction, label) => {
+      const instruction = fromInstruction.trim();
+      if (!instruction) return;
+      // v1 abstraction (no LLM): store verbatim, with chip markers collapsed to a
+      // {selection} slot so the command re-targets whatever is selected later.
+      const templated = instruction.replace(/«ref_\d+»/g, '{selection}');
+      set((s) => {
+        const id = nextRecipeId(s.recipes.map((r) => r.id));
+        const recipe: Recipe = {
+          id,
+          label: label?.trim() || deriveRecipeLabel(templated),
+          instruction: templated,
+          createdFrom: instruction,
+          uses: 0,
+        };
+        return { recipes: [...s.recipes, recipe] };
+      });
+    },
+
+    applyRecipe: (recipeId) => {
+      const { recipes, selectedNodeIds } = get();
+      const recipe = recipes.find((r) => r.id === recipeId);
+      if (!recipe || selectedNodeIds.length === 0) return;
+      // Re-applying a recipe IS a logged manipulation (study metric), even though
+      // its realization goes through the prompt-authoritative compose path.
+      logBackChannel({
+        timestamp: Date.now(),
+        manipulationKind: 'recipe',
+        manipulation: { kind: 'recipe', id: `recipe_apply_${Date.now()}`, recipeId, instruction: recipe.instruction },
+        proposal: null,
+        accepted: null,
+        confidence: null,
+      });
+      set((s) => ({
+        recipes: s.recipes.map((r) => (r.id === recipeId ? { ...r, uses: r.uses + 1 } : r)),
+      }));
+      const text = recipe.instruction.replace(/\{selection\}/g, 'the selection');
+      get().instruct(text, { scopeNodeIds: selectedNodeIds, viaRecipe: true });
     },
 
     editClause: (id, text) => {
@@ -352,6 +501,10 @@ export const useAppStore = create<AppState>((set, get) => {
         ir: nextIR,
         recentIds: affectedIds,
         selectedNodeId: op.kind === 'delete' ? null : s.selectedNodeId,
+        selectedNodeIds:
+          op.kind === 'delete'
+            ? s.selectedNodeIds.filter((id) => !affectedIds.includes(id))
+            : s.selectedNodeIds,
       }));
       propose(op, prevIR);
     },
@@ -405,6 +558,7 @@ export const useAppStore = create<AppState>((set, get) => {
           history: [...s.history, snapshot(s)].slice(-50),
           ir: result.ir,
           selectedNodeId: newId,
+          selectedNodeIds: [newId],
           recentIds: [newId],
         };
       });

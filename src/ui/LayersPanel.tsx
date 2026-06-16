@@ -28,7 +28,9 @@ const ROLE_ICON: Record<NodeRole, React.ReactNode> = {
 export function LayersPanel() {
   const ir = useAppStore((s) => s.ir);
   const selectedId = useAppStore((s) => s.selectedNodeId);
+  const selectedIds = useAppStore((s) => s.selectedNodeIds);
   const selectNode = useAppStore((s) => s.selectNode);
+  const toggleSelection = useAppStore((s) => s.toggleSelection);
   const hoverClause = useAppStore((s) => s.hoverClause);
   const toggleHidden = useAppStore((s) => s.toggleHidden);
   const manipulate = useAppStore((s) => s.manipulate);
@@ -54,7 +56,8 @@ export function LayersPanel() {
             tree={t}
             depth={0}
             selectedId={selectedId}
-            onSelect={selectNode}
+            selectedIds={selectedIds}
+            onSelect={(id, additive) => (additive ? toggleSelection(id) : selectNode(id))}
             onHoverClause={hoverClause}
             onToggleHidden={toggleHidden}
             onDelete={(id) => manipulate({ kind: 'delete', id })}
@@ -69,15 +72,16 @@ interface TreeNodeProps {
   tree: IRTreeNode;
   depth: number;
   selectedId: string | null;
-  onSelect: (id: string) => void;
+  selectedIds: string[];
+  onSelect: (id: string, additive?: boolean) => void;
   onHoverClause: (id: string | null) => void;
   onToggleHidden: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
-function TreeNode({ tree, depth, selectedId, onSelect, onHoverClause, onToggleHidden, onDelete }: TreeNodeProps) {
+function TreeNode({ tree, depth, selectedId, selectedIds, onSelect, onHoverClause, onToggleHidden, onDelete }: TreeNodeProps) {
   const { node, children } = tree;
-  const isSelected = selectedId === node.id;
+  const isSelected = selectedIds.includes(node.id);
   const hidden = node.tailwind.split(/\s+/).includes('hidden');
   const isDiverged =
     node.provenance.source === 'user' && node.provenance.promptClauseId === null;
@@ -87,7 +91,14 @@ function TreeNode({ tree, depth, selectedId, onSelect, onHoverClause, onToggleHi
   return (
     <>
       <div
-        onClick={() => onSelect(node.id)}
+        draggable
+        onDragStart={(e) => {
+          // Same payload as canvas nodes, so a Layers row can be dropped into
+          // the composer as a reference chip (DirectGPT "refer").
+          e.dataTransfer.setData('text/wysiwyc-node', node.id);
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
+        onClick={(e) => onSelect(node.id, e.shiftKey)}
         onMouseEnter={() => onHoverClause(node.provenance.promptClauseId)}
         onMouseLeave={() => onHoverClause(null)}
         className={cn(
@@ -132,6 +143,7 @@ function TreeNode({ tree, depth, selectedId, onSelect, onHoverClause, onToggleHi
           tree={c}
           depth={depth + 1}
           selectedId={selectedId}
+          selectedIds={selectedIds}
           onSelect={onSelect}
           onHoverClause={onHoverClause}
           onToggleHidden={onToggleHidden}

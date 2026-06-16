@@ -1,5 +1,15 @@
-import type { EditSnapshot, IR, ManipulationOp, StructuredPrompt } from '@/ir/types';
+import type { EditSnapshot, IR, ManipulationOp, PromptRef, StructuredPrompt } from '@/ir/types';
 import { nextClauseId, nextNodeId } from '@/ir/ids';
+
+/**
+ * Extra context a compose call can carry beyond the bare instruction:
+ * a selection scope (DirectGPT "localize") and/or resolved reference chips
+ * (DirectGPT "refer"). Both only ADD context — the output contract is unchanged.
+ */
+export interface ComposeOptions {
+  scopeNodeIds?: string[];
+  refs?: PromptRef[];
+}
 
 /** Shared design-quality bar for everything the model authors. */
 const DESIGN_BAR = `Author production-quality Tailwind in each node's "tailwind" field: a consistent 4/8px spacing scale, one primary color, neutral grays, rounded-lg/xl, subtle shadows. Aim for Linear / Vercel / v0-grade polish — a real designed UI, not a wireframe. Use gradients, ring-1, shadow-* and proper type scale where appropriate.`;
@@ -24,10 +34,15 @@ Given the user's instruction, the current spec and the current scene graph:
 - Set provenance.promptClauseId on every node you add or change to the clause that motivated it, and provenance.source to "llm".
 - There must be exactly one root node (parentId null), typically a role:"frame" that lays out the screen.`;
 
-export function composeUser(ir: IR, prompt: StructuredPrompt, instruction: string): string {
+export function composeUser(
+  ir: IR,
+  prompt: StructuredPrompt,
+  instruction: string,
+  opts: ComposeOptions = {},
+): string {
   const suggestedNodeId = nextNodeId(ir.nodes.map((n) => n.id));
   const suggestedClauseId = nextClauseId(prompt.clauses.map((c) => c.id));
-  return [
+  const lines = [
     `Current living spec:`,
     '```json',
     JSON.stringify(prompt, null, 2),
@@ -39,9 +54,53 @@ export function composeUser(ir: IR, prompt: StructuredPrompt, instruction: strin
     '```',
     '',
     `The user says: "${instruction}"`,
+  ];
+
+  if (opts.scopeNodeIds && opts.scopeNodeIds.length > 0) {
+    lines.push(
+      '',
+      `The user's instruction applies specifically to these existing nodes: [${opts.scopeNodeIds.join(', ')}]. Prefer 'update' ops on them and their descendants. Do not restructure the rest of the screen.`,
+    );
+  }
+
+  if (opts.refs && opts.refs.length > 0) {
+    lines.push('', referencedElementsBlock(opts.refs));
+  }
+
+  lines.push(
     '',
     `Allocate fresh clause ids starting at "${suggestedClauseId}" and fresh node ids starting at "${suggestedNodeId}", counting up. Output the spec update and the IR patch.`,
-  ].join('\n');
+  );
+  return lines.join('\n');
+}
+
+/**
+ * The "Referenced elements" block (DirectGPT "refer"): each `«ref_n»` marker in
+ * the prose is resolved to a concrete node id / extracted value / image so the
+ * model can act on it without guessing. Reuse referenced ids; never renumber.
+ */
+function referencedElementsBlock(refs: PromptRef[]): string {
+  const lines = ['Referenced elements (the instruction may point at these with «marker» tokens):'];
+  for (const ref of refs) {
+    switch (ref.kind) {
+      case 'node':
+        lines.push(`- «${ref.refId}» → node ${ref.nodeId} (${ref.label}).`);
+        break;
+      case 'attribute':
+        lines.push(`- «${ref.refId}» → ${ref.extract} of node ${ref.nodeId}: ${ref.value}.`);
+        break;
+      case 'param':
+        lines.push(`- «${ref.refId}» → ${ref.path} of node ${ref.nodeId} = ${ref.value}.`);
+        break;
+      case 'image':
+        lines.push(`- «${ref.refId}» → see attached image (${ref.label}).`);
+        break;
+    }
+  }
+  lines.push(
+    'When the prose contains a marker, treat it as pointing at that concrete element or value. Prefer "update" ops on referenced nodes, reuse their ids, and never renumber.',
+  );
+  return lines.join('\n');
 }
 
 // --- Call A: Prompt → IR patch -------------------------------------------
@@ -109,6 +168,8 @@ export function describeManipulation(op: ManipulationOp): string {
       return `Edited node ${op.id} in the properties panel: ${diffSnapshots(op.before, op.after)}.`;
     case 'draw':
       return `Hand-drew a new ${op.role} on the canvas at (${op.layout.x}, ${op.layout.y}), about ${op.layout.w}×${op.layout.h}px.`;
+    case 'recipe':
+      return `Re-applied recipe ${op.recipeId}: "${op.instruction}".`;
   }
 }
 
