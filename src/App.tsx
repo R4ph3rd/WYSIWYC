@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Undo2, Download, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon } from 'lucide-react';
+import { Undo2, Download, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon } from 'lucide-react';
 import { useAppStore, type Tool } from './store/appStore';
 import { useSettingsStore } from './store/settingsStore';
 import { SAMPLES } from './ir/samples';
@@ -25,6 +25,7 @@ export default function App() {
   const activeLabel = useSettingsStore((s) => s.activeLabel());
 
   const [connectOpen, setConnectOpen] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
   useEffect(() => {
     if (needsConnect) setConnectOpen(true);
   }, [needsConnect]);
@@ -109,6 +110,17 @@ export default function App() {
 
           <div className="mx-1 h-5 w-px bg-slate-200" />
 
+          <Button
+            size="sm"
+            variant={layersOpen ? 'secondary' : 'ghost'}
+            onClick={() => setLayersOpen((v) => !v)}
+            title="Toggle layers panel"
+          >
+            <LayersIcon className="h-3.5 w-3.5" /> Layers
+          </Button>
+
+          <div className="mx-1 h-5 w-px bg-slate-200" />
+
           <Button size="sm" variant="ghost" onClick={newBlank}>
             <FilePlus2 className="h-3.5 w-3.5" /> New
           </Button>
@@ -136,16 +148,19 @@ export default function App() {
         </div>
       )}
 
-      {/* Body: left rail (prompt + layers) | canvas | right rail (properties) */}
+      {/* Body: prompt rail | (toggleable layers) | canvas | properties rail */}
       <div className="flex flex-1 overflow-hidden">
+        {/* Full-height prompt rail. */}
         <div className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-white">
-          <div className="h-[48%] min-h-0 overflow-hidden border-b border-slate-200">
-            <PromptPane />
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
+          <PromptPane />
+        </div>
+
+        {/* Layers — toggleable, sits to the right of the prompt panel. */}
+        {layersOpen && (
+          <div className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
             <LayersPanel />
           </div>
-        </div>
+        )}
 
         <Canvas />
 

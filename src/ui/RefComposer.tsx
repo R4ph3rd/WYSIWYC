@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { ArrowUp, Loader2, Link2, Sparkles, Hash, Image as ImageIcon, MapPin, X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { ComposerValue, ExtractKind, PromptRef } from '@/ir/types';
@@ -28,6 +28,8 @@ export interface RefComposerProps {
   onChange: (v: ComposerValue) => void;
   onSend: (text: string, refs: PromptRef[]) => void;
   onFocusChange?: (focused: boolean) => void;
+  /** When this request targets 'composer', the field pulls focus (canvas hand-off). */
+  focusRequest?: { target: 'composer' | 'canvas'; seq: number } | null;
   disabled?: boolean;
   busy?: boolean;
   placeholder?: string;
@@ -40,7 +42,7 @@ const CHIP_STYLE: Record<PromptRef['kind'], string> = {
   attribute: 'bg-violet-50 text-violet-700 ring-violet-200',
   param: 'bg-sky-50 text-sky-700 ring-sky-200',
   image: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  location: 'bg-amber-50 text-amber-700 ring-amber-200',
+  location: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
 };
 
 function ChipIcon({ kind }: { kind: PromptRef['kind'] }) {
@@ -65,6 +67,7 @@ export function RefComposer({
   onChange,
   onSend,
   onFocusChange,
+  focusRequest,
   disabled,
   busy,
   placeholder,
@@ -73,6 +76,8 @@ export function RefComposer({
 }: RefComposerProps) {
   // The caret position of the last-focused text segment, for drop insertion.
   const caretRef = useRef<{ segIndex: number; caret: number } | null>(null);
+  // Outer field, used to pull focus back to the trailing input on request.
+  const rootRef = useRef<HTMLDivElement>(null);
   // Mirror the latest value so chained / async inserts (e.g. dropping several
   // images at once, whose FileReader callbacks fire across ticks) each build on
   // the previous insertion instead of a stale closed-over `value`.
@@ -84,6 +89,20 @@ export function RefComposer({
   const segments = normalizeComposer(value);
   const lg = size === 'lg';
   const inputsDisabled = disabled || busy;
+
+  // Canvas hand-off: when an element/location chip is dropped from the canvas
+  // mid-draft, focus returns here so the user keeps typing without a reach for
+  // the field. (A double-click on the canvas targets 'canvas' instead — ignored.)
+  useEffect(() => {
+    if (focusRequest?.target !== 'composer' || inputsDisabled) return;
+    const inputs = rootRef.current?.querySelectorAll<HTMLInputElement>('input[type="text"]');
+    const last = inputs?.[inputs.length - 1];
+    if (last) {
+      last.focus();
+      const end = last.value.length;
+      last.setSelectionRange(end, end);
+    }
+  }, [focusRequest?.seq, focusRequest?.target, inputsDisabled]);
 
   const insertChip = (ref: PromptRef) => {
     const at = caretRef.current;
@@ -184,6 +203,7 @@ export function RefComposer({
 
   return (
     <div
+      ref={rootRef}
       className={cn(
         'rounded-xl border bg-white shadow-sm transition-colors',
         lg ? 'rounded-2xl p-2 shadow-lg shadow-slate-200/60' : 'p-1.5',

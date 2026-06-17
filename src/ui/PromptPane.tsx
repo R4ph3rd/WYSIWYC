@@ -49,6 +49,7 @@ export function PromptPane() {
   const setComposerFocused = useAppStore((s) => s.setComposerFocused);
   const composerValue = useAppStore((s) => s.composerValue);
   const setComposerValue = useAppStore((s) => s.setComposerValue);
+  const focusRequest = useAppStore((s) => s.focusRequest);
   const chooseAlternative = useAppStore((s) => s.chooseAlternative);
   const selectedClauseId = useAppStore((s) =>
     selectedNodeId ? (s.ir.nodes.find((n) => n.id === selectedNodeId)?.provenance.promptClauseId ?? null) : null,
@@ -91,6 +92,7 @@ export function PromptPane() {
                   flash={recentIds.includes(c.id)}
                   onHover={hoverClause}
                   onOpenMenu={(x, y) => setAltMenu({ clauseId: c.id, x, y })}
+                  onEdit={() => setEditingId(c.id)}
                   onRemove={() => removeClause(c.id)}
                 />
               ),
@@ -138,6 +140,7 @@ export function PromptPane() {
           onChange={setComposerValue}
           onSend={(text, refs) => instruct(text, { scopeNodeIds: selectedNodeIds, refs })}
           onFocusChange={setComposerFocused}
+          focusRequest={focusRequest}
           busy={generating}
           placeholder={clauses.length ? 'Describe a change…' : 'Describe the UI you want…'}
         />
@@ -152,6 +155,7 @@ function ClauseSpan({
   flash,
   onHover,
   onOpenMenu,
+  onEdit,
   onRemove,
 }: {
   clause: PromptClause;
@@ -159,15 +163,34 @@ function ClauseSpan({
   flash: boolean;
   onHover: (id: string | null) => void;
   onOpenMenu: (x: number, y: number) => void;
+  onEdit: () => void;
   onRemove: () => void;
 }) {
   const inferred = clause.origin === 'inferred';
+  // Single click opens the alternatives/remove menu; a double click goes
+  // straight to inline editing. A short timer disambiguates the two (a
+  // double click fires two click events first).
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   return (
     <span
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
-      onClick={(e) => onOpenMenu(e.clientX, e.clientY)}
-      title={inferred ? 'Inferred — click to confirm or swap an alternative' : 'Click for alternatives'}
+      onClick={(e) => {
+        const { clientX, clientY } = e;
+        if (clickTimer.current) return;
+        clickTimer.current = setTimeout(() => {
+          clickTimer.current = null;
+          onOpenMenu(clientX, clientY);
+        }, 220);
+      }}
+      onDoubleClick={() => {
+        if (clickTimer.current) {
+          clearTimeout(clickTimer.current);
+          clickTimer.current = null;
+        }
+        onEdit();
+      }}
+      title={inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
         'group -mx-0.5 cursor-pointer rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
         CATEGORY_UNDERLINE[clause.category],

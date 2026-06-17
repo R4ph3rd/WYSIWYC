@@ -35,7 +35,7 @@ export function ToolPalette() {
                 {icon}
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
+            <TooltipContent side="top">
               {label} <span className="opacity-60">({shortcut})</span>
             </TooltipContent>
           </Tooltip>

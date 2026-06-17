@@ -82,6 +82,36 @@ export function insertRef(
   return normalizeComposer(next);
 }
 
+/**
+ * Insert a chip in place of the first text occurrence matching `keywordRe`
+ * (e.g. the word "here"/"there"), consuming that word. Returns null when no
+ * occurrence is found so the caller can fall back to appending.
+ */
+export function insertRefReplacingKeyword(
+  value: ComposerValue,
+  ref: PromptRef,
+  keywordRe: RegExp,
+): ComposerValue | null {
+  const norm = normalizeComposer(value);
+  for (let i = 0; i < norm.length; i++) {
+    const seg = norm[i];
+    if (seg.type !== 'text') continue;
+    const m = seg.text.match(keywordRe);
+    if (!m || m.index === undefined) continue;
+    const before = seg.text.slice(0, m.index);
+    const after = seg.text.slice(m.index + m[0].length);
+    const next: ComposerValue = [
+      ...norm.slice(0, i),
+      { type: 'text', text: before },
+      { type: 'ref', ref },
+      { type: 'text', text: after },
+      ...norm.slice(i + 1),
+    ];
+    return normalizeComposer(next);
+  }
+  return null;
+}
+
 /** Remove the chip with the given refId. */
 export function removeRef(value: ComposerValue, refId: string): ComposerValue {
   return normalizeComposer(

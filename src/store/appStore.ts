@@ -12,7 +12,13 @@ import type {
   Recipe,
   StructuredPrompt,
 } from '@/ir/types';
-import { composerRefs, emptyComposer, insertRef, nextComposerRefId } from '@/lib/composer';
+import {
+  composerRefs,
+  emptyComposer,
+  insertRef,
+  insertRefReplacingKeyword,
+  nextComposerRefId,
+} from '@/lib/composer';
 import { applyPatch } from '@/ir/applyPatch';
 import {
   applyManipulation,
@@ -108,6 +114,13 @@ interface AppState {
   /** True while a composer input holds focus — drives the scope-preview outline. */
   composerFocused: boolean;
   /**
+   * A focus hand-off request between the canvas and the prompt composer.
+   * Bumping `seq` lets the targeted surface pull focus: clicking a canvas
+   * element mid-draft drops a chip then returns focus to the prompt; a
+   * double-click on the canvas mid-draft hands focus back to the canvas.
+   */
+  focusRequest: { target: 'composer' | 'canvas'; seq: number } | null;
+  /**
    * The live composer value (text + reference chips), lifted into the store so
    * canvas interactions (click-to-refer, here/there location) can feed the
    * single composer. Both PromptPane and HeroComposer bind to it.
@@ -134,6 +147,8 @@ interface AppState {
   toggleSelection: (id: string) => void;
   setComposerFocused: (focused: boolean) => void;
   setComposerValue: (v: ComposerValue) => void;
+  /** Ask a surface (the prompt composer or the canvas) to take focus. */
+  requestFocus: (target: 'composer' | 'canvas') => void;
   /** Append a node reference chip to the composer (click-to-refer); dedupes by node. */
   addComposerNodeRef: (nodeId: string) => void;
   /** Append a canvas-location chip to the composer (DirectGPT here/there). */
@@ -348,6 +363,7 @@ export const useAppStore = create<AppState>((set, get) => {
       selectedNodeId: null,
       selectedNodeIds: [],
       composerFocused: false,
+      focusRequest: null,
       composerValue: emptyComposer(),
       recipes: [],
       lastSent: null,
@@ -366,6 +382,7 @@ export const useAppStore = create<AppState>((set, get) => {
     selectedNodeId: null,
     selectedNodeIds: [],
     composerFocused: false,
+    focusRequest: null,
     composerValue: emptyComposer(),
     recipes: [],
     lastSent: null,
@@ -410,6 +427,9 @@ export const useAppStore = create<AppState>((set, get) => {
     setComposerFocused: (composerFocused) => set({ composerFocused }),
     setComposerValue: (composerValue) => set({ composerValue }),
 
+    requestFocus: (target) =>
+      set((s) => ({ focusRequest: { target, seq: (s.focusRequest?.seq ?? 0) + 1 } })),
+
     addComposerNodeRef: (nodeId) =>
       set((s) => {
         // Dedupe against existing NODE chips only (attribute/param chips also
@@ -431,26 +451,35 @@ export const useAppStore = create<AppState>((set, get) => {
 
     addComposerLocationRef: (x, y, nearNodeId) =>
       set((s) => {
-        const label = `here (${Math.round(x)}, ${Math.round(y)})`;
         // A draft has a single "here/there" pin — repeated clicks MOVE it rather
         // than stacking new chips (which the word "here" in the draft would spam).
         if (composerRefs(s.composerValue).some((r) => r.kind === 'location')) {
           const composerValue = s.composerValue.map((seg) =>
             seg.type === 'ref' && seg.ref.kind === 'location'
-              ? { ...seg, ref: { ...seg.ref, x, y, nearNodeId, label } }
+              ? { ...seg, ref: { ...seg.ref, x, y, nearNodeId } }
               : seg,
           );
           return { composerValue };
         }
+        // If the draft says "here"/"there", the pin REPLACES that word so the
+        // sentence reads naturally with the chip standing in for the deixis.
+        const KEYWORD = /\b(here|there)\b/i;
+        const match = s.composerValue
+          .filter((seg): seg is { type: 'text'; text: string } => seg.type === 'text')
+          .map((seg) => seg.text.match(KEYWORD)?.[0])
+          .find(Boolean);
         const ref: PromptRef = {
           kind: 'location',
           refId: nextComposerRefId(s.composerValue),
           x,
           y,
           nearNodeId,
-          label,
+          label: match ? match.toLowerCase() : `here (${Math.round(x)}, ${Math.round(y)})`,
         };
-        return { composerValue: insertRef(s.composerValue, ref) };
+        const replaced = match
+          ? insertRefReplacingKeyword(s.composerValue, ref, KEYWORD)
+          : null;
+        return { composerValue: replaced ?? insertRef(s.composerValue, ref) };
       }),
 
     chooseAlternative: (clauseId, text) => {

@@ -26,6 +26,13 @@ export const COMPOSE_SYSTEM = `You are the compositor behind WYSIWYC, a Lovable-
 1. THE LIVING SPEC — a list of short clauses, each a natural sentence a designer would say, categorized as layout / component / style / content. The spec must read like a person describing a screen, NEVER like CSS or a config file. Use semantic values first: "a calm indigo primary", "the CTA sits below the form", "a softer, friendlier card" — not pixel counts or hex codes unless the user said them explicitly.
 2. THE SCENE GRAPH — a FLAT array of nodes (parentId references, no nested JSON) rendered with Tailwind.
 
+CLAUSE CATEGORIZATION — decompose mixed descriptions precisely. One clause carries exactly ONE facet; split a sentence that bundles several:
+- "style" is ANY visual/styling qualifier, even when it sits inside a component or layout phrase. In "a round avatar", *round* is style. In "a large value", *large* is style. In "a row of three EQUAL stat cards", *equal width* is style. Lift such qualifiers into their own style clause instead of burying them in a component/layout clause.
+- "component" is a UI building block, even when introduced by a layout phrase. In "a row of three stat cards", the *stat cards* are a component clause (and the *row of three* is a layout clause).
+- "layout" is arrangement/structure: rows, grids, alignment, spacing, position, hierarchy.
+- "content" is the literal text, labels, and values.
+So e.g. "a dashboard header with a round avatar and a large value" yields a layout/component clause for the header, a component clause for the avatar, a style clause "the avatar is round", and a style clause "values are large".
+
 WRITE A COMPLETE, WELL-STRUCTURED SPEC. A good spec makes the design's reasoning explicit. Where relevant to the screen, ensure clauses cover these facets (one idea per clause, do not force empty ones):
 - Context & purpose: what this screen is and who/what it is for.
 - Required features: the key elements/capabilities the screen must have.
@@ -162,6 +169,7 @@ export const CALL_B_SYSTEM = `You translate a direct manipulation of a UI into a
 Rules:
 - Infer INTENT, not raw coordinates. "Moved 40px right and down, now under the form" → "Place the CTA below the form", NOT "move button 40px".
 - Write clauses as natural sentences a designer would say. Use semantic values first ("a softer pink", "a heavier headline", "below the form") — quote exact values only when they clearly matter to the user.
+- Keep one facet per clause: a styling qualifier (e.g. "rounder", "larger", "equal widths") belongs in its OWN style clause, not folded into a component or layout clause.
 - Only touch clauses affected by this manipulation. Preserve all others verbatim (do not return them).
 - Return updatedClauses (clauses to add or replace, keyed by stable id — reuse the existing clause id when editing one) and removedClauseIds. A manipulation that introduced something new (e.g. a hand-drawn shape) usually means ADDING a clause.
 - Set "origin" on every clause you return to "explicit" — a direct manipulation is the user explicitly stating intent. You may add up to 3 short "alternatives" (other plausible readings of the manipulation).

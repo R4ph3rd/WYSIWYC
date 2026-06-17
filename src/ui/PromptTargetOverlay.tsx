@@ -90,10 +90,10 @@ export function PromptTargetOverlay({
           style={{ left: loc.x, top: loc.y }}
         >
           <div className="flex flex-col items-center">
-            <span className="mb-0.5 whitespace-nowrap rounded-full bg-amber-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+            <span className="mb-0.5 whitespace-nowrap rounded-full bg-indigo-600 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
               here
             </span>
-            <MapPin className="h-4 w-4 text-amber-500 drop-shadow" fill="#f59e0b" />
+            <MapPin className="h-4 w-4 text-indigo-600 drop-shadow" fill="#4f46e5" />
           </div>
         </div>
       ))}

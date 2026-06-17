@@ -51,6 +51,8 @@ export function Canvas() {
   const addComposerNodeRef = useAppStore((s) => s.addComposerNodeRef);
   const addComposerLocationRef = useAppStore((s) => s.addComposerLocationRef);
   const setTool = useAppStore((s) => s.setTool);
+  const requestFocus = useAppStore((s) => s.requestFocus);
+  const focusRequest = useAppStore((s) => s.focusRequest);
 
   // Composing context: the canvas feeds the single composer when the user is
   // mid-prompt (focused, or a draft exists). Clicking an element then refers to
@@ -76,6 +78,13 @@ export function Canvas() {
   // Mirror for event listeners (keydown) that outlive a render's closure.
   const penRef = useRef<PenState | null>(null);
   penRef.current = pen;
+
+  // Canvas hand-off: a double-click mid-draft pulls focus back to the canvas
+  // (blurring the composer). Element/location clicks request 'composer' focus,
+  // handled by the prompt composer; here we only honor 'canvas'.
+  useEffect(() => {
+    if (focusRequest?.target === 'canvas') stageRef.current?.focus();
+  }, [focusRequest?.seq, focusRequest?.target]);
 
   const role = toolToRole(tool);
   const drawing = Boolean(role) || tool === 'path';
@@ -330,8 +339,8 @@ export function Canvas() {
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
-      {/* Floating tool palette (top center) */}
-      <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2">
+      {/* Floating tool palette (bottom center) */}
+      <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
         <div className="pointer-events-auto">
           <ToolPalette />
         </div>
@@ -344,7 +353,7 @@ export function Canvas() {
       )}
 
       {pen && (
-        <div className="absolute left-1/2 top-14 z-20 -translate-x-1/2 rounded-full bg-slate-900/85 px-3 py-1 text-[11px] text-white shadow">
+        <div className="absolute bottom-16 left-1/2 z-20 -translate-x-1/2 rounded-full bg-slate-900/85 px-3 py-1 text-[11px] text-white shadow">
           Click to add points — double-click or ⏎ to finish, Esc to cancel
         </div>
       )}
@@ -357,7 +366,8 @@ export function Canvas() {
       >
         <div
           ref={stageRef}
-          className="relative mx-auto min-h-full w-full max-w-5xl overflow-hidden rounded-xl shadow-sm ring-1 ring-black/5"
+          tabIndex={-1}
+          className="relative mx-auto min-h-full w-full max-w-5xl overflow-hidden rounded-xl shadow-sm outline-none ring-1 ring-black/5"
           style={{
             background: ir.canvas.background,
             cursor: drawing ? 'crosshair' : 'default',
@@ -370,12 +380,19 @@ export function Canvas() {
               const p = relativePoint(e);
               if (p) {
                 addComposerLocationRef(p.x, p.y, nearestNodeId(p));
+                // The pin dropped — return focus to the prompt to keep typing.
+                requestFocus('composer');
                 return;
               }
             }
             selectNode(null);
           }}
-          onDoubleClick={() => { if (pen) commitPen(false); }}
+          onDoubleClick={() => {
+            if (pen) { commitPen(false); return; }
+            // A double-click mid-draft means "I want the canvas now" — hand
+            // focus back to it instead of the prompt composer.
+            if (isComposing) requestFocus('canvas');
+          }}
           onMouseDown={onStageMouseDown}
           onMouseMove={onStageMouseMove}
           onMouseUp={onStageMouseUp}
@@ -398,8 +415,12 @@ export function Canvas() {
                       return;
                     }
                     // Mid-prompt, a click also refers to the element (DirectGPT
-                    // "this"/"it" binding) by dropping a chip into the composer.
-                    if (isComposing) addComposerNodeRef(id);
+                    // "this"/"it" binding) by dropping a chip into the composer,
+                    // then returns focus to the prompt so the user keeps typing.
+                    if (isComposing) {
+                      addComposerNodeRef(id);
+                      requestFocus('composer');
+                    }
                     if (additive) toggleSelection(id);
                     else selectNode(id);
                   }
