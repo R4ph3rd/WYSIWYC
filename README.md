@@ -6,7 +6,12 @@ on, drag, resize, and restyle with design tools; every manipulation
 propagates back into a human-readable, synchronized prompt — with
 element-level provenance linking both directions.
 
+
+
+
 ## The core idea
+
+TODO: prompt→output is authoritative, but output→prompt is a *proposal* the user accepts or rejects, never auto-applied. 
 
 Three artifacts and **one source of truth**:
 
