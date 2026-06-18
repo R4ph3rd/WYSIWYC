@@ -80,17 +80,7 @@ export default function App() {
 
         <div className="mx-2 h-5 w-px bg-slate-200" />
 
-        <span className="text-[11px] font-medium text-slate-400">Examples:</span>
-        {SAMPLES.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => loadSample(s.id)}
-            className="rounded-md px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
-          >
-            {s.title}
-          </button>
-        ))}
-
+        
         <div className="ml-auto flex items-center gap-1.5">
           <ConnectDialog open={connectOpen} onOpenChange={setConnectOpen}>
             <button
