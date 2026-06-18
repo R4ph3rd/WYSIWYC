@@ -151,7 +151,7 @@ export default function App() {
       {/* Body: prompt rail | (toggleable layers) | canvas | properties rail */}
       <div className="flex flex-1 overflow-hidden">
         {/* Full-height prompt rail. */}
-        <div className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-white">
+        <div className="flex w-96 shrink-0 flex-col border-r border-slate-200 bg-white">
           <PromptPane />
         </div>
 

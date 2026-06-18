@@ -1,31 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
-import type { ClauseCategory, PromptClause } from '@/ir/types';
+import { CLAUSE_CATEGORIES, type ClauseCategory, type PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
 import { RefComposer } from './RefComposer';
 import { RecipesRail } from './RecipesRail';
 import { AlternativesMenu } from './AlternativesMenu';
 
 /**
- * The prompt is a LIVING SPEC, but it must read like a person describing a
- * screen — flowing sentences, not a config table. Each sentence is a clause
- * span: hover traces its UI elements, click edits it in place, and the
- * composer below folds new natural-language instructions into it.
+ * The prompt is a LIVING SPEC. Rather than one flat paragraph, it renders as
+ * semantic sections — Layout / Components / Style / Content — so the structure
+ * of the spec is visible at a glance. Each clause is a row: hover traces its UI
+ * elements, single click opens alternatives/remove, double click edits in
+ * place, and the composer below folds new instructions in.
  */
 
-const CATEGORY_UNDERLINE: Record<ClauseCategory, string> = {
-  layout: 'decoration-sky-400/60',
-  component: 'decoration-violet-400/60',
-  style: 'decoration-amber-400/60',
-  content: 'decoration-emerald-400/60',
-};
-
-const CATEGORY_DOT: Record<ClauseCategory, string> = {
-  layout: 'bg-sky-400',
-  component: 'bg-violet-400',
-  style: 'bg-amber-400',
-  content: 'bg-emerald-400',
+const CATEGORY_META: Record<ClauseCategory, { label: string; dot: string; accent: string }> = {
+  layout: { label: 'Layout', dot: 'bg-sky-400', accent: 'text-sky-600' },
+  component: { label: 'Components', dot: 'bg-violet-400', accent: 'text-violet-600' },
+  style: { label: 'Style', dot: 'bg-amber-400', accent: 'text-amber-600' },
+  content: { label: 'Content', dot: 'bg-emerald-400', accent: 'text-emerald-600' },
 };
 
 function sentence(text: string): string {
@@ -67,37 +61,53 @@ export function PromptPane() {
         </p>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-2.5">
+      <div className="flex-1 space-y-4 overflow-y-auto px-3 py-3">
         {clauses.length === 0 ? (
           <p className="px-1 py-6 text-center text-xs text-slate-400">
             Nothing here yet — describe what you want below, or pick an example.
           </p>
         ) : (
-          <p className="text-[13px] leading-7 text-slate-700">
-            {clauses.map((c) =>
-              editingId === c.id ? (
-                <ClauseEditor
-                  key={c.id}
-                  clause={c}
-                  onDone={(text) => {
-                    setEditingId(null);
-                    if (text !== null && text.trim() && text !== c.text) editClause(c.id, text);
-                  }}
-                />
-              ) : (
-                <ClauseSpan
-                  key={c.id}
-                  clause={c}
-                  selected={selectedClauseId === c.id}
-                  flash={recentIds.includes(c.id)}
-                  onHover={hoverClause}
-                  onOpenMenu={(x, y) => setAltMenu({ clauseId: c.id, x, y })}
-                  onEdit={() => setEditingId(c.id)}
-                  onRemove={() => removeClause(c.id)}
-                />
-              ),
-            )}
-          </p>
+          CLAUSE_CATEGORIES.map((cat) => {
+            const items = clauses.filter((c) => c.category === cat);
+            if (items.length === 0) return null;
+            const meta = CATEGORY_META[cat];
+            return (
+              <section key={cat}>
+                <div className="mb-1.5 flex items-center gap-1.5 px-1">
+                  <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} />
+                  <span className={cn('text-[10px] font-semibold uppercase tracking-wider', meta.accent)}>
+                    {meta.label}
+                  </span>
+                  <span className="text-[10px] font-medium text-slate-300">{items.length}</span>
+                </div>
+                <div className="space-y-0.5">
+                  {items.map((c) =>
+                    editingId === c.id ? (
+                      <ClauseEditor
+                        key={c.id}
+                        clause={c}
+                        onDone={(text) => {
+                          setEditingId(null);
+                          if (text !== null && text.trim() && text !== c.text) editClause(c.id, text);
+                        }}
+                      />
+                    ) : (
+                      <ClauseItem
+                        key={c.id}
+                        clause={c}
+                        selected={selectedClauseId === c.id}
+                        flash={recentIds.includes(c.id)}
+                        onHover={hoverClause}
+                        onOpenMenu={(x, y) => setAltMenu({ clauseId: c.id, x, y })}
+                        onEdit={() => setEditingId(c.id)}
+                        onRemove={() => removeClause(c.id)}
+                      />
+                    ),
+                  )}
+                </div>
+              </section>
+            );
+          })
         )}
       </div>
 
@@ -116,16 +126,6 @@ export function PromptPane() {
           />
         );
       })()}
-
-      {clauses.length > 0 && (
-        <div className="flex items-center gap-2.5 border-t border-slate-100 px-3 py-1.5">
-          {(Object.keys(CATEGORY_DOT) as ClauseCategory[]).map((cat) => (
-            <span key={cat} className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-slate-400">
-              <span className={cn('h-1.5 w-1.5 rounded-full', CATEGORY_DOT[cat])} /> {cat}
-            </span>
-          ))}
-        </div>
-      )}
 
       <div className="border-t border-slate-100 p-2.5">
         <RecipesRail />
@@ -149,7 +149,7 @@ export function PromptPane() {
   );
 }
 
-function ClauseSpan({
+function ClauseItem({
   clause,
   selected,
   flash,
@@ -172,7 +172,7 @@ function ClauseSpan({
   // double click fires two click events first).
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   return (
-    <span
+    <div
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
       onClick={(e) => {
@@ -192,30 +192,33 @@ function ClauseSpan({
       }}
       title={inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
-        'group -mx-0.5 cursor-pointer rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
-        CATEGORY_UNDERLINE[clause.category],
-        selected ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-slate-50',
+        'group flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] leading-snug transition-colors',
+        selected
+          ? 'border-indigo-200 bg-indigo-50 text-indigo-900'
+          : 'border-transparent text-slate-700 hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
     >
-      {inferred && (
-        <span
-          className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle ring-2 ring-amber-100"
-          aria-label="inferred"
-        />
-      )}
-      {sentence(clause.text)}
+      <span
+        className={cn(
+          'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',
+          inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
+        )}
+        aria-label={inferred ? 'inferred' : undefined}
+        title={inferred ? 'Inferred — not stated by you' : undefined}
+      />
+      <span className="flex-1">{sentence(clause.text)}</span>
       <button
         onClick={(e) => {
           e.stopPropagation();
           onRemove();
         }}
-        className="ml-0.5 hidden align-baseline group-hover:inline-block"
+        className="mt-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
         aria-label="Remove sentence"
       >
-        <X className="inline h-3 w-3 text-slate-300 hover:text-rose-500" />
-      </button>{' '}
-    </span>
+        <X className="h-3 w-3 text-slate-300 hover:text-rose-500" />
+      </button>
+    </div>
   );
 }
 
