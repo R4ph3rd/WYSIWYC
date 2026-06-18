@@ -3,14 +3,74 @@ import { Sliders, Type as TypeIcon, Square as SquareIcon, MoveHorizontal } from 
 import { useAppStore } from '@/store/appStore';
 import type { IRNode, NodeStyle } from '@/ir/types';
 
-const SHADOW_PRESETS: { label: string; value: string }[] = [
-  { label: 'None',  value: '' },
-  { label: 'XS',    value: '0 1px 2px 0 rgba(0,0,0,0.05)' },
-  { label: 'SM',    value: '0 1px 3px 0 rgba(0,0,0,0.10), 0 1px 2px -1px rgba(0,0,0,0.10)' },
-  { label: 'MD',    value: '0 4px 6px -1px rgba(0,0,0,0.10), 0 2px 4px -2px rgba(0,0,0,0.10)' },
-  { label: 'LG',    value: '0 10px 15px -3px rgba(0,0,0,0.10), 0 4px 6px -4px rgba(0,0,0,0.10)' },
-  { label: 'XL',    value: '0 20px 25px -5px rgba(0,0,0,0.10), 0 8px 10px -6px rgba(0,0,0,0.10)' },
-];
+// --- Shadow: structured (Figma-style) ⇄ CSS box-shadow string -------------
+// NodeStyle.shadow stays a raw CSS string (the renderer applies it verbatim);
+// the editor parses it into X / Y / blur / spread / color / inset fields and
+// re-serializes on every change, exactly like Figma's effect controls.
+
+interface ShadowParts {
+  x: number;
+  y: number;
+  blur: number;
+  spread: number;
+  color: string;
+  inset: boolean;
+}
+
+const DEFAULT_SHADOW: ShadowParts = { x: 0, y: 4, blur: 12, spread: 0, color: 'rgba(0, 0, 0, 0.15)', inset: false };
+
+function parseShadow(s?: string): ShadowParts {
+  if (!s || !s.trim()) return { ...DEFAULT_SHADOW };
+  let str = s.trim();
+  const inset = /(^|\s)inset(\s|$)/i.test(str);
+  str = str.replace(/inset/gi, '').trim();
+  // Only the first shadow layer is edited (Figma edits one effect at a time).
+  const first = str.split(/,(?![^()]*\))/)[0].trim();
+  const colorMatch = first.match(/(rgba?\([^)]*\)|hsla?\([^)]*\)|#[0-9a-fA-F]{3,8})/);
+  const color = colorMatch ? colorMatch[0] : DEFAULT_SHADOW.color;
+  const numStr = colorMatch ? first.replace(colorMatch[0], '') : first;
+  const nums = (numStr.match(/-?\d*\.?\d+/g) ?? []).map(Number);
+  return { x: nums[0] ?? 0, y: nums[1] ?? 0, blur: nums[2] ?? 0, spread: nums[3] ?? 0, color, inset };
+}
+
+function serializeShadow(p: ShadowParts): string {
+  return `${p.inset ? 'inset ' : ''}${p.x}px ${p.y}px ${p.blur}px ${p.spread}px ${p.color}`;
+}
+
+// --- Color ⇄ {hex, alpha} (Figma-style swatch + hex + opacity) ------------
+
+function clampByte(n: number): number {
+  return Math.max(0, Math.min(255, Math.round(n)));
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  return '#' + [r, g, b].map((n) => clampByte(n).toString(16).padStart(2, '0')).join('');
+}
+
+function parseColor(c: string): { hex: string; alpha: number } {
+  const rgb = c.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)/i);
+  if (rgb) {
+    const a = rgb[4] !== undefined ? Number(rgb[4]) : 1;
+    return { hex: rgbToHex(Number(rgb[1]), Number(rgb[2]), Number(rgb[3])), alpha: Math.round(a * 100) };
+  }
+  const hx = c.match(/^#([0-9a-f]{6})([0-9a-f]{2})?$/i);
+  if (hx) return { hex: '#' + hx[1].toLowerCase(), alpha: hx[2] ? Math.round((parseInt(hx[2], 16) / 255) * 100) : 100 };
+  const short = c.match(/^#([0-9a-f]{3})$/i);
+  if (short) {
+    const [r, g, b] = short[1].split('').map((d) => parseInt(d + d, 16));
+    return { hex: rgbToHex(r, g, b), alpha: 100 };
+  }
+  return { hex: '#000000', alpha: 100 };
+}
+
+/** Recompose a hex + alpha% into the most compact CSS color (hex at 100%). */
+function composeColor(hex: string, alpha: number): string {
+  if (alpha >= 100) return hex;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${Math.round((alpha / 100) * 100) / 100})`;
+}
 
 const FONT_FAMILIES = [
   'ui-sans-serif, system-ui',
@@ -131,13 +191,7 @@ export function PropertiesPanel() {
             </Row>
           ) : null}
           <Row label="Opacity">
-            <NumberField
-              value={node.style?.opacity}
-              onChange={(v) => set({ opacity: Math.min(1, Math.max(0, v)) })}
-              step={0.05}
-              min={0}
-              max={1}
-            />
+            <OpacityField value={node.style?.opacity} onChange={(v) => set({ opacity: v })} />
           </Row>
         </Section>
 
@@ -194,19 +248,9 @@ export function PropertiesPanel() {
           </Section>
         )}
 
-        {/* Shadow */}
+        {/* Shadow (Figma-style drop/inner shadow editor) */}
         <Section title="Shadow" icon={<Sliders className="h-3 w-3" />}>
-          <div className="grid grid-cols-3 gap-1">
-            {SHADOW_PRESETS.map((p) => (
-              <ToggleButton
-                key={p.label}
-                active={(node.style?.shadow ?? '') === p.value}
-                onClick={() => set({ shadow: p.value })}
-              >
-                {p.label}
-              </ToggleButton>
-            ))}
-          </div>
+          <ShadowEditor value={node.style?.shadow ?? ''} onChange={(v) => set({ shadow: v })} />
         </Section>
       </div>
     </div>
@@ -295,24 +339,129 @@ function NumberField({
   );
 }
 
-function ColorField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const safe = value && /^#[0-9a-f]{3,8}$/i.test(value) ? value : '#000000';
+/**
+ * Figma-style color control: a swatch (opens the native picker) + a hex field +
+ * an opacity % field. Below 100% the value serializes to rgba(); at 100% it
+ * stays a compact hex. `alpha={false}` hides opacity (e.g. shadow uses its own).
+ */
+function ColorField({
+  value,
+  onChange,
+  alpha = true,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  alpha?: boolean;
+}) {
+  const has = Boolean(value && value.trim());
+  const { hex, alpha: a } = parseColor(has ? value : '#000000');
+  const [hexDraft, setHexDraft] = useState(hex.slice(1).toUpperCase());
+  useEffect(() => setHexDraft(hex.slice(1).toUpperCase()), [hex]);
+
+  const commitHex = (raw: string) => {
+    const clean = raw.replace(/[^0-9a-fA-F]/g, '').slice(0, 6);
+    setHexDraft(clean.toUpperCase());
+    if (clean.length === 3 || clean.length === 6) {
+      const full = clean.length === 3 ? clean.split('').map((d) => d + d).join('') : clean;
+      onChange(composeColor('#' + full.toLowerCase(), alpha ? a : 100));
+    }
+  };
+
   return (
-    <div className="flex items-center gap-1 rounded border border-slate-200 bg-white px-1.5 py-0.5">
-      <input
-        type="color"
-        value={safe}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-5 w-6 cursor-pointer border-0 bg-transparent p-0"
-      />
+    <div className="flex items-center gap-1.5 rounded border border-slate-200 bg-white px-1.5 py-1">
+      <span className="relative h-4 w-4 shrink-0 overflow-hidden rounded border border-slate-200">
+        <span className="absolute inset-0 [background-image:linear-gradient(45deg,#ddd_25%,transparent_25%),linear-gradient(-45deg,#ddd_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#ddd_75%),linear-gradient(-45deg,transparent_75%,#ddd_75%)] [background-position:0_0,0_2px,2px_-2px,-2px_0] [background-size:4px_4px]" />
+        <span className="absolute inset-0" style={{ background: has ? value : 'transparent' }} />
+        <input
+          type="color"
+          value={hex}
+          onChange={(e) => onChange(composeColor(e.target.value, alpha ? a : 100))}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+          aria-label="Pick color"
+        />
+      </span>
       <input
         type="text"
-        value={value}
-        placeholder="#000000"
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-transparent font-mono text-[10px] outline-none"
+        value={hexDraft}
+        placeholder="—"
+        onChange={(e) => commitHex(e.target.value)}
+        className="w-full min-w-0 bg-transparent font-mono text-[10px] uppercase outline-none"
       />
+      {alpha && (
+        <div className="flex items-center">
+          <input
+            type="number"
+            value={has ? a : ''}
+            min={0}
+            max={100}
+            placeholder="100"
+            onChange={(e) => {
+              const n = Math.max(0, Math.min(100, Number.parseInt(e.target.value, 10)));
+              onChange(composeColor(hex, Number.isFinite(n) ? n : 100));
+            }}
+            className="w-7 bg-transparent text-right text-[10px] tabular-nums outline-none"
+          />
+          <span className="text-[9px] text-slate-400">%</span>
+        </div>
+      )}
     </div>
+  );
+}
+
+/** Figma-style opacity: a slider with a live percentage readout (0–100%). */
+function OpacityField({ value, onChange }: { value: number | undefined; onChange: (v: number) => void }) {
+  const pct = Math.round((value ?? 1) * 100);
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={pct}
+        onChange={(e) => onChange(Number(e.target.value) / 100)}
+        className="h-1 flex-1 cursor-pointer accent-indigo-600"
+      />
+      <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-slate-500">{pct}%</span>
+    </div>
+  );
+}
+
+/** Figma-style shadow effect: type + X / Y / blur / spread + color. */
+function ShadowEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const enabled = Boolean(value && value.trim());
+  const parts = parseShadow(value);
+  const update = (patch: Partial<ShadowParts>) => onChange(serializeShadow({ ...parts, ...patch }));
+
+  return (
+    <>
+      <div className="mb-1.5 flex items-center gap-1">
+        <ToggleButton
+          active={enabled}
+          onClick={() => onChange(enabled ? '' : serializeShadow(DEFAULT_SHADOW))}
+        >
+          {enabled ? 'On' : 'Off'}
+        </ToggleButton>
+        {enabled && (
+          <>
+            <ToggleButton active={!parts.inset} onClick={() => update({ inset: false })}>Drop</ToggleButton>
+            <ToggleButton active={parts.inset} onClick={() => update({ inset: true })}>Inner</ToggleButton>
+          </>
+        )}
+      </div>
+      {enabled && (
+        <>
+          <div className="mb-1.5 grid grid-cols-2 gap-1.5">
+            <NumberField label="X" value={parts.x} onChange={(x) => update({ x })} />
+            <NumberField label="Y" value={parts.y} onChange={(y) => update({ y })} />
+            <NumberField label="Blur" value={parts.blur} min={0} onChange={(blur) => update({ blur })} />
+            <NumberField label="Spread" value={parts.spread} onChange={(spread) => update({ spread })} />
+          </div>
+          <Row label="Color">
+            <ColorField value={parts.color} onChange={(color) => update({ color })} />
+          </Row>
+        </>
+      )}
+    </>
   );
 }
 
