@@ -28,8 +28,13 @@ function node(
   };
 }
 
-function clause(id: string, category: PromptClause['category'], text: string): PromptClause {
-  return { id, category, text };
+function clause(
+  id: string,
+  category: PromptClause['category'],
+  text: string,
+  alternatives?: string[],
+): PromptClause {
+  return { id, category, text, ...(alternatives ? { alternatives } : {}) };
 }
 
 // --- Login screen ---------------------------------------------------------
@@ -41,12 +46,36 @@ const login: Sample = {
     'A centered login screen on a soft gradient. A white card with a heading "Welcome back", a subtitle, email and password fields, a primary blue "Sign in" button, and a small "Forgot password?" link.',
   prompt: {
     clauses: [
-      clause('clause_1', 'layout', 'Center a card on a soft indigo gradient background'),
-      clause('clause_2', 'component', 'A white rounded card with generous padding and a subtle shadow'),
-      clause('clause_3', 'content', 'Heading "Welcome back" with a muted subtitle'),
-      clause('clause_4', 'component', 'Email and password input fields with labels'),
-      clause('clause_5', 'style', 'A full-width primary blue "Sign in" button, rounded'),
-      clause('clause_6', 'content', 'A small "Forgot password?" link below the button'),
+      clause('clause_1', 'layout', 'Center a card on a soft indigo gradient background', [
+        'Center a card on a clean white background',
+        'Center a card over a full-bleed photo backdrop',
+        'Left-align the card beside a marketing panel',
+      ]),
+      clause('clause_2', 'component', 'A white rounded card with generous padding and a subtle shadow', [
+        'A flat bordered card with no shadow',
+        'A glassy translucent card with a blur backdrop',
+        'A compact card with tight padding',
+      ]),
+      clause('clause_3', 'content', 'Heading "Welcome back" with a muted subtitle', [
+        'Heading "Sign in" with no subtitle',
+        'Heading "Hello again" with a friendly subtitle',
+        'Heading "Log in to continue"',
+      ]),
+      clause('clause_4', 'component', 'Email and password input fields with labels', [
+        'Email and password fields with placeholder-only labels',
+        'A single email field for a magic link',
+        'Username and password fields with labels',
+      ]),
+      clause('clause_5', 'style', 'A full-width primary blue "Sign in" button, rounded', [
+        'A full-width emerald "Sign in" button',
+        'A pill-shaped gradient "Sign in" button',
+        'An outline "Sign in" button',
+      ]),
+      clause('clause_6', 'content', 'A small "Forgot password?" link below the button', [
+        'A "Create an account" link below the button',
+        'No helper link',
+        'A "Need help signing in?" link',
+      ]),
     ],
   },
   ir: {
@@ -80,12 +109,36 @@ const pricing: Sample = {
     'A single highlighted pricing card for a "Pro" plan: a badge, the price $29/mo, a short description, a checklist of four features, and a prominent call-to-action button.',
   prompt: {
     clauses: [
-      clause('clause_1', 'layout', 'Center a single pricing card on a light neutral background'),
-      clause('clause_2', 'component', 'An elevated white card with a colored top accent for the Pro plan'),
-      clause('clause_3', 'content', 'A "Most popular" badge and the plan name "Pro"'),
-      clause('clause_4', 'style', 'Large price "$29" with a "/mo" suffix in muted text'),
-      clause('clause_5', 'content', 'A checklist of four included features'),
-      clause('clause_6', 'style', 'A prominent emerald call-to-action button "Start free trial"'),
+      clause('clause_1', 'layout', 'Center a single pricing card on a light neutral background', [
+        'Show three pricing tiers side by side',
+        'Left-align the card with feature copy beside it',
+        'Center the card on a dark background',
+      ]),
+      clause('clause_2', 'component', 'An elevated white card with a colored top accent for the Pro plan', [
+        'A flat bordered card with no accent',
+        'A card with a full colored header band',
+        'A glassy card with a gradient border',
+      ]),
+      clause('clause_3', 'content', 'A "Most popular" badge and the plan name "Pro"', [
+        'A "Best value" badge and the plan name "Pro"',
+        'No badge, just the plan name "Pro"',
+        'A "Recommended" badge and the plan name "Team"',
+      ]),
+      clause('clause_4', 'style', 'Large price "$29" with a "/mo" suffix in muted text', [
+        'Show the price as "$290/yr" billed annually',
+        'A smaller, lighter price treatment',
+        'Price "$29" with a struck-through "$49" original',
+      ]),
+      clause('clause_5', 'content', 'A checklist of four included features', [
+        'A checklist of six included features',
+        'A short two-line feature summary',
+        'A checklist with some features greyed out',
+      ]),
+      clause('clause_6', 'style', 'A prominent emerald call-to-action button "Start free trial"', [
+        'A prominent indigo "Start free trial" button',
+        'An outline "Choose Pro" button',
+        'A gradient "Get started" button',
+      ]),
     ],
   },
   ir: {
@@ -121,12 +174,36 @@ const dashboard: Sample = {
     'A dashboard top bar with a product name on the left, a search field in the middle, and a notifications icon plus a round avatar on the right. Below it, a row of three stat cards.',
   prompt: {
     clauses: [
-      clause('clause_1', 'layout', 'A white top bar spanning the width with items spaced apart'),
-      clause('clause_2', 'content', 'Product name "Northwind" on the left'),
-      clause('clause_3', 'component', 'A search field in the center'),
-      clause('clause_4', 'component', 'A notifications icon and a round avatar on the right'),
-      clause('clause_5', 'layout', 'Below the bar, a row of three equal stat cards'),
-      clause('clause_6', 'content', 'Each stat card shows a label and a large value'),
+      clause('clause_1', 'layout', 'A white top bar spanning the width with items spaced apart', [
+        'A centered top bar with a max width',
+        'A translucent top bar that floats over content',
+        'A two-row top bar with tabs below',
+      ]),
+      clause('clause_2', 'content', 'Product name "Northwind" on the left', [
+        'A logo mark plus "Northwind" on the left',
+        'Just a logo icon on the left',
+        'Product name "Acme" on the left',
+      ]),
+      clause('clause_3', 'component', 'A search field in the center', [
+        'A search field aligned to the right',
+        'A command palette trigger instead of a search field',
+        'No search field',
+      ]),
+      clause('clause_4', 'component', 'A notifications icon and a round avatar on the right', [
+        'A notifications icon and a square avatar on the right',
+        'Just a round avatar on the right',
+        'Notifications, messages, and an avatar on the right',
+      ]),
+      clause('clause_5', 'layout', 'Below the bar, a row of three equal stat cards', [
+        'Below the bar, a row of four equal stat cards',
+        'A two-column stat layout',
+        'A single wide summary card',
+      ]),
+      clause('clause_6', 'content', 'Each stat card shows a label and a large value', [
+        'Each stat card shows a label, value, and trend',
+        'Each stat card shows a value and a sparkline',
+        'Each stat card shows just a large value',
+      ]),
     ],
   },
   ir: {
@@ -164,27 +241,111 @@ const analytics: Sample = {
     'A full analytics dashboard: a fixed sidebar with nav and a user footer, a top bar with search and a primary action, a row of four stat cards with large values and colored deltas, and below, a revenue bar chart beside a recent-activity list.',
   prompt: {
     clauses: [
-      clause('clause_1', 'layout', 'A fixed sidebar beside a fluid main column on a light gray canvas'),
-      clause('clause_2', 'component', 'A white sidebar with a brand mark, navigation, and a user footer'),
-      clause('clause_3', 'content', 'Brand "Northwind" with a gradient logo mark'),
-      clause('clause_4', 'component', 'A vertical list of navigation links'),
-      clause('clause_5', 'style', 'The current page link is highlighted in the primary indigo'),
-      clause('clause_6', 'component', 'A user footer with avatar, name, and email'),
-      clause('clause_7', 'style', 'The user avatar is round'),
-      clause('clause_8', 'layout', 'A top bar: page title on the left, actions on the right'),
-      clause('clause_9', 'content', 'Page title "Dashboard"'),
-      clause('clause_10', 'component', 'A search field in the top bar'),
-      clause('clause_11', 'component', 'A notifications icon'),
-      clause('clause_12', 'component', 'A primary "New report" button'),
-      clause('clause_13', 'layout', 'Below the bar, a row of four equal stat cards'),
-      clause('clause_14', 'component', 'Each stat card shows a label, a value, and a change'),
-      clause('clause_15', 'style', 'Stat values are large and bold'),
-      clause('clause_16', 'style', 'Positive changes are green, negative ones red'),
-      clause('clause_17', 'layout', 'A wide revenue chart beside a recent-activity list'),
-      clause('clause_18', 'component', 'A card charting revenue over time as bars'),
-      clause('clause_19', 'style', 'Bars rise in the primary indigo, the latest tallest'),
-      clause('clause_20', 'component', 'A recent-activity list with avatar rows'),
-      clause('clause_21', 'content', 'Three recent activity entries'),
+      clause('clause_1', 'layout', 'A fixed sidebar beside a fluid main column on a light gray canvas', [
+        'A collapsible sidebar beside the main column',
+        'A top navigation bar instead of a sidebar',
+        'A right-hand sidebar beside the main column',
+      ]),
+      clause('clause_2', 'component', 'A white sidebar with a brand mark, navigation, and a user footer', [
+        'A dark sidebar with a brand mark and navigation',
+        'A slim icon-only sidebar',
+        'A white sidebar with grouped nav sections',
+      ]),
+      clause('clause_3', 'content', 'Brand "Northwind" with a gradient logo mark', [
+        'Brand "Northwind" with a solid logo mark',
+        'Just a logo mark, no wordmark',
+        'Brand "Acme Analytics" with a logo mark',
+      ]),
+      clause('clause_4', 'component', 'A vertical list of navigation links', [
+        'Navigation links grouped under section headers',
+        'Navigation links with icons and counts',
+        'A compact icon-only navigation',
+      ]),
+      clause('clause_5', 'style', 'The current page link is highlighted in the primary indigo', [
+        'The current link is highlighted with a left accent bar',
+        'The current link is highlighted in a subtle gray',
+        'The current link is bold with no background',
+      ]),
+      clause('clause_6', 'component', 'A user footer with avatar, name, and email', [
+        'A user footer with avatar and name only',
+        'A user footer with a sign-out button',
+        'A user menu trigger in the footer',
+      ]),
+      clause('clause_7', 'style', 'The user avatar is round', [
+        'The user avatar is a rounded square',
+        'The user avatar is a plain square',
+        'The avatar shows initials in a circle',
+      ]),
+      clause('clause_8', 'layout', 'A top bar: page title on the left, actions on the right', [
+        'A top bar with breadcrumbs on the left',
+        'A centered page title with actions below',
+        'A top bar with tabs and actions',
+      ]),
+      clause('clause_9', 'content', 'Page title "Dashboard"', [
+        'Page title "Overview"',
+        'Page title "Home"',
+        'A breadcrumb trail ending in "Dashboard"',
+      ]),
+      clause('clause_10', 'component', 'A search field in the top bar', [
+        'A command palette trigger in the top bar',
+        'A date-range picker in the top bar',
+        'No search field in the top bar',
+      ]),
+      clause('clause_11', 'component', 'A notifications icon', [
+        'A notifications icon with an unread badge',
+        'Notifications and messages icons',
+        'No notifications icon',
+      ]),
+      clause('clause_12', 'component', 'A primary "New report" button', [
+        'A primary "Export" button',
+        'A split "New report" button with a menu',
+        'An icon-only add button',
+      ]),
+      clause('clause_13', 'layout', 'Below the bar, a row of four equal stat cards', [
+        'A row of three equal stat cards',
+        'A row of four cards with the first emphasized',
+        'A two-by-two grid of stat cards',
+      ]),
+      clause('clause_14', 'component', 'Each stat card shows a label, a value, and a change', [
+        'Each stat card shows a label, value, and a sparkline',
+        'Each stat card shows a value and label only',
+        'Each stat card adds an icon beside the label',
+      ]),
+      clause('clause_15', 'style', 'Stat values are large and bold', [
+        'Stat values are medium-weight',
+        'Stat values are extra-large and light',
+        'Stat values use a monospace numeric font',
+      ]),
+      clause('clause_16', 'style', 'Positive changes are green, negative ones red', [
+        'Changes use neutral gray with up/down arrows',
+        'Positive changes are indigo, negative ones rose',
+        'Changes are shown as small pills',
+      ]),
+      clause('clause_17', 'layout', 'A wide revenue chart beside a recent-activity list', [
+        'A full-width revenue chart above the activity list',
+        'Two equal columns: chart and activity',
+        'A chart beside a list of top customers',
+      ]),
+      clause('clause_18', 'component', 'A card charting revenue over time as bars', [
+        'A card charting revenue as a line',
+        'A card with an area chart',
+        'A card with stacked bars by segment',
+      ]),
+      clause('clause_19', 'style', 'Bars rise in the primary indigo, the latest tallest', [
+        'Bars use a green-to-indigo gradient',
+        'Bars are a flat neutral gray',
+        'Only the latest bar is colored, the rest muted',
+      ]),
+      clause('clause_20', 'component', 'A recent-activity list with avatar rows', [
+        'A recent-activity list with icon rows',
+        'A timeline of recent activity',
+        'A compact text-only activity list',
+      ]),
+      clause('clause_21', 'content', 'Three recent activity entries', [
+        'Five recent activity entries',
+        'A single highlighted recent entry',
+        'Recent entries grouped by day',
+      ]),
     ],
   },
   ir: {
