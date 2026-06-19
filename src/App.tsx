@@ -31,38 +31,48 @@ export default function App() {
   }, [needsConnect]);
 
   // Figma-style keyboard shortcuts: V/R/O/L/P/T pick tools, Delete removes the
-  // selection (a manipulation — it runs the back-channel), ⌘Z undoes.
+  // selection, ⌘Z undo, ⌘C/⌘V copy/paste, ⌘D duplicate, ? opens the shortcut
+  // sheet. An unbound modifier combo flags the "see all shortcuts" hint.
   useEffect(() => {
     const TOOL_KEYS: Record<string, Tool> = {
       v: 'pointer', r: 'rectangle', o: 'circle', l: 'line', p: 'path', t: 'text',
     };
+    // Modifier combos the browser owns — never hijack or flag these.
+    const RESERVED = new Set([
+      'r', 't', 'w', 'n', 'q', 's', 'p', 'f', 'a', 'x', '+', '-', '=', '0',
+      '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    ]);
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.isContentEditable
-      ) {
-        return;
-      }
+      const typing =
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
       const store = useAppStore.getState();
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        store.undo();
+
+      if (e.metaKey || e.ctrlKey) {
+        if (typing) return; // leave text-field clipboard/undo to the browser
+        const k = e.key.toLowerCase();
+        if (k === 'z') { e.preventDefault(); store.undo(); return; }
+        if (k === 'c') { if (store.selectedNodeIds.length) { e.preventDefault(); store.copySelection(); } return; }
+        if (k === 'v') { if (store.clipboard) { e.preventDefault(); store.pasteClipboard(); } return; }
+        if (k === 'd') { if (store.selectedNodeId) { e.preventDefault(); store.duplicateNode(store.selectedNodeId); } return; }
+        // Any other (non-reserved) combo isn't bound — hint at the shortcut sheet.
+        if (k.length === 1 && !RESERVED.has(k)) store.flagUnknownShortcut();
         return;
       }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.altKey) return;
+      if (typing) return;
+
+      if (e.key === '?') { store.setShortcutsOpen(true); return; }
+      if (e.key === 'Escape') {
+        if (store.shortcutsOpen) store.setShortcutsOpen(false);
+        else if (store.tool === 'pointer') store.selectNode(null);
+        return;
+      }
       const toolKey = TOOL_KEYS[e.key.toLowerCase()];
-      if (toolKey) {
-        store.setTool(toolKey);
-        return;
-      }
+      if (toolKey) { store.setTool(toolKey); return; }
       if ((e.key === 'Delete' || e.key === 'Backspace') && store.selectedNodeId) {
         e.preventDefault();
         store.manipulate({ kind: 'delete', id: store.selectedNodeId });
-      }
-      if (e.key === 'Escape' && store.tool === 'pointer') {
-        store.selectNode(null);
       }
     };
     window.addEventListener('keydown', onKey);

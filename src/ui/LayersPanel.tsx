@@ -83,8 +83,6 @@ function TreeNode({ tree, depth, selectedId, selectedIds, onSelect, onHoverClaus
   const { node, children } = tree;
   const isSelected = selectedIds.includes(node.id);
   const hidden = node.tailwind.split(/\s+/).includes('hidden');
-  const isDiverged =
-    node.provenance.source === 'user' && node.provenance.promptClauseId === null;
 
   const label = node.content?.slice(0, 24) || node.role;
 
@@ -117,11 +115,6 @@ function TreeNode({ tree, depth, selectedId, selectedIds, onSelect, onHoverClaus
           {ROLE_ICON[node.role]}
         </span>
         <span className="flex-1 truncate text-[11px]">{label}</span>
-        {isDiverged && (
-          <span title="Diverged from prompt" className="text-[9px] font-semibold text-amber-600">
-            ⚠
-          </span>
-        )}
         <button
           className="opacity-0 transition-opacity hover:text-slate-900 group-hover:opacity-100"
           onClick={(e) => { e.stopPropagation(); onToggleHidden(node.id); }}

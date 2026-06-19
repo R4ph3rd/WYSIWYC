@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Sliders, Type as TypeIcon, Square as SquareIcon, MoveHorizontal } from 'lucide-react';
+import {
+  Sliders, Type as TypeIcon, Square as SquareIcon, MoveHorizontal, ChevronUp, ChevronDown,
+} from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { IRNode, NodeStyle } from '@/ir/types';
 
@@ -117,7 +119,6 @@ export function PropertiesPanel() {
   // back-channel so panel edits propose prompt updates like any manipulation.
   const editStyle = useAppStore((s) => s.editStyle);
   const editLayout = useAppStore((s) => s.editLayout);
-  const editContent = useAppStore((s) => s.editContent);
   const manipulate = useAppStore((s) => s.manipulate);
 
   if (!selectedId || !node) {
@@ -139,17 +140,6 @@ export function PropertiesPanel() {
     <div className="flex h-full flex-col bg-white">
       <PanelHeader title={`Properties — ${node.role}`} />
       <div className="flex-1 overflow-y-auto p-3 text-xs">
-        {/* Content */}
-        {(isTextRole(node.role) || node.content !== undefined) && (
-          <Section title="Content" icon={<TypeIcon className="h-3 w-3" />}>
-            <ContentEditor
-              key={node.id}
-              value={node.content ?? ''}
-              onChange={(v) => editContent(node.id, v)}
-            />
-          </Section>
-        )}
-
         {/* Position */}
         <Section title="Position & size" icon={<MoveHorizontal className="h-3 w-3" />}>
           <div className="grid grid-cols-2 gap-1.5">
@@ -249,8 +239,21 @@ export function PropertiesPanel() {
         )}
 
         {/* Shadow (Figma-style drop/inner shadow editor) */}
-        <Section title="Shadow" icon={<Sliders className="h-3 w-3" />}>
-          <ShadowEditor value={node.style?.shadow ?? ''} onChange={(v) => set({ shadow: v })} />
+        <Section
+          title="Shadow"
+          icon={<Sliders className="h-3 w-3" />}
+          accessory={
+            <Switch
+              checked={Boolean(node.style?.shadow?.trim())}
+              onChange={(on) => set({ shadow: on ? serializeShadow(DEFAULT_SHADOW) : '' })}
+            />
+          }
+        >
+          {node.style?.shadow?.trim() ? (
+            <ShadowEditor value={node.style.shadow} onChange={(v) => set({ shadow: v })} />
+          ) : (
+            <p className="text-[10px] text-slate-400">No shadow. Toggle it on to add a drop shadow.</p>
+          )}
         </Section>
       </div>
     </div>
@@ -268,14 +271,40 @@ function PanelHeader({ title }: { title: string }) {
   );
 }
 
-function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+function Section({ title, icon, accessory, children }: {
+  title: string; icon: React.ReactNode; accessory?: React.ReactNode; children: React.ReactNode;
+}) {
   return (
     <div className="mb-3 border-b border-slate-100 pb-3 last:border-b-0">
       <div className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
         {icon} {title}
+        {accessory && <span className="ml-auto normal-case">{accessory}</span>}
       </div>
       {children}
     </div>
+  );
+}
+
+/** Figma-style small on/off switch. */
+function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={
+        'relative inline-flex h-3.5 w-6 items-center rounded-full transition-colors ' +
+        (checked ? 'bg-indigo-600' : 'bg-slate-200')
+      }
+    >
+      <span
+        className={
+          'inline-block h-2.5 w-2.5 transform rounded-full bg-white shadow transition-transform ' +
+          (checked ? 'translate-x-3' : 'translate-x-0.5')
+        }
+      />
+    </button>
   );
 }
 
@@ -309,8 +338,18 @@ function NumberField({
   const [draft, setDraft] = useState<string>(value === undefined ? '' : String(value));
   useEffect(() => { setDraft(value === undefined ? '' : String(value)); }, [value]);
   const drag = paramDragProps(param);
+  const stepBy = step ?? 1;
+  const clamp = (n: number) => {
+    if (min !== undefined) n = Math.max(min, n);
+    if (max !== undefined) n = Math.min(max, n);
+    return Math.round(n * 1000) / 1000;
+  };
+  const nudge = (dir: 1 | -1) => {
+    const base = Number.isFinite(value as number) ? (value as number) : 0;
+    onChange(clamp(base + dir * stepBy));
+  };
   return (
-    <div className="flex items-center gap-1 rounded border border-slate-200 bg-white px-1.5 py-1">
+    <div className="flex items-center gap-1 rounded border border-slate-200 bg-white pl-1.5 focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-50">
       {label && (
         <span
           {...drag}
@@ -327,14 +366,31 @@ function NumberField({
         value={draft}
         min={min}
         max={max}
-        step={step ?? 1}
+        step={stepBy}
         onChange={(e) => {
           setDraft(e.target.value);
           const n = Number.parseFloat(e.target.value);
           if (Number.isFinite(n)) onChange(n);
         }}
-        className="w-full bg-transparent text-[11px] tabular-nums outline-none"
+        className="min-w-0 flex-1 bg-transparent py-1 text-[11px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
+      <Stepper onUp={() => nudge(1)} onDown={() => nudge(-1)} />
+    </div>
+  );
+}
+
+/** Figma-style stacked +/- chevrons that nudge a number field. */
+function Stepper({ onUp, onDown }: { onUp: () => void; onDown: () => void }) {
+  const btn =
+    'flex h-1/2 w-full items-center justify-center text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700';
+  return (
+    <div className="flex h-6 w-4 shrink-0 flex-col border-l border-slate-200">
+      <button type="button" tabIndex={-1} aria-label="Increase" className={btn} onClick={onUp}>
+        <ChevronUp className="h-2.5 w-2.5" />
+      </button>
+      <button type="button" tabIndex={-1} aria-label="Decrease" className={btn} onClick={onDown}>
+        <ChevronDown className="h-2.5 w-2.5" />
+      </button>
     </div>
   );
 }
@@ -388,7 +444,7 @@ function ColorField({
         className="w-full min-w-0 bg-transparent font-mono text-[10px] uppercase outline-none"
       />
       {alpha && (
-        <div className="flex items-center">
+        <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5">
           <input
             type="number"
             value={has ? a : ''}
@@ -399,7 +455,7 @@ function ColorField({
               const n = Math.max(0, Math.min(100, Number.parseInt(e.target.value, 10)));
               onChange(composeColor(hex, Number.isFinite(n) ? n : 100));
             }}
-            className="w-7 bg-transparent text-right text-[10px] tabular-nums outline-none"
+            className="w-7 bg-transparent text-right text-[10px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
           <span className="text-[9px] text-slate-400">%</span>
         </div>
@@ -419,7 +475,7 @@ function OpacityField({ value, onChange }: { value: number | undefined; onChange
         max={100}
         value={pct}
         onChange={(e) => onChange(Number(e.target.value) / 100)}
-        className="h-1 flex-1 cursor-pointer accent-indigo-600"
+        className="wysiwyc-range flex-1 cursor-pointer"
       />
       <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-slate-500">{pct}%</span>
     </div>
@@ -428,39 +484,24 @@ function OpacityField({ value, onChange }: { value: number | undefined; onChange
 
 /** Figma-style shadow effect: type + X / Y / blur / spread + color. */
 function ShadowEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const enabled = Boolean(value && value.trim());
   const parts = parseShadow(value);
   const update = (patch: Partial<ShadowParts>) => onChange(serializeShadow({ ...parts, ...patch }));
 
   return (
     <>
       <div className="mb-1.5 flex items-center gap-1">
-        <ToggleButton
-          active={enabled}
-          onClick={() => onChange(enabled ? '' : serializeShadow(DEFAULT_SHADOW))}
-        >
-          {enabled ? 'On' : 'Off'}
-        </ToggleButton>
-        {enabled && (
-          <>
-            <ToggleButton active={!parts.inset} onClick={() => update({ inset: false })}>Drop</ToggleButton>
-            <ToggleButton active={parts.inset} onClick={() => update({ inset: true })}>Inner</ToggleButton>
-          </>
-        )}
+        <ToggleButton active={!parts.inset} onClick={() => update({ inset: false })}>Drop</ToggleButton>
+        <ToggleButton active={parts.inset} onClick={() => update({ inset: true })}>Inner</ToggleButton>
       </div>
-      {enabled && (
-        <>
-          <div className="mb-1.5 grid grid-cols-2 gap-1.5">
-            <NumberField label="X" value={parts.x} onChange={(x) => update({ x })} />
-            <NumberField label="Y" value={parts.y} onChange={(y) => update({ y })} />
-            <NumberField label="Blur" value={parts.blur} min={0} onChange={(blur) => update({ blur })} />
-            <NumberField label="Spread" value={parts.spread} onChange={(spread) => update({ spread })} />
-          </div>
-          <Row label="Color">
-            <ColorField value={parts.color} onChange={(color) => update({ color })} />
-          </Row>
-        </>
-      )}
+      <div className="mb-1.5 grid grid-cols-2 gap-1.5">
+        <NumberField label="X" value={parts.x} onChange={(x) => update({ x })} />
+        <NumberField label="Y" value={parts.y} onChange={(y) => update({ y })} />
+        <NumberField label="Blur" value={parts.blur} min={0} onChange={(blur) => update({ blur })} />
+        <NumberField label="Spread" value={parts.spread} onChange={(spread) => update({ spread })} />
+      </div>
+      <Row label="Color">
+        <ColorField value={parts.color} onChange={(color) => update({ color })} />
+      </Row>
     </>
   );
 }
@@ -483,18 +524,3 @@ function ToggleButton({ active, onClick, children }: {
   );
 }
 
-function ContentEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  return (
-    <textarea
-      value={draft}
-      onChange={(e) => {
-        setDraft(e.target.value);
-        onChange(e.target.value);
-      }}
-      rows={2}
-      className="w-full resize-none rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] outline-none focus:ring-2 focus:ring-indigo-100"
-    />
-  );
-}

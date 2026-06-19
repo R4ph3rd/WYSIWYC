@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   ComposerValue,
   IR,
+  IRNode,
   IRPatch,
   ManipulationOp,
   NodeRole,
@@ -22,6 +23,8 @@ import {
 import { applyPatch } from '@/ir/applyPatch';
 import {
   applyManipulation,
+  cloneNodes,
+  collectSubtrees,
   createNode,
   toggleHidden,
   updateNodeContent,
@@ -134,6 +137,12 @@ interface AppState {
   recentIds: string[];
   history: Snapshot[];
   tool: Tool;
+  /** Copied subtree(s) for paste (Cmd/Ctrl+C → V). Project-scoped, not persisted. */
+  clipboard: IRNode[] | null;
+  /** Whether the slide-up keyboard-shortcuts panel is open. */
+  shortcutsOpen: boolean;
+  /** Set to a timestamp when an unbound hotkey is pressed (drives the hint banner). */
+  unknownShortcutAt: number | null;
 
   generating: boolean; // Compose / Call A in flight
   proposing: boolean; // Call B in flight
@@ -180,8 +189,23 @@ interface AppState {
    * from before the gesture started.
    */
   proposeManipulation: (op: ManipulationOp, prevIR: IR) => void;
-  acceptProposal: () => void;
-  rejectProposal: () => void;
+  /**
+   * Resolve the pending back-channel proposal by folding it into the prompt.
+   * `overrideText` replaces the primary edited clause's text (used when the
+   * user rephrases it or picks one of the proposed alternatives). There is no
+   * "reject" — a substantial IR change must be described in the spec.
+   */
+  acceptProposal: (overrideText?: string) => void;
+
+  /** Copy the current selection's subtree(s) to the clipboard. */
+  copySelection: () => void;
+  /** Paste the clipboard back into the scene, offset and re-selected. */
+  pasteClipboard: () => void;
+  /** Duplicate a node's subtree in place (alt-drag / Cmd+D); returns the new root id. */
+  duplicateNode: (id: string) => string | null;
+  setShortcutsOpen: (open: boolean) => void;
+  /** Flag an unbound hotkey so the canvas shows the "see all shortcuts" hint. */
+  flagUnknownShortcut: () => void;
 
   // Deterministic editing. The edit* variants write the IR immediately AND
   // queue a debounced Call B proposal once the editing burst settles; the
@@ -370,6 +394,9 @@ export const useAppStore = create<AppState>((set, get) => {
       hoveredClauseId: null,
       recentIds: [],
       history: [],
+      clipboard: null,
+      shortcutsOpen: false,
+      unknownShortcutAt: null,
       error: null,
     };
   }
@@ -390,6 +417,9 @@ export const useAppStore = create<AppState>((set, get) => {
     recentIds: [],
     history: [],
     tool: 'pointer',
+    clipboard: null,
+    shortcutsOpen: false,
+    unknownShortcutAt: null,
     generating: false,
     proposing: false,
     error: null,
@@ -612,37 +642,83 @@ export const useAppStore = create<AppState>((set, get) => {
 
     proposeManipulation: (op, prevIR) => propose(op, prevIR),
 
-    acceptProposal: () => {
+    acceptProposal: (overrideText) => {
       const { pendingProposal } = get();
       if (!pendingProposal) return;
+      // When the user rephrases or picks an alternative, the new wording lands on
+      // the FIRST updated clause (the one the manipulation primarily changed).
+      let clauses = pendingProposal.updatedClauses;
+      if (overrideText && overrideText.trim() && clauses.length > 0) {
+        clauses = clauses.map((c, i) => (i === 0 ? { ...c, text: overrideText.trim() } : c));
+      }
       set((s) => ({
-        prompt: mergeClauses(s.prompt, pendingProposal.updatedClauses, pendingProposal.removedClauseIds),
+        prompt: mergeClauses(s.prompt, clauses, pendingProposal.removedClauseIds),
         pendingProposal: null,
         pendingAffectedIds: [],
-        recentIds: pendingProposal.updatedClauses.map((c) => c.id),
+        recentIds: clauses.map((c) => c.id),
       }));
       setLastDecision(true);
     },
 
-    rejectProposal: () => {
-      const { pendingProposal, pendingAffectedIds } = get();
-      if (!pendingProposal) return;
-      // Reject semantics: keep the IR change, discard the prompt edit, mark
-      // affected nodes diverged (source=user, promptClauseId=null).
-      set((s) => ({
-        ir: {
-          ...s.ir,
-          nodes: s.ir.nodes.map((n) =>
-            pendingAffectedIds.includes(n.id)
-              ? { ...n, provenance: { source: 'user', promptClauseId: null } }
-              : n,
-          ),
-        },
-        pendingProposal: null,
-        pendingAffectedIds: [],
-      }));
-      setLastDecision(false);
+    copySelection: () =>
+      set((s) => {
+        if (s.selectedNodeIds.length === 0) return {};
+        // Keep only top-level selected roots (a selected descendant is already
+        // carried by its selected ancestor's subtree).
+        const selected = new Set(s.selectedNodeIds);
+        const roots = s.selectedNodeIds.filter((id) => {
+          let p = s.ir.nodes.find((n) => n.id === id)?.parentId ?? null;
+          while (p) {
+            if (selected.has(p)) return false;
+            p = s.ir.nodes.find((n) => n.id === p)?.parentId ?? null;
+          }
+          return true;
+        });
+        return { clipboard: collectSubtrees(s.ir, roots) };
+      }),
+
+    pasteClipboard: () => {
+      const { clipboard } = get();
+      if (!clipboard || clipboard.length === 0) return;
+      set((s) => {
+        const present = new Set(s.ir.nodes.map((n) => n.id));
+        // Re-parent roots to their original parent if it still exists, else the
+        // default frame; offset so the paste is visible.
+        const resolveParent = (oldParentId: string | null): string | null =>
+          oldParentId && present.has(oldParentId) ? oldParentId : defaultParentId(s.ir);
+        const { ir, rootIds } = cloneNodes(s.ir, clipboard, resolveParent, { dx: 24, dy: 24 });
+        return {
+          history: [...s.history, snapshot(s)].slice(-50),
+          ir,
+          selectedNodeId: rootIds[rootIds.length - 1] ?? null,
+          selectedNodeIds: rootIds,
+          recentIds: rootIds,
+        };
+      });
     },
+
+    duplicateNode: (id) => {
+      const subtree = collectSubtrees(get().ir, [id]);
+      if (subtree.length === 0) return null;
+      let newId: string | null = null;
+      set((s) => {
+        const node = s.ir.nodes.find((n) => n.id === id);
+        const resolveParent = () => node?.parentId ?? defaultParentId(s.ir);
+        const { ir, rootIds } = cloneNodes(s.ir, subtree, resolveParent, { dx: 24, dy: 24 });
+        newId = rootIds[0] ?? null;
+        return {
+          history: [...s.history, snapshot(s)].slice(-50),
+          ir,
+          selectedNodeId: newId,
+          selectedNodeIds: newId ? [newId] : [],
+          recentIds: rootIds,
+        };
+      });
+      return newId;
+    },
+
+    setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen, unknownShortcutAt: null }),
+    flagUnknownShortcut: () => set({ unknownShortcutAt: Date.now() }),
 
     createShape: ({ role, x, y, w, h, parentId, points }) => {
       const parent = parentId !== undefined ? parentId : defaultParentId(get().ir);

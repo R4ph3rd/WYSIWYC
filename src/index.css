@@ -38,6 +38,36 @@ body {
   color: hsl(var(--foreground));
 }
 
+/* Compact range slider (e.g. opacity) with a small handle, Figma-style. */
+.wysiwyc-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  border-radius: 9999px;
+  background: #e2e8f0;
+  outline: none;
+}
+.wysiwyc-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #4f46e5;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.15);
+  cursor: pointer;
+}
+.wysiwyc-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #4f46e5;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.15);
+  cursor: pointer;
+}
+
 /* Provenance highlight pulse shared by prompt clauses and rendered nodes. */
 @keyframes wysiwyc-flash {
   0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.5); }

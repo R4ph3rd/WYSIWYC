@@ -23,19 +23,25 @@ PROMPT (natural-language living spec)  ⇄  IR (JSON scene graph = SOURCE OF TRU
 - **Prompt → IR** (Call A): editing a spec sentence in place makes the LLM
   emit a *patch* (add / update / remove / reorder), never a full regeneration
   unless the IR is empty.
-- **IR → Render**: deterministic, pure function — no LLM, no SVG generation;
-  the LLM authors *data* (Tailwind classNames), the renderer projects it.
+- **IR → Render**: deterministic, pure function — no LLM in the projection.
+  The LLM authors *data* (Tailwind classNames + a structured `style` block); the
+  renderer projects it to React + Tailwind, emitting plain HTML for flow
+  elements and **SVG only for vector primitives** (the `line` and `path` roles).
+  No LLM is involved in turning IR into pixels.
 - **Render → IR**: direct manipulation (drawing tools, drag-move, resize
   handles, properties panel, drag-to-reorder) writes **deterministically** —
   no LLM in the gesture itself.
-- **IR → Prompt** (Call B, the lossy back-channel): after a manipulation the
-  LLM proposes a one-sentence prompt delta the user **accepts or rejects** (the
-  Diff Ribbon). Rejecting keeps the IR change but marks the node *diverged*.
-  This covers *every* manipulation: canvas drags, hand-drawn shapes, and
-  (debounced per editing burst) Properties-panel changes.
+- **IR → Prompt** (Call B, the lossy back-channel): the manipulation is applied
+  to the IR immediately; a banner then proposes a one-sentence prompt delta the
+  user must resolve — **Accept** it, swap in one of **three generated
+  alternatives**, or **rephrase** it inline. A substantial change has to be
+  described in the spec, so there is no silent "reject"/diverge. This covers
+  *every* manipulation: canvas drags, hand-drawn shapes, and (debounced per
+  editing burst) Properties-panel changes.
 
 **The asymmetry is intentional and visible in the UX:** prompt→output is
-authoritative; output→prompt is a *proposal*, never auto-applied.
+authoritative; output→prompt is a *proposal* applied only once the user
+accepts, swaps, or rephrases it.
 
 **The prompt reads like a person, not a config file.** The spec is rendered
 as flowing sentences (each one a hoverable, editable span) and both LLM

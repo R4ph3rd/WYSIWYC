@@ -8,18 +8,22 @@ import { RecipesRail } from './RecipesRail';
 import { AlternativesMenu } from './AlternativesMenu';
 
 /**
- * The prompt is a LIVING SPEC. Rather than one flat paragraph, it renders as
- * semantic sections — Layout / Components / Style / Content — so the structure
- * of the spec is visible at a glance. Each clause is a row: hover traces its UI
- * elements, single click opens alternatives/remove, double click edits in
- * place, and the composer below folds new instructions in.
+ * The prompt is a LIVING SPEC with two views the user can switch between:
+ *  - "Structured": semantic sections (Layout / Components / Style / Content),
+ *    each clause its own row.
+ *  - "Prose": the spec read as flowing sentences in document order, each clause
+ *    underlined in its category color.
+ * In both, hover traces a clause's UI elements, single click opens
+ * alternatives/remove, and double click edits in place.
  */
 
-const CATEGORY_META: Record<ClauseCategory, { label: string; dot: string; accent: string }> = {
-  layout: { label: 'Layout', dot: 'bg-sky-400', accent: 'text-sky-600' },
-  component: { label: 'Components', dot: 'bg-violet-400', accent: 'text-violet-600' },
-  style: { label: 'Style', dot: 'bg-amber-400', accent: 'text-amber-600' },
-  content: { label: 'Content', dot: 'bg-emerald-400', accent: 'text-emerald-600' },
+type SpecView = 'structured' | 'prose';
+
+const CATEGORY_META: Record<ClauseCategory, { label: string; dot: string; accent: string; underline: string }> = {
+  layout: { label: 'Layout', dot: 'bg-sky-400', accent: 'text-sky-600', underline: 'decoration-sky-400/70' },
+  component: { label: 'Components', dot: 'bg-violet-400', accent: 'text-violet-600', underline: 'decoration-violet-400/70' },
+  style: { label: 'Style', dot: 'bg-amber-400', accent: 'text-amber-600', underline: 'decoration-amber-400/70' },
+  content: { label: 'Content', dot: 'bg-emerald-400', accent: 'text-emerald-600', underline: 'decoration-emerald-400/70' },
 };
 
 function sentence(text: string): string {
@@ -51,63 +55,93 @@ export function PromptPane() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [altMenu, setAltMenu] = useState<{ clauseId: string; x: number; y: number } | null>(null);
+  const [view, setView] = useState<SpecView>('structured');
+
+  const onDoneEdit = (c: PromptClause) => (text: string | null) => {
+    setEditingId(null);
+    if (text !== null && text.trim() && text !== c.text) editClause(c.id, text);
+  };
+  const clauseHandlers = (c: PromptClause) => ({
+    selected: selectedClauseId === c.id,
+    flash: recentIds.includes(c.id),
+    onHover: hoverClause,
+    onOpenMenu: (x: number, y: number) => setAltMenu({ clauseId: c.id, x, y }),
+    onEdit: () => setEditingId(c.id),
+    onRemove: () => removeClause(c.id),
+  });
 
   return (
     <div className="flex h-full flex-col bg-white">
-      <div className="border-b border-slate-100 px-3 py-2">
-        <h2 className="text-xs font-semibold tracking-tight text-slate-700">Prompt</h2>
-        <p className="text-[10px] text-slate-500">
-          A living description of your UI. It writes itself as you edit the canvas.
-        </p>
+      <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Spec</span>
+        <div className="ml-auto flex rounded-md border border-slate-200 p-0.5">
+          {(['structured', 'prose'] as SpecView[]).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={cn(
+                'rounded px-2 py-0.5 text-[10px] font-medium capitalize transition-colors',
+                view === v ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100',
+              )}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-3 py-3">
+      <div className="flex-1 overflow-y-auto px-3 py-3">
         {clauses.length === 0 ? (
           <p className="px-1 py-6 text-center text-xs text-slate-400">
             Nothing here yet — describe what you want below, or pick an example.
           </p>
+        ) : view === 'structured' ? (
+          <div className="space-y-4">
+            {CLAUSE_CATEGORIES.map((cat) => {
+              const items = clauses.filter((c) => c.category === cat);
+              if (items.length === 0) return null;
+              const meta = CATEGORY_META[cat];
+              return (
+                <section key={cat}>
+                  <div className="mb-1.5 flex items-center gap-1.5 px-1">
+                    <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} />
+                    <span className={cn('text-[10px] font-semibold uppercase tracking-wider', meta.accent)}>
+                      {meta.label}
+                    </span>
+                    <span className="text-[10px] font-medium text-slate-300">{items.length}</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    {items.map((c) =>
+                      editingId === c.id ? (
+                        <ClauseEditor key={c.id} clause={c} onDone={onDoneEdit(c)} />
+                      ) : (
+                        <ClauseItem key={c.id} clause={c} {...clauseHandlers(c)} />
+                      ),
+                    )}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
         ) : (
-          CLAUSE_CATEGORIES.map((cat) => {
-            const items = clauses.filter((c) => c.category === cat);
-            if (items.length === 0) return null;
-            const meta = CATEGORY_META[cat];
-            return (
-              <section key={cat}>
-                <div className="mb-1.5 flex items-center gap-1.5 px-1">
-                  <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} />
-                  <span className={cn('text-[10px] font-semibold uppercase tracking-wider', meta.accent)}>
-                    {meta.label}
-                  </span>
-                  <span className="text-[10px] font-medium text-slate-300">{items.length}</span>
-                </div>
-                <div className="space-y-0.5">
-                  {items.map((c) =>
-                    editingId === c.id ? (
-                      <ClauseEditor
-                        key={c.id}
-                        clause={c}
-                        onDone={(text) => {
-                          setEditingId(null);
-                          if (text !== null && text.trim() && text !== c.text) editClause(c.id, text);
-                        }}
-                      />
-                    ) : (
-                      <ClauseItem
-                        key={c.id}
-                        clause={c}
-                        selected={selectedClauseId === c.id}
-                        flash={recentIds.includes(c.id)}
-                        onHover={hoverClause}
-                        onOpenMenu={(x, y) => setAltMenu({ clauseId: c.id, x, y })}
-                        onEdit={() => setEditingId(c.id)}
-                        onRemove={() => removeClause(c.id)}
-                      />
-                    ),
-                  )}
-                </div>
-              </section>
-            );
-          })
+          <>
+            <p className="text-[13px] leading-7 text-slate-700">
+              {clauses.map((c) =>
+                editingId === c.id ? (
+                  <ClauseEditor key={c.id} clause={c} onDone={onDoneEdit(c)} />
+                ) : (
+                  <ClauseInline key={c.id} clause={c} {...clauseHandlers(c)} />
+                ),
+              )}
+            </p>
+            <div className="mt-4 flex flex-wrap items-center gap-2.5 border-t border-slate-100 pt-2.5">
+              {CLAUSE_CATEGORIES.map((cat) => (
+                <span key={cat} className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-slate-400">
+                  <span className={cn('h-1.5 w-1.5 rounded-full', CATEGORY_META[cat].dot)} /> {CATEGORY_META[cat].label}
+                </span>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
@@ -219,6 +253,74 @@ function ClauseItem({
         <X className="h-3 w-3 text-slate-300 hover:text-rose-500" />
       </button>
     </div>
+  );
+}
+
+/** Prose-view clause: an inline, category-underlined sentence span. */
+function ClauseInline({
+  clause,
+  selected,
+  flash,
+  onHover,
+  onOpenMenu,
+  onEdit,
+  onRemove,
+}: {
+  clause: PromptClause;
+  selected: boolean;
+  flash: boolean;
+  onHover: (id: string | null) => void;
+  onOpenMenu: (x: number, y: number) => void;
+  onEdit: () => void;
+  onRemove: () => void;
+}) {
+  const inferred = clause.origin === 'inferred';
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return (
+    <span
+      onMouseEnter={() => onHover(clause.id)}
+      onMouseLeave={() => onHover(null)}
+      onClick={(e) => {
+        const { clientX, clientY } = e;
+        if (clickTimer.current) return;
+        clickTimer.current = setTimeout(() => {
+          clickTimer.current = null;
+          onOpenMenu(clientX, clientY);
+        }, 220);
+      }}
+      onDoubleClick={() => {
+        if (clickTimer.current) {
+          clearTimeout(clickTimer.current);
+          clickTimer.current = null;
+        }
+        onEdit();
+      }}
+      title={inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
+      className={cn(
+        'group -mx-0.5 cursor-pointer rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
+        CATEGORY_META[clause.category].underline,
+        selected ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-slate-50',
+        flash && 'wysiwyc-flash',
+      )}
+    >
+      {inferred && (
+        <span
+          className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle ring-2 ring-amber-100"
+          aria-label="inferred"
+        />
+      )}
+      {sentence(clause.text)}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="ml-0.5 hidden align-baseline group-hover:inline-block"
+        aria-label="Remove sentence"
+      >
+        <X className="inline h-3 w-3 text-slate-300 hover:text-rose-500" />
+      </button>{' '}
+    </span>
   );
 }
 

@@ -20,10 +20,6 @@ const SHAPE_ROLES: IRNode['role'][] = ['rectangle', 'circle', 'line', 'path'];
 /** Stroke-only shapes where `fill` is drawn by SVG, not as a CSS background. */
 const STROKE_ROLES: IRNode['role'][] = ['line', 'path'];
 
-function isDiverged(node: IRNode): boolean {
-  return node.provenance.source === 'user' && node.provenance.promptClauseId === null;
-}
-
 /** Translate the structured `style` block into inline CSS. */
 function structuredStyle(node: IRNode): CSSProperties {
   const s: NodeStyle = node.style ?? {};
@@ -93,9 +89,6 @@ function overlayStyle(node: IRNode, opts: {
   } else if (opts.clauseHover) {
     style.outline = '2px dashed #0ea5e9';
     style.outlineOffset = '2px';
-  } else if (isDiverged(node)) {
-    style.outline = '1px dashed #f59e0b';
-    style.outlineOffset = '1px';
   }
   return style;
 }

@@ -172,8 +172,9 @@ Rules:
 - Keep one facet per clause: a styling qualifier (e.g. "rounder", "larger", "equal widths") belongs in its OWN style clause, not folded into a component or layout clause.
 - Only touch clauses affected by this manipulation. Preserve all others verbatim (do not return them).
 - Return updatedClauses (clauses to add or replace, keyed by stable id — reuse the existing clause id when editing one) and removedClauseIds. A manipulation that introduced something new (e.g. a hand-drawn shape) usually means ADDING a clause.
-- Set "origin" on every clause you return to "explicit" — a direct manipulation is the user explicitly stating intent. You may add up to 3 short "alternatives" (other plausible readings of the manipulation).
-- deltaDescription is ONE plain sentence shown to the user for confirm/reject.
+- Set "origin" on every clause you return to "explicit" — a direct manipulation is the user explicitly stating intent.
+- ALWAYS provide up to 3 short "alternatives" on the FIRST updated clause: other plausible phrasings/readings of the manipulation. The user picks one from a dropdown if your primary wording is not quite right, so make them genuinely distinct full-sentence replacements.
+- deltaDescription is ONE plain sentence shown to the user, who will accept it, swap in an alternative, or rephrase it (there is no reject).
 - If intent is ambiguous, set confidence "low" and pick the most likely semantic reading.`;
 
 export function describeManipulation(op: ManipulationOp): string {
