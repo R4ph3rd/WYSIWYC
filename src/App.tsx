@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Undo2, Download, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon } from 'lucide-react';
 import { useAppStore, type Tool } from './store/appStore';
 import { useSettingsStore } from './store/settingsStore';
+import { familyFromStack } from './lib/fonts';
+import { loadGoogleFont } from './lib/loadFont';
 import { SAMPLES } from './ir/samples';
 import { downloadBackChannelLog } from './lib/log';
 import { PromptPane } from './ui/PromptPane';
@@ -26,6 +28,18 @@ export default function App() {
 
   const [connectOpen, setConnectOpen] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
+
+  // Lazily load any Google font actually in use by a node's style.fontFamily
+  // (deduped in loadGoogleFont). Never loads the whole catalogue up front.
+  const irNodes = useAppStore((s) => s.ir.nodes);
+  useEffect(() => {
+    const families = new Set<string>();
+    for (const n of irNodes) {
+      const f = familyFromStack(n.style?.fontFamily);
+      if (f) families.add(f);
+    }
+    families.forEach((f) => loadGoogleFont(f));
+  }, [irNodes]);
   useEffect(() => {
     if (needsConnect) setConnectOpen(true);
   }, [needsConnect]);

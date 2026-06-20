@@ -85,6 +85,23 @@ The split between `tailwind` and `style` is intentional: tailwind is what the
 LLM authors freely; style is what the user dialled in by hand and we don't
 want to round-trip through tokens. The renderer applies both.
 
+## Fonts & inline parameter editing
+
+The font controls draw from a bundled, curated catalogue of popular Google
+Fonts (`src/lib/fonts.ts`); families load **lazily** (`src/lib/loadFont.ts`) —
+only when shown in the picker or actually used by a node — never the whole
+catalogue up front. The complete Google Fonts list can be regenerated at build
+time from
+`https://www.googleapis.com/webfonts/v1/webfonts?key=$GOOGLE_FONTS_API_KEY&sort=popularity`
+into the same `{ family, category }[]` shape (the key stays build-time only).
+
+Style words inside spec clauses (a color, a size, a font, a weight, a shadow,
+a radius, …) are clickable: clicking one opens a small widget (color picker,
+slider, font selector, …) that edits the bound IR field **deterministically**
+(no LLM) and rewrites the word in the prose. Any token the system can't type
+precisely still opens a plain text input. This is a forward Prompt→IR edit, so
+it does not run the Call B back-channel.
+
 ## Running locally
 
 ```bash

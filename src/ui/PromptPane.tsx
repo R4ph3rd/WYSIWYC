@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
-import { CLAUSE_CATEGORIES, type ClauseCategory, type PromptClause } from '@/ir/types';
+import { CLAUSE_CATEGORIES, type ClauseCategory, type IRNode, type ParamSpan, type PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
-import { findParams, type ParamMatch } from '@/lib/clauseParams';
+import { paramsForClause } from '@/ir/paramLexer';
+import { COLOR_NAMES } from '@/ir/paramLexer';
 import { RefComposer } from './RefComposer';
 import { RecipesRail } from './RecipesRail';
 import { AlternativesMenu } from './AlternativesMenu';
-import { ClauseParamPopover } from './ClauseParamPopover';
+import { ParamPopover } from './ParamPopover';
 
 /**
  * The prompt is a LIVING SPEC with two views the user can switch between:
@@ -51,17 +52,31 @@ export function PromptPane() {
   const setComposerValue = useAppStore((s) => s.setComposerValue);
   const focusRequest = useAppStore((s) => s.focusRequest);
   const chooseAlternative = useAppStore((s) => s.chooseAlternative);
+  const setClauseParam = useAppStore((s) => s.setClauseParam);
+  const irNodes = useAppStore((s) => s.ir.nodes);
   const selectedClauseId = useAppStore((s) =>
     selectedNodeId ? (s.ir.nodes.find((n) => n.id === selectedNodeId)?.provenance.promptClauseId ?? null) : null,
   );
 
+  // Nodes owned by each clause (provenance link), for binding lexer param spans.
+  const ownedByClause = useMemo(() => {
+    const m = new Map<string, IRNode[]>();
+    for (const n of irNodes) {
+      const cid = n.provenance.promptClauseId;
+      if (!cid) continue;
+      (m.get(cid) ?? m.set(cid, []).get(cid)!).push(n);
+    }
+    return m;
+  }, [irNodes]);
+  const spansFor = (c: PromptClause): ParamSpan[] => paramsForClause(c, ownedByClause.get(c.id) ?? []);
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [altMenu, setAltMenu] = useState<{ clauseId: string; x: number; y: number } | null>(null);
   const [view, setView] = useState<SpecView>('structured');
-  // A clicked style word → its widget popover. `original` is the displayed clause
-  // text snapshot so repeated edits splice the token from a stable base.
+  // A clicked parameter token → its widget popover. `original` snapshots the
+  // clause text+params at open so live drags splice from a stable base.
   const [paramPopover, setParamPopover] = useState<
-    { clauseId: string; original: string; match: ParamMatch; x: number; y: number } | null
+    { clauseId: string; span: ParamSpan; original: { text: string; params?: ParamSpan[] }; x: number; y: number } | null
   >(null);
 
   const onDoneEdit = (c: PromptClause) => (text: string | null) => {
@@ -71,12 +86,13 @@ export function PromptPane() {
   const clauseHandlers = (c: PromptClause) => ({
     selected: selectedClauseId === c.id,
     flash: recentIds.includes(c.id),
+    spans: spansFor(c),
     onHover: hoverClause,
     onOpenMenu: (x: number, y: number) => setAltMenu({ clauseId: c.id, x, y }),
     onEdit: () => setEditingId(c.id),
     onRemove: () => removeClause(c.id),
-    onParam: (m: ParamMatch, e: React.MouseEvent) =>
-      setParamPopover({ clauseId: c.id, original: sentence(c.text), match: m, x: e.clientX, y: e.clientY }),
+    onParam: (span: ParamSpan, e: React.MouseEvent) =>
+      setParamPopover({ clauseId: c.id, span, original: { text: c.text, params: c.params }, x: e.clientX, y: e.clientY }),
   });
 
   return (
@@ -155,12 +171,13 @@ export function PromptPane() {
       </div>
 
       {paramPopover && (
-        <ClauseParamPopover
-          original={paramPopover.original}
-          match={paramPopover.match}
+        <ParamPopover
+          span={paramPopover.span}
           x={paramPopover.x}
           y={paramPopover.y}
-          onCommit={(newText) => editClause(paramPopover.clauseId, newText)}
+          onChange={(value) =>
+            setClauseParam(paramPopover.clauseId, paramPopover.span, value, paramPopover.original)
+          }
           onClose={() => setParamPopover(null)}
         />
       )}
@@ -203,42 +220,87 @@ export function PromptPane() {
   );
 }
 
-/** A clause's prose with detected style parameters as clickable tokens. */
+/**
+ * A clause's prose with its parameter tokens (offsets index into raw
+ * `clause.text`) rendered as clickable widgets. Capitalizes the first plain
+ * character and appends a trailing period for display (no offset drift).
+ */
 function ClauseContent({
   text,
+  spans,
   onParam,
 }: {
   text: string;
-  onParam: (m: ParamMatch, e: React.MouseEvent) => void;
+  spans: ParamSpan[];
+  onParam: (span: ParamSpan, e: React.MouseEvent) => void;
 }) {
-  const matches = findParams(text);
-  if (matches.length === 0) return <>{text}</>;
+  const ordered = [...spans].sort((a, b) => a.start - b.start);
   const out: React.ReactNode[] = [];
   let i = 0;
-  matches.forEach((m, k) => {
-    if (m.start > i) out.push(text.slice(i, m.start));
-    out.push(
-      <span
-        key={k}
-        role="button"
-        title={`Edit ${m.kind === 'fontFamily' ? 'font' : m.kind}`}
-        onClick={(e) => { e.stopPropagation(); onParam(m, e); }}
-        onDoubleClick={(e) => e.stopPropagation()}
-        className="cursor-pointer rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2 hover:bg-indigo-100"
-      >
-        {m.text}
-      </span>,
-    );
-    i = m.end;
+  let capped = false;
+  const pushPlain = (s: string, key: string) => {
+    if (!s) return;
+    let t = s;
+    if (!capped) {
+      t = t.replace(/^(\s*)(\p{L})/u, (_, sp: string, ch: string) => sp + ch.toUpperCase());
+      capped = true;
+    }
+    out.push(<span key={key}>{t}</span>);
+  };
+  ordered.forEach((sp, k) => {
+    if (sp.start > i) pushPlain(text.slice(i, sp.start), `t${k}`);
+    else capped = true; // token at sentence start — don't capitalize a token
+    out.push(<ParamToken key={`p${k}`} span={sp} label={text.slice(sp.start, sp.end)} onParam={onParam} />);
+    i = sp.end;
   });
-  if (i < text.length) out.push(text.slice(i));
+  pushPlain(text.slice(i), 'tail');
+  if (!/[.!?…]\s*$/.test(text)) out.push('.');
   return <>{out}</>;
+}
+
+const PARAM_LABEL: Record<ParamSpan['kind'], string> = {
+  color: 'color', length: 'size', fontFamily: 'font', fontWeight: 'weight', shadow: 'shadow',
+  radius: 'corners', opacity: 'opacity', align: 'alignment', enum: 'option', text: 'value',
+};
+
+/** One clickable parameter word inside a clause. */
+function ParamToken({
+  span,
+  label,
+  onParam,
+}: {
+  span: ParamSpan;
+  label: string;
+  onParam: (span: ParamSpan, e: React.MouseEvent) => void;
+}) {
+  const swatch =
+    span.kind === 'color'
+      ? (/^#|^rgb/i.test(span.value) ? span.value : COLOR_NAMES[label.toLowerCase()] ?? span.value)
+      : null;
+  return (
+    <span
+      role="button"
+      title={`Edit ${PARAM_LABEL[span.kind]}`}
+      onClick={(e) => { e.stopPropagation(); onParam(span, e); }}
+      onDoubleClick={(e) => e.stopPropagation()}
+      className="cursor-pointer rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2 hover:bg-indigo-100"
+    >
+      {swatch && (
+        <span
+          className="mr-0.5 inline-block h-2 w-2 rounded-full align-middle ring-1 ring-black/10"
+          style={{ background: swatch }}
+        />
+      )}
+      {label}
+    </span>
+  );
 }
 
 function ClauseItem({
   clause,
   selected,
   flash,
+  spans,
   onHover,
   onOpenMenu,
   onEdit,
@@ -248,11 +310,12 @@ function ClauseItem({
   clause: PromptClause;
   selected: boolean;
   flash: boolean;
+  spans: ParamSpan[];
   onHover: (id: string | null) => void;
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
   onRemove: () => void;
-  onParam: (m: ParamMatch, e: React.MouseEvent) => void;
+  onParam: (span: ParamSpan, e: React.MouseEvent) => void;
 }) {
   const inferred = clause.origin === 'inferred';
   // Single click opens the alternatives/remove menu; a double click goes
@@ -295,7 +358,7 @@ function ClauseItem({
         aria-label={inferred ? 'inferred' : undefined}
         title={inferred ? 'Inferred — not stated by you' : undefined}
       />
-      <span className="flex-1"><ClauseContent text={sentence(clause.text)} onParam={onParam} /></span>
+      <span className="flex-1"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -315,6 +378,7 @@ function ClauseInline({
   clause,
   selected,
   flash,
+  spans,
   onHover,
   onOpenMenu,
   onEdit,
@@ -328,7 +392,8 @@ function ClauseInline({
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
   onRemove: () => void;
-  onParam: (m: ParamMatch, e: React.MouseEvent) => void;
+  onParam: (span: ParamSpan, e: React.MouseEvent) => void;
+  spans: ParamSpan[];
 }) {
   const inferred = clause.origin === 'inferred';
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -365,7 +430,7 @@ function ClauseInline({
           aria-label="inferred"
         />
       )}
-      <ClauseContent text={sentence(clause.text)} onParam={onParam} />
+      <ClauseContent text={clause.text} spans={spans} onParam={onParam} />
       <button
         onClick={(e) => {
           e.stopPropagation();

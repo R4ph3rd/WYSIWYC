@@ -7,12 +7,16 @@ import type {
   ManipulationOp,
   NodeRole,
   NodeStyle,
+  ParamSpan,
   PathPoint,
   PromptRef,
   PromptUpdateProposal,
   Recipe,
   StructuredPrompt,
 } from '@/ir/types';
+import { setAlignment, setUtility } from '@/ir/tailwindEdit';
+import { familyFromStack } from '@/lib/fonts';
+import { loadGoogleFont } from '@/lib/loadFont';
 import {
   composerRefs,
   emptyComposer,
@@ -207,6 +211,20 @@ interface AppState {
   /** Flag an unbound hotkey so the canvas shows the "see all shortcuts" hint. */
   flagUnknownShortcut: () => void;
 
+  /**
+   * Forward edit (Prompt → IR): set a clause parameter token's value. Writes the
+   * bound IR field(s) deterministically (NO LLM, NO Call A/B), rewrites the
+   * token in the clause prose, keeps the node prompt-linked (not diverged), and
+   * adds ONE coalesced undo step per drag burst. `original` is the clause's
+   * text+params snapshot at popover-open, so live drags splice from a stable base.
+   */
+  setClauseParam: (
+    clauseId: string,
+    span: ParamSpan,
+    value: string,
+    original?: { text: string; params?: ParamSpan[] },
+  ) => void;
+
   // Deterministic editing. The edit* variants write the IR immediately AND
   // queue a debounced Call B proposal once the editing burst settles; the
   // update* variants are silent (used mid-gesture by the canvas).
@@ -234,6 +252,10 @@ const DEBOUNCE_MS = 700;
 const EDIT_SETTLE_MS = 1200;
 
 let callATimer: ReturnType<typeof setTimeout> | null = null;
+// One undo step per param-edit "burst" (e.g. a slider drag): a new history
+// snapshot is pushed only when the active (clause, span) changes or after idle.
+let paramBurstKey: string | null = null;
+let paramBurstTimer: ReturnType<typeof setTimeout> | null = null;
 
 function snapshot(s: AppState): Snapshot {
   return { ir: s.ir, prompt: s.prompt };
@@ -251,6 +273,58 @@ function affectedIdsOf(op: ManipulationOp): string[] {
 function defaultParentId(ir: IR): string | null {
   const frame = ir.nodes.find((n) => n.role === 'frame' && n.parentId === null);
   return frame?.id ?? null;
+}
+
+// --- Forward param edit (Prompt → IR, deterministic, no LLM) --------------
+
+const NUMERIC_STYLE = new Set(['fontSize', 'fontWeight', 'strokeWidth', 'borderRadius', 'opacity']);
+
+function setNodeTailwindOnly(ir: IR, id: string, tailwind: string): IR {
+  return { ...ir, nodes: ir.nodes.map((n) => (n.id === id ? { ...n, tailwind } : n)) };
+}
+
+/** Map a chosen value to a Tailwind utility value (arbitrary value for colors). */
+function tailwindValueFor(value: string): string {
+  if (/^#/.test(value)) return `[${value}]`;
+  if (/^rgb/i.test(value)) return `[${value.replace(/\s+/g, '')}]`;
+  return value;
+}
+
+/** Write one parameter's value onto a node by its ParamSpan path. Deterministic. */
+function writeParam(ir: IR, node: IRNode, span: ParamSpan, value: string): IR {
+  if (span.kind === 'align' || span.path === 'align') {
+    const cls = value === 'left' ? 'text-left' : value === 'right' ? 'text-right' : 'text-center';
+    return setNodeTailwindOnly(ir, node.id, setAlignment(node.tailwind, cls));
+  }
+  const { path } = span;
+  if (path.startsWith('style.')) {
+    const key = path.slice('style.'.length);
+    const v = NUMERIC_STYLE.has(key) ? Number(value) : value;
+    return updateNodeStyle(ir, node.id, { [key]: v } as Partial<NodeStyle>);
+  }
+  if (path.startsWith('layout.')) {
+    const key = path.slice('layout.'.length);
+    return updateNodeLayout(ir, node.id, { [key]: Number(value) });
+  }
+  if (path.startsWith('tailwind:')) {
+    const prefix = path.slice('tailwind:'.length);
+    return setNodeTailwindOnly(ir, node.id, setUtility(node.tailwind, prefix + tailwindValueFor(value)));
+  }
+  if (path === 'content') return updateNodeContent(ir, node.id, value);
+  return ir;
+}
+
+/** The human-readable prose form of a value (null = leave the clause token unchanged). */
+function humanParamValue(span: ParamSpan, value: string): string | null {
+  switch (span.kind) {
+    case 'shadow':
+      return null; // a CSS box-shadow string would be unreadable in prose
+    case 'length':
+    case 'radius':
+      return `${value}${span.unit ?? 'px'}`;
+    default:
+      return value; // color hex, font family, weight, align word, enum, free text
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => {
@@ -719,6 +793,62 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen, unknownShortcutAt: null }),
     flagUnknownShortcut: () => set({ unknownShortcutAt: Date.now() }),
+
+    setClauseParam: (clauseId, span, value, original) => {
+      const state = get();
+      const clause = state.prompt.clauses.find((c) => c.id === clauseId);
+      if (!clause) return;
+
+      // 1. Deterministic IR write, preserving provenance (NOT diverged: a forward
+      //    param edit keeps the node described by — linked to — its clause).
+      let ir = state.ir;
+      for (const nodeId of span.nodeIds) {
+        const before = ir.nodes.find((n) => n.id === nodeId);
+        if (!before) continue;
+        const prov = before.provenance;
+        ir = writeParam(ir, before, span, value);
+        ir = { ...ir, nodes: ir.nodes.map((n) => (n.id === nodeId ? { ...n, provenance: prov } : n)) };
+      }
+      if (span.kind === 'fontFamily') loadGoogleFont(familyFromStack(value) || value);
+
+      // 2. Rewrite the parameter token in the clause prose; shift later spans.
+      const baseText = original?.text ?? clause.text;
+      const baseParams = original?.params ?? clause.params;
+      const human = humanParamValue(span, value);
+      let newText = clause.text;
+      let newParams = clause.params;
+      if (human !== null) {
+        newText = baseText.slice(0, span.start) + human + baseText.slice(span.end);
+        const delta = human.length - (span.end - span.start);
+        if (baseParams) {
+          newParams = baseParams.map((p) => {
+            if (p.id === span.id) return { ...p, value, end: p.start + human.length };
+            if (p.start >= span.end) return { ...p, start: p.start + delta, end: p.end + delta };
+            return p;
+          });
+        }
+      } else if (baseParams) {
+        newParams = baseParams.map((p) => (p.id === span.id ? { ...p, value } : p));
+      }
+
+      // 3. One undo step per burst; flash; NO scheduleCallA, NO propose.
+      const key = `${clauseId}:${span.id}`;
+      const pushHistory = paramBurstKey !== key;
+      paramBurstKey = key;
+      if (paramBurstTimer) clearTimeout(paramBurstTimer);
+      paramBurstTimer = setTimeout(() => { paramBurstKey = null; }, 800);
+
+      set((s) => ({
+        history: pushHistory ? [...s.history, snapshot(s)].slice(-50) : s.history,
+        ir,
+        prompt: {
+          clauses: s.prompt.clauses.map((c) =>
+            c.id === clauseId ? { ...c, text: newText, params: newParams } : c,
+          ),
+        },
+        recentIds: span.nodeIds,
+      }));
+    },
 
     createShape: ({ role, x, y, w, h, parentId, points }) => {
       const parent = parentId !== undefined ? parentId : defaultParentId(get().ir);
