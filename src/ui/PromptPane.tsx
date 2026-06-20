@@ -3,9 +3,11 @@ import { X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import { CLAUSE_CATEGORIES, type ClauseCategory, type PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
+import { findParams, type ParamMatch } from '@/lib/clauseParams';
 import { RefComposer } from './RefComposer';
 import { RecipesRail } from './RecipesRail';
 import { AlternativesMenu } from './AlternativesMenu';
+import { ClauseParamPopover } from './ClauseParamPopover';
 
 /**
  * The prompt is a LIVING SPEC with two views the user can switch between:
@@ -56,6 +58,11 @@ export function PromptPane() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [altMenu, setAltMenu] = useState<{ clauseId: string; x: number; y: number } | null>(null);
   const [view, setView] = useState<SpecView>('structured');
+  // A clicked style word → its widget popover. `original` is the displayed clause
+  // text snapshot so repeated edits splice the token from a stable base.
+  const [paramPopover, setParamPopover] = useState<
+    { clauseId: string; original: string; match: ParamMatch; x: number; y: number } | null
+  >(null);
 
   const onDoneEdit = (c: PromptClause) => (text: string | null) => {
     setEditingId(null);
@@ -68,6 +75,8 @@ export function PromptPane() {
     onOpenMenu: (x: number, y: number) => setAltMenu({ clauseId: c.id, x, y }),
     onEdit: () => setEditingId(c.id),
     onRemove: () => removeClause(c.id),
+    onParam: (m: ParamMatch, e: React.MouseEvent) =>
+      setParamPopover({ clauseId: c.id, original: sentence(c.text), match: m, x: e.clientX, y: e.clientY }),
   });
 
   return (
@@ -145,6 +154,17 @@ export function PromptPane() {
         )}
       </div>
 
+      {paramPopover && (
+        <ClauseParamPopover
+          original={paramPopover.original}
+          match={paramPopover.match}
+          x={paramPopover.x}
+          y={paramPopover.y}
+          onCommit={(newText) => editClause(paramPopover.clauseId, newText)}
+          onClose={() => setParamPopover(null)}
+        />
+      )}
+
       {altMenu && (() => {
         const clause = clauses.find((c) => c.id === altMenu.clauseId);
         if (!clause) return null;
@@ -183,6 +203,38 @@ export function PromptPane() {
   );
 }
 
+/** A clause's prose with detected style parameters as clickable tokens. */
+function ClauseContent({
+  text,
+  onParam,
+}: {
+  text: string;
+  onParam: (m: ParamMatch, e: React.MouseEvent) => void;
+}) {
+  const matches = findParams(text);
+  if (matches.length === 0) return <>{text}</>;
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  matches.forEach((m, k) => {
+    if (m.start > i) out.push(text.slice(i, m.start));
+    out.push(
+      <span
+        key={k}
+        role="button"
+        title={`Edit ${m.kind === 'fontFamily' ? 'font' : m.kind}`}
+        onClick={(e) => { e.stopPropagation(); onParam(m, e); }}
+        onDoubleClick={(e) => e.stopPropagation()}
+        className="cursor-pointer rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2 hover:bg-indigo-100"
+      >
+        {m.text}
+      </span>,
+    );
+    i = m.end;
+  });
+  if (i < text.length) out.push(text.slice(i));
+  return <>{out}</>;
+}
+
 function ClauseItem({
   clause,
   selected,
@@ -191,6 +243,7 @@ function ClauseItem({
   onOpenMenu,
   onEdit,
   onRemove,
+  onParam,
 }: {
   clause: PromptClause;
   selected: boolean;
@@ -199,6 +252,7 @@ function ClauseItem({
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
   onRemove: () => void;
+  onParam: (m: ParamMatch, e: React.MouseEvent) => void;
 }) {
   const inferred = clause.origin === 'inferred';
   // Single click opens the alternatives/remove menu; a double click goes
@@ -241,7 +295,7 @@ function ClauseItem({
         aria-label={inferred ? 'inferred' : undefined}
         title={inferred ? 'Inferred — not stated by you' : undefined}
       />
-      <span className="flex-1">{sentence(clause.text)}</span>
+      <span className="flex-1"><ClauseContent text={sentence(clause.text)} onParam={onParam} /></span>
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -265,6 +319,7 @@ function ClauseInline({
   onOpenMenu,
   onEdit,
   onRemove,
+  onParam,
 }: {
   clause: PromptClause;
   selected: boolean;
@@ -273,6 +328,7 @@ function ClauseInline({
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
   onRemove: () => void;
+  onParam: (m: ParamMatch, e: React.MouseEvent) => void;
 }) {
   const inferred = clause.origin === 'inferred';
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -309,7 +365,7 @@ function ClauseInline({
           aria-label="inferred"
         />
       )}
-      {sentence(clause.text)}
+      <ClauseContent text={sentence(clause.text)} onParam={onParam} />
       <button
         onClick={(e) => {
           e.stopPropagation();

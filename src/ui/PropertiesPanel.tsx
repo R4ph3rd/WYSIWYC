@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { IRNode, NodeStyle } from '@/ir/types';
+import { GOOGLE_FONTS, fontStack } from '@/lib/fonts';
 
 // --- Shadow: structured (Figma-style) ⇄ CSS box-shadow string -------------
 // NodeStyle.shadow stays a raw CSS string (the renderer applies it verbatim);
@@ -74,13 +75,6 @@ function composeColor(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${Math.round((alpha / 100) * 100) / 100})`;
 }
 
-const FONT_FAMILIES = [
-  'ui-sans-serif, system-ui',
-  'ui-serif, Georgia',
-  'ui-monospace, SFMono-Regular',
-  'Inter, system-ui',
-  'Fraunces, Georgia, serif',
-];
 
 /** A draggable inspector parameter (DirectGPT: drag a coordinate into prose). */
 interface ParamDrag {
@@ -190,12 +184,15 @@ export function PropertiesPanel() {
           <Section title="Typography" icon={<TypeIcon className="h-3 w-3" />}>
             <Row label="Family">
               <select
-                value={node.style?.fontFamily ?? FONT_FAMILIES[0]}
+                value={node.style?.fontFamily ?? ''}
                 onChange={(e) => set({ fontFamily: e.target.value })}
                 className="w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px]"
               >
-                {FONT_FAMILIES.map((f) => (
-                  <option key={f} value={f}>{f.split(',')[0]}</option>
+                <option value="">Default</option>
+                {GOOGLE_FONTS.map((f) => (
+                  <option key={f} value={fontStack(f)} style={{ fontFamily: fontStack(f) }}>
+                    {f}
+                  </option>
                 ))}
               </select>
             </Row>
