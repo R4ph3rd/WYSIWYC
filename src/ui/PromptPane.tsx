@@ -115,6 +115,15 @@ export function PromptPane() {
         </div>
       </div>
 
+      {clauses.length > 0 && (
+        <div className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 text-[10px] text-slate-400">
+          <span className="rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2">
+            underlined
+          </span>
+          values are editable — click to tweak
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-3 py-3">
         {clauses.length === 0 ? (
           <p className="px-1 py-6 text-center text-xs text-slate-400">
