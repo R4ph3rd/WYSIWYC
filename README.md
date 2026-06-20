@@ -43,11 +43,52 @@ PROMPT (natural-language living spec)  ⇄  IR (JSON scene graph = SOURCE OF TRU
 authoritative; output→prompt is a *proposal* applied only once the user
 accepts, swaps, or rephrases it.
 
-**The prompt reads like a person, not a config file.** The spec is rendered
-as flowing sentences (each one a hoverable, editable span) and both LLM
-directions are instructed to use *semantic* values first — "place the CTA
-below the form", "a softer pink" — never raw pixels or hex codes unless the
-user typed them.
+**The prompt reads like a person, not a config file.** The spec is rendered as
+short, categorized sentences and offers two views you can switch between — a
+**Structured** view (clauses grouped into Layout / Components / Style / Content
+sections) and a **Prose** view (the same clauses as flowing text, each
+underlined in its category color). Each clause is hoverable (it traces the UI
+nodes it owns), single-click opens alternatives/remove, and double-click edits
+it in place. Both LLM directions are instructed to use *semantic* values first
+— "place the CTA below the form", "a softer pink" — never raw pixels or hex
+codes unless the user typed them.
+
+## Workspace
+
+- **Top bar** — branding, one-click **Examples**, a **Layers** toggle, the
+  **Connect** button (provider + key), and global actions (**New / Undo / Log**).
+- **Left rail** — the full-height **Spec** panel (the living prompt, with the
+  Structured/Prose toggle and the inline composer at the bottom). A toggleable
+  **Layers** tree can sit beside it.
+- **Center** — the **Canvas**. A floating tool palette sits at the **bottom**
+  (Pointer / Rectangle / Circle / Line / Pen / Text — V R O L P T). A
+  **sync-mode toggle** sits in the top-left corner (see below). Drawn shapes
+  default to a neutral grey.
+- **Right rail** — the **Properties** panel: Figma-style controls for the
+  selected node (position/size, fill/stroke with opacity, a structured drop/
+  inner **shadow** editor, a searchable Google-Fonts family picker, weight,
+  alignment, …). Number fields have +/- steppers; colors have a swatch + hex +
+  opacity.
+- **Bottom** — the **Diff Ribbon**: the proposed prompt delta + confidence,
+  resolved by Accept / Alternatives / Rephrase.
+
+## Direct manipulation & shortcuts
+
+Direct edits write the IR deterministically (no LLM in the gesture):
+
+- Draw with the palette; drag to move, corner-handles to resize, drag flow
+  elements to reorder.
+- **Double-click a text node** to edit its content inline on the canvas.
+- **⌘/Ctrl+C / V** copy & paste, **⌘/Ctrl+D** or **Alt-drag** to duplicate,
+  **Shift-click** to multi-select, **Delete** to remove, **⌘/Ctrl+Z** to undo.
+- Press **?** (or trigger any unbound hotkey) to open a slide-up keyboard
+  shortcuts sheet.
+
+**Sync mode (canvas → spec).** A corner toggle controls how canvas edits update
+the spec: **Auto** runs the Call B back-channel immediately after each edit;
+**Manual** holds the edits (the IR still updates live) and shows an *Update
+spec* button to run the back-channel on demand. Switching back to Auto flushes
+anything held.
 
 
 ## LLM providers (Connect button)
@@ -111,6 +152,19 @@ npm run dev        # http://localhost:5173
 
 Open the app, click **Connect**, paste an API key, pick a model. No backend
 required — all LLM calls go from the browser directly to the provider.
+
+## Tailwind at runtime
+
+Because the LLM authors arbitrary Tailwind classes **at runtime**, build-time
+JIT purging cannot know them. This PoC uses the **Tailwind Play CDN** (in-browser
+compiler, see `index.html`) so any class — including arbitrary values like
+`bg-[#4f46e5]` written by inline parameter edits — compiles on the fly.
+
+## Deploying
+
+CI builds and publishes `dist/` to the `gh-pages` branch on **every push**
+(`.github/workflows/deploy.yml`). The deployed demo is fully functional: bring
+your own key on the live site.
 
 ## Research framing (spec §7)
 
