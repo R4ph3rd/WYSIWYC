@@ -147,6 +147,10 @@ interface AppState {
   shortcutsOpen: boolean;
   /** Set to a timestamp when an unbound hotkey is pressed (drives the hint banner). */
   unknownShortcutAt: number | null;
+  /** Whether canvas edits auto-sync to the prompt (Call B) or wait for a manual trigger. */
+  irSyncMode: 'auto' | 'manual';
+  /** In manual mode, the held baseline IR + latest op awaiting a manual spec update. */
+  pendingSync: { op: ManipulationOp; prevIR: IR } | null;
 
   generating: boolean; // Compose / Call A in flight
   proposing: boolean; // Call B in flight
@@ -210,6 +214,10 @@ interface AppState {
   setShortcutsOpen: (open: boolean) => void;
   /** Flag an unbound hotkey so the canvas shows the "see all shortcuts" hint. */
   flagUnknownShortcut: () => void;
+  /** Switch canvas→prompt syncing between automatic and manual. */
+  setIrSyncMode: (mode: 'auto' | 'manual') => void;
+  /** Manually run the held back-channel (manual sync mode). */
+  syncNow: () => void;
 
   /**
    * Forward edit (Prompt → IR): set a clause parameter token's value. Writes the
@@ -410,6 +418,18 @@ export const useAppStore = create<AppState>((set, get) => {
     })();
   }
 
+  /**
+   * Route a canvas/panel manipulation's back-channel: run it now in "auto" sync
+   * mode, or hold it (baseline IR + latest op) for a manual "Update spec" click.
+   */
+  function maybePropose(op: ManipulationOp, prevIR: IR): void {
+    if (get().irSyncMode === 'auto') {
+      propose(op, prevIR);
+      return;
+    }
+    set((s) => ({ pendingSync: { op, prevIR: s.pendingSync?.prevIR ?? prevIR } }));
+  }
+
   // --- Debounced Properties-panel back-channel ----------------------------
   // Each keystroke / slider tick writes the IR immediately (deterministic);
   // once the burst settles we diff the node against its pre-burst state and
@@ -440,7 +460,7 @@ export const useAppStore = create<AppState>((set, get) => {
       ) {
         return;
       }
-      propose(
+      maybePropose(
         {
           kind: 'restyle',
           id,
@@ -471,6 +491,7 @@ export const useAppStore = create<AppState>((set, get) => {
       clipboard: null,
       shortcutsOpen: false,
       unknownShortcutAt: null,
+      pendingSync: null,
       error: null,
     };
   }
@@ -494,6 +515,8 @@ export const useAppStore = create<AppState>((set, get) => {
     clipboard: null,
     shortcutsOpen: false,
     unknownShortcutAt: null,
+    irSyncMode: 'auto',
+    pendingSync: null,
     generating: false,
     proposing: false,
     error: null,
@@ -711,10 +734,10 @@ export const useAppStore = create<AppState>((set, get) => {
             ? s.selectedNodeIds.filter((id) => !affectedIds.includes(id))
             : s.selectedNodeIds,
       }));
-      propose(op, prevIR);
+      maybePropose(op, prevIR);
     },
 
-    proposeManipulation: (op, prevIR) => propose(op, prevIR),
+    proposeManipulation: (op, prevIR) => maybePropose(op, prevIR),
 
     acceptProposal: (overrideText) => {
       const { pendingProposal } = get();
@@ -793,6 +816,21 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen, unknownShortcutAt: null }),
     flagUnknownShortcut: () => set({ unknownShortcutAt: Date.now() }),
+
+    setIrSyncMode: (mode) => {
+      set({ irSyncMode: mode });
+      // Switching back to auto flushes any change held while in manual mode.
+      if (mode === 'auto') {
+        const ps = get().pendingSync;
+        if (ps) { set({ pendingSync: null }); propose(ps.op, ps.prevIR); }
+      }
+    },
+    syncNow: () => {
+      const ps = get().pendingSync;
+      if (!ps) return;
+      set({ pendingSync: null });
+      propose(ps.op, ps.prevIR);
+    },
 
     setClauseParam: (clauseId, span, value, original) => {
       const state = get();
@@ -908,6 +946,7 @@ export const useAppStore = create<AppState>((set, get) => {
           history: s.history.slice(0, -1),
           pendingProposal: null,
           pendingAffectedIds: [],
+          pendingSync: null,
           recentIds: [],
         };
       }),
