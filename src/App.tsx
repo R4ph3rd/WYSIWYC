@@ -1,16 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Undo2, Download, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon } from 'lucide-react';
+import { Undo2, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon } from 'lucide-react';
 import { useAppStore, type Tool } from './store/appStore';
 import { useSettingsStore } from './store/settingsStore';
 import { familyFromStack } from './lib/fonts';
 import { loadGoogleFont } from './lib/loadFont';
 import { SAMPLES } from './ir/samples';
-import { downloadBackChannelLog } from './lib/log';
 import { PromptPane } from './ui/PromptPane';
 import { Canvas } from './ui/Canvas';
 import { LayersPanel } from './ui/LayersPanel';
 import { PropertiesPanel } from './ui/PropertiesPanel';
-import { DiffRibbon } from './ui/DiffRibbon';
 import { ConnectDialog } from './ui/ConnectDialog';
 import { Button } from './ui/primitives/button';
 
@@ -134,25 +132,11 @@ export default function App() {
 
           <div className="mx-1 h-5 w-px bg-slate-200" />
 
-          <Button
-            size="sm"
-            variant={layersOpen ? 'secondary' : 'ghost'}
-            onClick={() => setLayersOpen((v) => !v)}
-            title="Toggle layers panel"
-          >
-            <LayersIcon className="h-3.5 w-3.5" /> Layers
-          </Button>
-
-          <div className="mx-1 h-5 w-px bg-slate-200" />
-
           <Button size="sm" variant="ghost" onClick={newBlank}>
             <FilePlus2 className="h-3.5 w-3.5" /> New
           </Button>
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo}>
             <Undo2 className="h-3.5 w-3.5" /> Undo
-          </Button>
-          <Button size="sm" variant="ghost" onClick={downloadBackChannelLog} title="Download back-channel study log">
-            <Download className="h-3.5 w-3.5" /> Log
           </Button>
         </div>
       </header>
@@ -172,18 +156,30 @@ export default function App() {
         </div>
       )}
 
-      {/* Body: prompt rail | (toggleable layers) | canvas | properties rail */}
+      {/* Body: prompt rail | layers bar/panel | canvas | properties rail */}
       <div className="flex flex-1 overflow-hidden">
         {/* Full-height prompt rail. */}
         <div className="flex w-96 shrink-0 flex-col border-r border-slate-200 bg-white">
           <PromptPane />
         </div>
 
-        {/* Layers — toggleable, sits to the right of the prompt panel. */}
-        {layersOpen && (
+        {/* Layers — a vertical bar on the right of the spec that expands into
+            the full panel when toggled on. */}
+        {layersOpen ? (
           <div className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
-            <LayersPanel />
+            <LayersPanel onCollapse={() => setLayersOpen(false)} />
           </div>
+        ) : (
+          <button
+            onClick={() => setLayersOpen(true)}
+            title="Show layers"
+            className="flex w-8 shrink-0 flex-col items-center gap-2 border-r border-slate-200 bg-white py-3 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+          >
+            <LayersIcon className="h-4 w-4" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider [writing-mode:vertical-rl]">
+              Layers
+            </span>
+          </button>
         )}
 
         <Canvas />
@@ -192,8 +188,6 @@ export default function App() {
           <PropertiesPanel />
         </div>
       </div>
-
-      <DiffRibbon />
     </div>
   );
 }

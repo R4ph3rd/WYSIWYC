@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { X, RefreshCw } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import { CLAUSE_CATEGORIES, type ClauseCategory, type IRNode, type ParamSpan, type PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
-import { paramsForClause } from '@/ir/paramLexer';
-import { COLOR_NAMES } from '@/ir/paramLexer';
+import { paramsForClause, COLOR_NAMES } from '@/ir/paramLexer';
 import { RefComposer } from './RefComposer';
 import { RecipesRail } from './RecipesRail';
 import { AlternativesMenu } from './AlternativesMenu';
 import { ParamPopover } from './ParamPopover';
+import { DiffRibbon } from './DiffRibbon';
 
 /**
  * The prompt is a LIVING SPEC with two views the user can switch between:
@@ -53,10 +53,27 @@ export function PromptPane() {
   const focusRequest = useAppStore((s) => s.focusRequest);
   const chooseAlternative = useAppStore((s) => s.chooseAlternative);
   const setClauseParam = useAppStore((s) => s.setClauseParam);
+  const selectNode = useAppStore((s) => s.selectNode);
   const irNodes = useAppStore((s) => s.ir.nodes);
+  const pendingProposal = useAppStore((s) => s.pendingProposal);
+  const proposing = useAppStore((s) => s.proposing);
+  const irSyncMode = useAppStore((s) => s.irSyncMode);
+  const hasPendingSync = useAppStore((s) => s.pendingSync !== null);
+  const syncNow = useAppStore((s) => s.syncNow);
   const selectedClauseId = useAppStore((s) =>
     selectedNodeId ? (s.ir.nodes.find((n) => n.id === selectedNodeId)?.provenance.promptClauseId ?? null) : null,
   );
+
+  // While a Call B proposal is pending, preview the spec with the proposed
+  // clauses merged in and flagged, so the change appears in place in the IR.
+  const { displayClauses, pendingIds } = useMemo(() => {
+    if (!pendingProposal) return { displayClauses: clauses, pendingIds: new Set<string>() };
+    const removed = new Set(pendingProposal.removedClauseIds);
+    const updatedById = new Map(pendingProposal.updatedClauses.map((c) => [c.id, c]));
+    const merged = clauses.filter((c) => !removed.has(c.id)).map((c) => updatedById.get(c.id) ?? c);
+    for (const c of pendingProposal.updatedClauses) if (!merged.some((m) => m.id === c.id)) merged.push(c);
+    return { displayClauses: merged, pendingIds: new Set(updatedById.keys()) };
+  }, [clauses, pendingProposal]);
 
   // Nodes owned by each clause (provenance link), for binding lexer param spans.
   const ownedByClause = useMemo(() => {
@@ -83,16 +100,20 @@ export function PromptPane() {
     setEditingId(null);
     if (text !== null && text.trim() && text !== c.text) editClause(c.id, text);
   };
-  const clauseHandlers = (c: PromptClause) => ({
+  // Proposed (pending) clauses are display-only: their value isn't in the store
+  // yet, so the normal menu/edit/param actions are suppressed.
+  const clauseHandlers = (c: PromptClause, pending = false) => ({
     selected: selectedClauseId === c.id,
     flash: recentIds.includes(c.id),
-    spans: spansFor(c),
+    spans: pending ? [] : spansFor(c),
     onHover: hoverClause,
-    onOpenMenu: (x: number, y: number) => setAltMenu({ clauseId: c.id, x, y }),
-    onEdit: () => setEditingId(c.id),
-    onRemove: () => removeClause(c.id),
-    onParam: (span: ParamSpan, e: React.MouseEvent) =>
-      setParamPopover({ clauseId: c.id, span, original: { text: c.text, params: c.params }, x: e.clientX, y: e.clientY }),
+    onOpenMenu: pending ? () => {} : (x: number, y: number) => setAltMenu({ clauseId: c.id, x, y }),
+    onEdit: pending ? () => {} : () => setEditingId(c.id),
+    onRemove: pending ? () => {} : () => removeClause(c.id),
+    onParam: pending
+      ? () => {}
+      : (span: ParamSpan, e: React.MouseEvent) =>
+          setParamPopover({ clauseId: c.id, span, original: { text: c.text, params: c.params }, x: e.clientX, y: e.clientY }),
   });
 
   return (
@@ -118,21 +139,25 @@ export function PromptPane() {
       {clauses.length > 0 && (
         <div className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 text-[10px] text-slate-400">
           <span className="rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2">
-            underlined
+            highlighted
           </span>
           values are editable. click to tweak
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-3 py-3">
-        {clauses.length === 0 ? (
+      {/* Clicking empty space in the spec clears any canvas selection. */}
+      <div
+        className="flex-1 overflow-y-auto px-3 py-3"
+        onClick={(e) => { if (e.target === e.currentTarget) selectNode(null); }}
+      >
+        {displayClauses.length === 0 ? (
           <p className="px-1 py-6 text-center text-xs text-slate-400">
             Nothing here yet — describe what you want below, or pick an example.
           </p>
         ) : view === 'structured' ? (
           <div className="space-y-4">
             {CLAUSE_CATEGORIES.map((cat) => {
-              const items = clauses.filter((c) => c.category === cat);
+              const items = displayClauses.filter((c) => c.category === cat);
               if (items.length === 0) return null;
               const meta = CATEGORY_META[cat];
               return (
@@ -146,10 +171,10 @@ export function PromptPane() {
                   </div>
                   <div className="space-y-0.5">
                     {items.map((c) =>
-                      editingId === c.id ? (
+                      editingId === c.id && !pendingIds.has(c.id) ? (
                         <ClauseEditor key={c.id} clause={c} onDone={onDoneEdit(c)} />
                       ) : (
-                        <ClauseItem key={c.id} clause={c} {...clauseHandlers(c)} />
+                        <ClauseItem key={c.id} clause={c} pending={pendingIds.has(c.id)} {...clauseHandlers(c, pendingIds.has(c.id))} />
                       ),
                     )}
                   </div>
@@ -160,11 +185,11 @@ export function PromptPane() {
         ) : (
           <>
             <p className="text-[13px] leading-7 text-slate-700">
-              {clauses.map((c) =>
-                editingId === c.id ? (
+              {displayClauses.map((c) =>
+                editingId === c.id && !pendingIds.has(c.id) ? (
                   <ClauseEditor key={c.id} clause={c} onDone={onDoneEdit(c)} />
                 ) : (
-                  <ClauseInline key={c.id} clause={c} {...clauseHandlers(c)} />
+                  <ClauseInline key={c.id} clause={c} pending={pendingIds.has(c.id)} {...clauseHandlers(c, pendingIds.has(c.id))} />
                 ),
               )}
             </p>
@@ -206,6 +231,21 @@ export function PromptPane() {
           />
         );
       })()}
+
+      {/* Manual sync: register applied canvas edits into the spec. */}
+      {irSyncMode === 'manual' && hasPendingSync && !proposing && !pendingProposal && (
+        <div className="border-t border-slate-100 px-2.5 pt-2.5">
+          <button
+            onClick={syncNow}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Update spec from canvas
+          </button>
+        </div>
+      )}
+
+      {/* Pending Call B proposal — accept / alternatives / rephrase, inline. */}
+      <DiffRibbon />
 
       <div className="border-t border-slate-100 p-2.5">
         <RecipesRail />
@@ -309,6 +349,7 @@ function ClauseItem({
   clause,
   selected,
   flash,
+  pending,
   spans,
   onHover,
   onOpenMenu,
@@ -319,6 +360,7 @@ function ClauseItem({
   clause: PromptClause;
   selected: boolean;
   flash: boolean;
+  pending?: boolean;
   spans: ParamSpan[];
   onHover: (id: string | null) => void;
   onOpenMenu: (x: number, y: number) => void;
@@ -336,6 +378,7 @@ function ClauseItem({
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
       onClick={(e) => {
+        if (pending) return;
         const { clientX, clientY } = e;
         if (clickTimer.current) return;
         clickTimer.current = setTimeout(() => {
@@ -344,40 +387,44 @@ function ClauseItem({
         }, 220);
       }}
       onDoubleClick={() => {
+        if (pending) return;
         if (clickTimer.current) {
           clearTimeout(clickTimer.current);
           clickTimer.current = null;
         }
         onEdit();
       }}
-      title={inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
+      title={pending ? 'Proposed update — accept or rephrase below' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
-        'group flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] leading-snug transition-colors',
-        selected
-          ? 'border-indigo-200 bg-indigo-50 text-indigo-900'
-          : 'border-transparent text-slate-700 hover:bg-slate-50',
+        'group flex items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] leading-snug transition-colors',
+        pending
+          ? 'border-dashed border-indigo-300 bg-indigo-50/60 text-indigo-900'
+          : selected
+            ? 'cursor-pointer border-indigo-200 bg-indigo-50 text-indigo-900'
+            : 'cursor-pointer border-transparent text-slate-700 hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
     >
       <span
         className={cn(
           'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',
-          inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
+          pending ? 'bg-indigo-500' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
         )}
-        aria-label={inferred ? 'inferred' : undefined}
-        title={inferred ? 'Inferred — not stated by you' : undefined}
       />
       <span className="flex-1"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        className="mt-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
-        aria-label="Remove sentence"
-      >
-        <X className="h-3 w-3 text-slate-300 hover:text-rose-500" />
-      </button>
+      {pending ? (
+        <span className="mt-0.5 shrink-0 rounded-full bg-indigo-100 px-1.5 text-[8px] font-bold uppercase tracking-wide text-indigo-600">
+          Proposed
+        </span>
+      ) : (
+        <button
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          className="mt-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+          aria-label="Remove sentence"
+        >
+          <X className="h-3 w-3 text-slate-300 hover:text-rose-500" />
+        </button>
+      )}
     </div>
   );
 }
@@ -387,6 +434,7 @@ function ClauseInline({
   clause,
   selected,
   flash,
+  pending,
   spans,
   onHover,
   onOpenMenu,
@@ -397,6 +445,7 @@ function ClauseInline({
   clause: PromptClause;
   selected: boolean;
   flash: boolean;
+  pending?: boolean;
   onHover: (id: string | null) => void;
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
@@ -411,6 +460,7 @@ function ClauseInline({
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
       onClick={(e) => {
+        if (pending) return;
         const { clientX, clientY } = e;
         if (clickTimer.current) return;
         clickTimer.current = setTimeout(() => {
@@ -419,37 +469,42 @@ function ClauseInline({
         }, 220);
       }}
       onDoubleClick={() => {
+        if (pending) return;
         if (clickTimer.current) {
           clearTimeout(clickTimer.current);
           clickTimer.current = null;
         }
         onEdit();
       }}
-      title={inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
+      title={pending ? 'Proposed update — accept or rephrase below' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
-        'group -mx-0.5 cursor-pointer rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
+        'group -mx-0.5 rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
         CATEGORY_META[clause.category].underline,
-        selected ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-slate-50',
+        pending
+          ? 'bg-indigo-50 text-indigo-900 decoration-dashed'
+          : cn('cursor-pointer', selected ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-slate-50'),
         flash && 'wysiwyc-flash',
       )}
     >
-      {inferred && (
+      {pending && (
+        <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-indigo-500 align-middle" aria-label="proposed" />
+      )}
+      {!pending && inferred && (
         <span
           className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle ring-2 ring-amber-100"
           aria-label="inferred"
         />
       )}
       <ClauseContent text={clause.text} spans={spans} onParam={onParam} />
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        className="ml-0.5 hidden align-baseline group-hover:inline-block"
-        aria-label="Remove sentence"
-      >
-        <X className="inline h-3 w-3 text-slate-300 hover:text-rose-500" />
-      </button>{' '}
+      {!pending && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          className="ml-0.5 hidden align-baseline group-hover:inline-block"
+          aria-label="Remove sentence"
+        >
+          <X className="inline h-3 w-3 text-slate-300 hover:text-rose-500" />
+        </button>
+      )}{' '}
     </span>
   );
 }

@@ -322,6 +322,12 @@ function writeParam(ir: IR, node: IRNode, span: ParamSpan, value: string): IR {
   return ir;
 }
 
+/** The deictic word ("here"/"there") a location chip's label starts with. */
+function keywordOf(label: string): string {
+  const m = label.match(/^(here|there)/i);
+  return m ? m[1].toLowerCase() : 'here';
+}
+
 /** The human-readable prose form of a value (null = leave the clause token unchanged). */
 function humanParamValue(span: ParamSpan, value: string): string | null {
   switch (span.kind) {
@@ -578,30 +584,33 @@ export const useAppStore = create<AppState>((set, get) => {
 
     addComposerLocationRef: (x, y, nearNodeId) =>
       set((s) => {
+        const coords = `(${Math.round(x)}, ${Math.round(y)})`;
         // A draft has a single "here/there" pin — repeated clicks MOVE it rather
         // than stacking new chips (which the word "here" in the draft would spam).
         if (composerRefs(s.composerValue).some((r) => r.kind === 'location')) {
           const composerValue = s.composerValue.map((seg) =>
             seg.type === 'ref' && seg.ref.kind === 'location'
-              ? { ...seg, ref: { ...seg.ref, x, y, nearNodeId } }
+              ? { ...seg, ref: { ...seg.ref, x, y, nearNodeId, label: `${keywordOf(seg.ref.label)} ${coords}` } }
               : seg,
           );
           return { composerValue };
         }
         // If the draft says "here"/"there", the pin REPLACES that word so the
-        // sentence reads naturally with the chip standing in for the deixis.
+        // sentence reads naturally with the chip standing in for the deixis. The
+        // chip still shows the word plus the picked coordinates.
         const KEYWORD = /\b(here|there)\b/i;
         const match = s.composerValue
           .filter((seg): seg is { type: 'text'; text: string } => seg.type === 'text')
           .map((seg) => seg.text.match(KEYWORD)?.[0])
           .find(Boolean);
+        const word = (match ?? 'here').toLowerCase();
         const ref: PromptRef = {
           kind: 'location',
           refId: nextComposerRefId(s.composerValue),
           x,
           y,
           nearNodeId,
-          label: match ? match.toLowerCase() : `here (${Math.round(x)}, ${Math.round(y)})`,
+          label: `${word} ${coords}`,
         };
         const replaced = match
           ? insertRefReplacingKeyword(s.composerValue, ref, KEYWORD)

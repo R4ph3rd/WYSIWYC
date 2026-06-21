@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Sparkles, Keyboard, X, RefreshCw, Zap } from 'lucide-react';
+import { Loader2, Sparkles, Keyboard, X } from 'lucide-react';
 import { useAppStore, toolToRole } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
 import type { ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
 import { SAMPLES } from '@/ir/samples';
-import { composerIsEmpty, composerRefs, emptyComposer, serializeComposer } from '@/lib/composer';
+import { composerIsEmpty, composerRefs, emptyComposer, removeRef, serializeComposer } from '@/lib/composer';
 import { cn } from '@/lib/utils';
 import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
@@ -59,13 +59,12 @@ export function Canvas() {
   const focusRequest = useAppStore((s) => s.focusRequest);
   const editContent = useAppStore((s) => s.editContent);
   const duplicateNode = useAppStore((s) => s.duplicateNode);
+  const setComposerValue = useAppStore((s) => s.setComposerValue);
   const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
   const setShortcutsOpen = useAppStore((s) => s.setShortcutsOpen);
   const unknownShortcutAt = useAppStore((s) => s.unknownShortcutAt);
   const irSyncMode = useAppStore((s) => s.irSyncMode);
   const setIrSyncMode = useAppStore((s) => s.setIrSyncMode);
-  const hasPendingSync = useAppStore((s) => s.pendingSync !== null);
-  const syncNow = useAppStore((s) => s.syncNow);
 
   // Composing context: the canvas feeds the single composer when the user is
   // mid-prompt (focused, or a draft exists). Clicking an element then refers to
@@ -76,6 +75,11 @@ export function Canvas() {
   const promptRefs = composerRefs(composerValue);
   const referencedNodeIds = promptRefs.flatMap((r) => ('nodeId' in r && r.nodeId ? [r.nodeId] : []));
   const locationRefs = promptRefs.flatMap((r) => (r.kind === 'location' ? [r] : []));
+  // Letter IDs (A, B, …) for node chips, shown on the canvas overlay too.
+  const nodeLetters: Record<string, string> = {};
+  promptRefs
+    .filter((r) => r.kind === 'node')
+    .forEach((r, i) => { if ('nodeId' in r && r.nodeId) nodeLetters[r.nodeId] = String.fromCharCode(65 + i); });
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
   const createShape = useAppStore((s) => s.createShape);
@@ -397,48 +401,24 @@ export function Canvas() {
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
-      {/* Sync toggle (top-left corner): auto-sync canvas edits to the spec, or
-          hold them for a manual "Update spec" click. */}
-      <div className="absolute left-3 top-3 z-20 flex items-center gap-2">
-        <div
-          className="flex items-center rounded-lg border border-slate-200 bg-white/95 p-0.5 text-[11px] shadow-sm backdrop-blur"
-          title="How canvas edits update the spec"
-        >
+      {/* Sync mode (top-right): auto-sync canvas edits to the spec, or hold them
+          for a manual "Update spec" click shown above the chat. */}
+      <div
+        className="absolute right-3 top-3 z-20 flex flex-col rounded-md border border-slate-200 bg-white/95 p-0.5 text-[10px] shadow-sm backdrop-blur"
+        title="How canvas edits update the spec"
+      >
+        {(['auto', 'manual'] as const).map((m) => (
           <button
-            onClick={() => setIrSyncMode('auto')}
+            key={m}
+            onClick={() => setIrSyncMode(m)}
             className={cn(
-              'flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors',
-              irSyncMode === 'auto' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100',
+              'rounded px-2 py-0.5 font-medium capitalize transition-colors',
+              irSyncMode === m ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100',
             )}
           >
-            <Zap className="h-3 w-3" /> Auto
+            {m}
           </button>
-          <button
-            onClick={() => setIrSyncMode('manual')}
-            className={cn(
-              'flex items-center gap-1 rounded-md px-2 py-1 font-medium transition-colors',
-              irSyncMode === 'manual' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-100',
-            )}
-          >
-            Manual
-          </button>
-        </div>
-        {irSyncMode === 'manual' && (
-          <button
-            onClick={syncNow}
-            disabled={!hasPendingSync}
-            title={hasPendingSync ? 'Sync canvas edits to the spec' : 'No pending canvas edits'}
-            className={cn(
-              'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium shadow-sm transition-colors',
-              hasPendingSync
-                ? 'bg-indigo-600 text-white hover:bg-indigo-700'
-                : 'cursor-not-allowed border border-slate-200 bg-white/95 text-slate-400',
-            )}
-          >
-            <RefreshCw className="h-3.5 w-3.5" /> Update spec
-            {hasPendingSync && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
-          </button>
-        )}
+        ))}
       </div>
 
       {/* Floating tool palette (bottom center) */}
@@ -462,7 +442,7 @@ export function Canvas() {
       <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {generating && !isEmpty && (
-        <div className="absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-600 shadow">
+        <div className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-600 shadow">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Composing…
         </div>
       )}
@@ -554,7 +534,17 @@ export function Canvas() {
           />
 
           {/* Labeled borders on elements referred to by the prompt + here/there pins. */}
-          <PromptTargetOverlay stageRef={stageRef} nodeIds={referencedNodeIds} locations={locationRefs} />
+          <PromptTargetOverlay
+            stageRef={stageRef}
+            nodeIds={referencedNodeIds}
+            letters={nodeLetters}
+            locations={locationRefs}
+            onRemoveLocation={(refId) => {
+              // Removing a pin must not blur the composer — keep typing.
+              setComposerValue(removeRef(useAppStore.getState().composerValue, refId));
+              requestFocus('composer');
+            }}
+          />
 
           {/* Inline text editor (double-click a text node). */}
           {editingText && (

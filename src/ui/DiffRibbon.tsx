@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Loader2, ArrowUpFromLine, Pencil, ChevronDown, Sparkles } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
-import { cn } from '@/lib/utils';
-import type { ProposalConfidence } from '@/ir/types';
 import { Button } from './primitives/button';
-
-const CONFIDENCE_STYLE: Record<ProposalConfidence, string> = {
-  high: 'bg-emerald-100 text-emerald-700',
-  medium: 'bg-amber-100 text-amber-700',
-  low: 'bg-rose-100 text-rose-700',
-};
 
 /**
  * The back-channel banner. A direct manipulation is ALREADY in the IR; this
@@ -71,14 +63,6 @@ export function DiffRibbon() {
             ) : (
               <span className="flex-1 text-sm text-slate-800">{proposal.deltaDescription}</span>
             )}
-            <span
-              className={cn(
-                'shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold uppercase',
-                CONFIDENCE_STYLE[proposal.confidence],
-              )}
-            >
-              {proposal.confidence}
-            </span>
 
             {rephrasing ? (
               <>

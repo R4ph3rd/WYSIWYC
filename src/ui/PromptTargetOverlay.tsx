@@ -1,14 +1,14 @@
 import { useLayoutEffect, useState, type RefObject } from 'react';
-import { MapPin } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { PromptRef } from '@/ir/types';
 
 /**
- * Non-interactive overlay drawn inside the canvas stage. It puts a labeled
- * emerald border on every element the current prompt refers to (DirectGPT
- * "this object is part of your edit") and a pin wherever a here/there location
- * chip points. Node boxes are measured from the live DOM so flow-positioned
- * nodes work too; it re-measures whenever the references or the IR change.
+ * Overlay drawn inside the canvas stage. It puts a primary-indigo border (with
+ * the element's letter ID, matching its chat chip) on every element the current
+ * prompt refers to, and a removable pin wherever a here/there location chip
+ * points. Node boxes are measured from the live DOM so flow-positioned nodes
+ * work too; it re-measures whenever the references or the IR change.
  */
 interface Box {
   id: string;
@@ -23,11 +23,16 @@ type LocationRef = Extract<PromptRef, { kind: 'location' }>;
 export function PromptTargetOverlay({
   stageRef,
   nodeIds,
+  letters,
   locations,
+  onRemoveLocation,
 }: {
   stageRef: RefObject<HTMLDivElement>;
   nodeIds: string[];
+  /** nodeId → its letter ID (A, B, …), mirrored on the chat chip. */
+  letters: Record<string, string>;
   locations: LocationRef[];
+  onRemoveLocation?: (refId: string) => void;
 }) {
   const ir = useAppStore((s) => s.ir);
   const [boxes, setBoxes] = useState<Box[]>([]);
@@ -73,12 +78,12 @@ export function PromptTargetOverlay({
             top: b.top,
             width: b.width,
             height: b.height,
-            outline: '2px solid #10b981',
+            outline: '2px solid #4f46e5',
             outlineOffset: 2,
           }}
         >
-          <span className="absolute -top-[18px] left-0 whitespace-nowrap rounded-full bg-emerald-500 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
-            in your prompt
+          <span className="absolute -top-[18px] left-0 grid h-4 min-w-[16px] place-items-center rounded-full bg-indigo-600 px-1 text-[9px] font-bold text-white shadow-sm">
+            {letters[b.id] ?? '•'}
           </span>
         </div>
       ))}
@@ -90,10 +95,19 @@ export function PromptTargetOverlay({
           style={{ left: loc.x, top: loc.y }}
         >
           <div className="flex flex-col items-center">
-            <span className="mb-0.5 whitespace-nowrap rounded-full bg-indigo-600 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
-              here
+            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full bg-indigo-600 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+              {loc.label}
+              {onRemoveLocation && (
+                <button
+                  onClick={() => onRemoveLocation(loc.refId)}
+                  aria-label="Remove pin"
+                  className="pointer-events-auto -mr-0.5 opacity-80 hover:opacity-100"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              )}
             </span>
-            <MapPin className="h-4 w-4 text-indigo-600 drop-shadow" fill="#4f46e5" />
+            <Plus className="h-4 w-4 text-indigo-600 drop-shadow" strokeWidth={3} />
           </div>
         </div>
       ))}

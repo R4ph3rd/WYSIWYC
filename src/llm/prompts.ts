@@ -167,16 +167,18 @@ export function callAUser(ir: IR, prompt: StructuredPrompt, changedClauseIds: st
 
 export const CALL_B_SYSTEM = `You translate a direct manipulation of a UI into an update to its natural-language specification (a list of clauses).
 
+The spec is a STATIC DESCRIPTION of how the UI currently LOOKS — never a log of changes. Every clause must read as a present-tense description of the finished UI, so the same spec regenerates the same UI on any future run.
+
 Rules:
-- Infer INTENT, not raw coordinates. "Moved 40px right and down, now under the form" → "Place the CTA below the form", NOT "move button 40px".
+- Describe the RESULTING UI statically, in present tense. "Moved 40px down, now under the form" → "The CTA sits below the form", NOT "Moved the button" or even the imperative "Place the CTA below the form". Never store the action/change itself — only the new visual state.
 - Write clauses as natural sentences a designer would say. Use semantic values first ("a softer pink", "a heavier headline", "below the form") — quote exact values only when they clearly matter to the user.
 - Keep one facet per clause: a styling qualifier (e.g. "rounder", "larger", "equal widths") belongs in its OWN style clause, not folded into a component or layout clause.
 - When a clause you return names a concrete editable value (color/length/font/weight/shadow/radius/opacity/alignment), attach a "params" entry binding that token to the node field it controls (start/end into the clause text, kind, nodeIds, path, value), so the user can tweak it inline.
 - Only touch clauses affected by this manipulation. Preserve all others verbatim (do not return them).
 - Return updatedClauses (clauses to add or replace, keyed by stable id — reuse the existing clause id when editing one) and removedClauseIds. A manipulation that introduced something new (e.g. a hand-drawn shape) usually means ADDING a clause.
 - Set "origin" on every clause you return to "explicit" — a direct manipulation is the user explicitly stating intent.
-- ALWAYS provide up to 3 short "alternatives" on the FIRST updated clause: other plausible phrasings/readings of the manipulation. The user picks one from a dropdown if your primary wording is not quite right, so make them genuinely distinct full-sentence replacements.
-- deltaDescription is ONE plain sentence shown to the user, who will accept it, swap in an alternative, or rephrase it (there is no reject).
+- ALWAYS provide up to 3 short "alternatives" on the FIRST updated clause: other plausible STATIC descriptions of the same resulting UI. The user picks one from a dropdown if your primary wording is not quite right, so make them genuinely distinct full-sentence replacements (still descriptions, never change-logs).
+- deltaDescription is ONE plain sentence that statically describes the updated part of the UI (e.g. "The CTA sits below the form"), not the action taken. The user accepts it, swaps in an alternative, or rephrases it (there is no reject).
 - If intent is ambiguous, set confidence "low" and pick the most likely semantic reading.`;
 
 export function describeManipulation(op: ManipulationOp): string {
