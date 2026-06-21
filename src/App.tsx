@@ -176,9 +176,9 @@ export default function App() {
             className="flex w-8 shrink-0 flex-col items-center gap-2 border-r border-slate-200 bg-white py-3 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
           >
             <LayersIcon className="h-4 w-4" />
-            <span className="text-[10px] font-semibold uppercase tracking-wider [writing-mode:vertical-rl]">
+            {/* <span className="text-[10px] font-semibold uppercase tracking-wider [writing-mode:vertical-rl]">
               Layers
-            </span>
+            </span> */}
           </button>
         )}
 
