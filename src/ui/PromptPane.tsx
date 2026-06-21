@@ -120,7 +120,7 @@ export function PromptPane() {
           <span className="rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2">
             underlined
           </span>
-          values are editable — click to tweak
+          values are editable. click to tweak
         </div>
       )}
 
