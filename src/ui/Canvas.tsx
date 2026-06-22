@@ -401,10 +401,9 @@ export function Canvas() {
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
-      {/* Sync mode (top-right): auto-sync canvas edits to the spec, or hold them
-          for a manual "Update spec" click shown above the chat. */}
+      {/* Sync mode toggle: bottom-right, horizontal, aligned with the tool palette. */}
       <div
-        className="absolute right-3 top-3 z-20 flex flex-col rounded-md border border-slate-200 bg-white/95 p-0.5 text-[10px] shadow-sm backdrop-blur"
+        className="absolute bottom-4 right-3 z-20 flex flex-row rounded-md border border-slate-200 bg-white/95 p-0.5 text-[10px] shadow-sm backdrop-blur"
         title="How canvas edits update the spec"
       >
         {(['auto', 'manual'] as const).map((m) => (
@@ -413,7 +412,7 @@ export function Canvas() {
             onClick={() => setIrSyncMode(m)}
             className={cn(
               'rounded px-2 py-0.5 font-medium capitalize transition-colors',
-              irSyncMode === m ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100',
+              irSyncMode === m ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100',
             )}
           >
             {m}
