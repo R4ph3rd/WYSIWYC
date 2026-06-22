@@ -28,6 +28,14 @@ const WEIGHT_WORDS: Record<string, number> = {
   semibold: 600, bold: 700, extrabold: 800, heavy: 800, black: 900,
 };
 
+// Compound color phrases like "light grey", "dark blue" — matched BEFORE single
+// weight or color words so "light" is not misread as font-weight 300.
+const COMPOUND_COLOR_MODIFIERS = ['light', 'dark', 'deep', 'soft', 'bright', 'pale', 'muted', 'warm', 'cool', 'vivid', 'rich', 'dull'];
+const COMPOUND_COLOR_RE = new RegExp(
+  `\\b(?:${COMPOUND_COLOR_MODIFIERS.join('|')})\\s+(?:${Object.keys(COLOR_NAMES).join('|')})\\b`,
+  'gi',
+);
+
 const SHADOW_WORDS = ['shadow', 'elevation', 'elevated', 'drop shadow'];
 const TEXT_ROLES = new Set<IRNode['role']>(['text', 'heading', 'button', 'badge', 'icon']);
 
@@ -71,6 +79,10 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
   for (const re of FONT_RES) for (const m of scan(text, re, 'fontFamily')) raw.push(m);
   for (const m of scan(text, HEX_RE, 'color')) raw.push(m);
   for (const m of scan(text, RGB_RE, 'color')) raw.push(m);
+  // Compound color phrases ("light grey", "dark blue") must come BEFORE both the
+  // single color-name scan and the font-weight scan, so "light grey" is treated
+  // as one color token instead of "light" (weight 300) + "grey" (color).
+  for (const m of scan(text, COMPOUND_COLOR_RE, 'color')) raw.push(m);
   for (const m of scan(text, COLOR_NAME_RE, 'color')) raw.push(m);
   for (const m of scan(text, RADIUS_RE, 'radius')) raw.push(m);
   for (const m of scan(text, NUMBER_RE, 'length')) raw.push(m);
@@ -96,7 +108,11 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
         const targets = fill.length ? fill : texts;
         const path = fill.length ? 'style.fill' : texts.length ? 'style.fontColor' : 'style.fill';
         const lc = m.text.toLowerCase();
-        const value = m.text.startsWith('#') || lc.startsWith('rgb') ? m.text : (COLOR_NAMES[lc] ?? '#4f46e5');
+        // For compound phrases like "light grey", resolve the base color name (last word).
+        const baseWord = lc.split(/\s+/).pop() ?? lc;
+        const value = m.text.startsWith('#') || lc.startsWith('rgb')
+          ? m.text
+          : (COLOR_NAMES[lc] ?? COLOR_NAMES[baseWord] ?? '#4f46e5');
         return { ...base, kind: 'color', nodeIds: targets.map((n) => n.id), path, value };
       }
       case 'fontFamily':
