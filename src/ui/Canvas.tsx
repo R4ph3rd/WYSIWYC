@@ -80,6 +80,7 @@ export function Canvas() {
   promptRefs
     .filter((r) => r.kind === 'node')
     .forEach((r, i) => { if ('nodeId' in r && r.nodeId) nodeLetters[r.nodeId] = String.fromCharCode(65 + i); });
+  const setComputedBounds = useAppStore((s) => s.setComputedBounds);
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
   const createShape = useAppStore((s) => s.createShape);
@@ -107,6 +108,38 @@ export function Canvas() {
   useEffect(() => {
     if (focusRequest?.target === 'canvas') stageRef.current?.focus();
   }, [focusRequest?.seq, focusRequest?.target]);
+
+  // Measure the selected node's DOM bounds (relative to its parent element) and
+  // write them to the store so the Properties panel can display them even for
+  // flow nodes that have no stored layout.x/y/w/h.
+  useEffect(() => {
+    if (!selectedNodeId) { setComputedBounds(null); return; }
+    const stage = stageRef.current;
+    if (!stage) return;
+    const el = stage.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(selectedNodeId)}"]`);
+    if (!el) { setComputedBounds(null); return; }
+    const parentEl = el.offsetParent as HTMLElement | null;
+    const elRect = el.getBoundingClientRect();
+    if (parentEl) {
+      const parentRect = parentEl.getBoundingClientRect();
+      setComputedBounds({
+        x: Math.round(elRect.left - parentRect.left),
+        y: Math.round(elRect.top - parentRect.top),
+        w: Math.round(elRect.width),
+        h: Math.round(elRect.height),
+      });
+    } else {
+      const stageRect = stage.getBoundingClientRect();
+      setComputedBounds({
+        x: Math.round(elRect.left - stageRect.left),
+        y: Math.round(elRect.top - stageRect.top),
+        w: Math.round(elRect.width),
+        h: Math.round(elRect.height),
+      });
+    }
+  // Remeasure after any re-render (IR change) or selection change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNodeId, ir]);
 
   // Surface the "unbound shortcut" hint for a few seconds after it is flagged.
   const [hintVisible, setHintVisible] = useState(false);

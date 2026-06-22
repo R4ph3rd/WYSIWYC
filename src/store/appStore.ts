@@ -151,6 +151,13 @@ interface AppState {
   irSyncMode: 'auto' | 'manual';
   /** In manual mode, the held baseline IR + latest op awaiting a manual spec update. */
   pendingSync: { op: ManipulationOp; prevIR: IR } | null;
+  /**
+   * Computed bounds of the currently selected node, measured from the DOM by
+   * Canvas when the selection changes. Used in the Properties panel to show X/Y/W/H
+   * for flow nodes that have no stored layout (they're positioned by CSS).
+   * Position is relative to the parent element.
+   */
+  computedBounds: { x: number; y: number; w: number; h: number } | null;
 
   generating: boolean; // Compose / Call A in flight
   proposing: boolean; // Call B in flight
@@ -218,6 +225,8 @@ interface AppState {
   setIrSyncMode: (mode: 'auto' | 'manual') => void;
   /** Manually run the held back-channel (manual sync mode). */
   syncNow: () => void;
+  /** Update the computed DOM bounds of the selected node (called by Canvas). */
+  setComputedBounds: (bounds: { x: number; y: number; w: number; h: number } | null) => void;
 
   /**
    * Forward edit (Prompt → IR): set a clause parameter token's value. Writes the
@@ -533,6 +542,7 @@ export const useAppStore = create<AppState>((set, get) => {
     unknownShortcutAt: null,
     irSyncMode: 'auto',
     pendingSync: null,
+    computedBounds: null,
     generating: false,
     proposing: false,
     error: null,
@@ -850,6 +860,8 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ pendingSync: null });
       propose(ps.op, ps.prevIR);
     },
+
+    setComputedBounds: (bounds) => set({ computedBounds: bounds }),
 
     setClauseParam: (clauseId, span, value, original) => {
       const state = get();

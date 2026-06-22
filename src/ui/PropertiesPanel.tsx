@@ -43,6 +43,7 @@ function isShapeRole(role: IRNode['role']): boolean {
 export function PropertiesPanel() {
   const selectedId = useAppStore((s) => s.selectedNodeId);
   const node = useAppStore((s) => selectedId ? s.ir.nodes.find((n) => n.id === selectedId) ?? null : null);
+  const computedBounds = useAppStore((s) => s.computedBounds);
   // edit* write the IR immediately and, once the burst settles, run the Call B
   // back-channel so panel edits propose prompt updates like any manipulation.
   const editStyle = useAppStore((s) => s.editStyle);
@@ -68,18 +69,29 @@ export function PropertiesPanel() {
     <div className="flex h-full flex-col bg-white">
       <PanelHeader title={`Properties — ${node.role}`} />
       <div className="flex-1 overflow-y-auto p-3 text-xs">
-        {/* Position */}
+        {/* Position — show stored layout when available; fall back to computed DOM bounds. */}
         <Section title="Position & size" icon={<MoveHorizontal className="h-3 w-3" />}>
           <div className="grid grid-cols-2 gap-1.5">
-            <NumberField label="X" value={node.layout?.x} onChange={(v) => setLayout({ x: v })}
-              labelProps={paramDragProps({ nodeId: node.id, path: 'layout.x', value: node.layout?.x })} />
-            <NumberField label="Y" value={node.layout?.y} onChange={(v) => setLayout({ y: v })}
-              labelProps={paramDragProps({ nodeId: node.id, path: 'layout.y', value: node.layout?.y })} />
-            <NumberField label="W" value={node.layout?.w} onChange={(v) => setLayout({ w: v })}
-              labelProps={paramDragProps({ nodeId: node.id, path: 'layout.w', value: node.layout?.w })} />
-            <NumberField label="H" value={node.layout?.h} onChange={(v) => setLayout({ h: v })}
-              labelProps={paramDragProps({ nodeId: node.id, path: 'layout.h', value: node.layout?.h })} />
+            <NumberField label="X"
+              value={node.layout?.x ?? computedBounds?.x}
+              onChange={(v) => setLayout({ x: v })}
+              labelProps={paramDragProps({ nodeId: node.id, path: 'layout.x', value: node.layout?.x ?? computedBounds?.x })} />
+            <NumberField label="Y"
+              value={node.layout?.y ?? computedBounds?.y}
+              onChange={(v) => setLayout({ y: v })}
+              labelProps={paramDragProps({ nodeId: node.id, path: 'layout.y', value: node.layout?.y ?? computedBounds?.y })} />
+            <NumberField label="W"
+              value={node.layout?.w ?? computedBounds?.w}
+              onChange={(v) => setLayout({ w: v })}
+              labelProps={paramDragProps({ nodeId: node.id, path: 'layout.w', value: node.layout?.w ?? computedBounds?.w })} />
+            <NumberField label="H"
+              value={node.layout?.h ?? computedBounds?.h}
+              onChange={(v) => setLayout({ h: v })}
+              labelProps={paramDragProps({ nodeId: node.id, path: 'layout.h', value: node.layout?.h ?? computedBounds?.h })} />
           </div>
+          {node.layout?.x === undefined && computedBounds && (
+            <p className="mt-1 text-[9px] text-slate-400">Computed — edit to switch to absolute layout</p>
+          )}
         </Section>
 
         {/* Appearance */}
