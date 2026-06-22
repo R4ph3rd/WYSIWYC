@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronUp, ChevronDown } from 'lucide-react';
+import { HexColorPicker } from 'react-colorful';
 
 /**
  * Shared inspector field primitives. Used by both the Properties panel and the
@@ -107,7 +108,7 @@ export function NumberField({
     onChange(clamp(base + dir * stepBy));
   };
   return (
-    <div className="flex items-center gap-1 rounded border border-slate-200 bg-white pl-1.5 focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-50">
+    <div className="flex items-center gap-1 rounded border border-slate-200 bg-white pl-1.5 focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-100">
       {label && (
         <span {...labelProps} className={'text-[9px] uppercase text-slate-400' + (labelProps?.className ? ' ' + labelProps.className : '')}>
           {label}
@@ -184,9 +185,9 @@ export function OpacityField({ value, onChange }: { value: number | undefined; o
 }
 
 /**
- * Color control: a checkered swatch (opens the native picker) + hex field + an
- * opacity % field. Below 100% the value serializes to rgba(); at 100% it stays
- * compact hex. `alpha={false}` hides opacity.
+ * Figma-style color control: a checkered swatch (opens a react-colorful popover)
+ * + hex text field + optional alpha %. Replaces the native <input type="color">
+ * so the value always updates correctly and the picker looks good on any OS.
  */
 export function ColorField({
   value, onChange, alpha = true,
@@ -196,7 +197,20 @@ export function ColorField({
   const has = Boolean(value && value.trim());
   const { hex, alpha: a } = parseColor(has ? value : '#000000');
   const [hexDraft, setHexDraft] = useState(hex.slice(1).toUpperCase());
+  const [open, setOpen] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => setHexDraft(hex.slice(1).toUpperCase()), [hex]);
+
+  // Close picker when clicking outside.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [open]);
 
   const commitHex = (raw: string) => {
     const clean = raw.replace(/[^0-9a-fA-F]/g, '').slice(0, 6);
@@ -208,18 +222,19 @@ export function ColorField({
   };
 
   return (
-    <div className="flex items-center gap-1.5 rounded border border-slate-200 bg-white px-1.5 py-1">
-      <span className="relative h-4 w-4 shrink-0 overflow-hidden rounded border border-slate-200">
+    <div className="relative flex items-center gap-1.5 rounded border border-slate-200 bg-white px-1.5 py-1">
+      {/* Swatch button — opens the react-colorful popover */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="relative h-4 w-4 shrink-0 overflow-hidden rounded border border-slate-200 focus:outline-none"
+        aria-label="Pick color"
+      >
         <span className="absolute inset-0 [background-image:linear-gradient(45deg,#ddd_25%,transparent_25%),linear-gradient(-45deg,#ddd_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#ddd_75%),linear-gradient(-45deg,transparent_75%,#ddd_75%)] [background-position:0_0,0_2px,2px_-2px,-2px_0] [background-size:4px_4px]" />
         <span className="absolute inset-0" style={{ background: has ? value : 'transparent' }} />
-        <input
-          type="color"
-          value={hex}
-          onChange={(e) => onChange(composeColor(e.target.value, alpha ? a : 100))}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-          aria-label="Pick color"
-        />
-      </span>
+      </button>
+
+      {/* Hex text input */}
       <input
         type="text"
         value={hexDraft}
@@ -227,6 +242,8 @@ export function ColorField({
         onChange={(e) => commitHex(e.target.value)}
         className="w-full min-w-0 bg-transparent font-mono text-[10px] uppercase outline-none"
       />
+
+      {/* Alpha % */}
       {alpha && (
         <div className="flex items-center gap-0.5 border-l border-slate-200 pl-1.5">
           <input
@@ -244,6 +261,33 @@ export function ColorField({
           <span className="text-[9px] text-slate-400">%</span>
         </div>
       )}
+
+      {/* react-colorful popover */}
+      {open && (
+        <div
+          ref={popoverRef}
+          className="absolute bottom-full left-0 z-50 mb-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-300/40"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <HexColorPicker
+            color={hex}
+            onChange={(h) => {
+              onChange(composeColor(h, alpha ? a : 100));
+            }}
+          />
+          {/* Quick hex input inside the picker for power users */}
+          <div className="mt-1.5 flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-1">
+            <span className="text-[10px] text-slate-400">#</span>
+            <input
+              type="text"
+              value={hexDraft}
+              onChange={(e) => commitHex(e.target.value)}
+              className="flex-1 bg-transparent font-mono text-[11px] uppercase outline-none"
+              maxLength={6}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -257,7 +301,7 @@ export function ToggleButton({ active, onClick, children }: {
       className={
         'rounded border px-2 py-1 text-[10px] font-medium transition-colors ' +
         (active
-          ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+          ? 'border-slate-700 bg-slate-900 text-white'
           : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50')
       }
     >
@@ -276,7 +320,7 @@ export function Switch({ checked, onChange }: { checked: boolean; onChange: (v: 
       onClick={() => onChange(!checked)}
       className={
         'relative inline-flex h-3.5 w-6 items-center rounded-full transition-colors ' +
-        (checked ? 'bg-indigo-600' : 'bg-slate-200')
+        (checked ? 'bg-slate-900' : 'bg-slate-200')
       }
     >
       <span
