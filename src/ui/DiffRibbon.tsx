@@ -40,15 +40,16 @@ export function DiffRibbon() {
 
   return (
     <div className="relative border-t bg-slate-50 px-4 py-2.5">
-      <div className="flex items-center gap-3">
-        <ArrowUpFromLine className="h-4 w-4 shrink-0 text-slate-400" />
-        {proposing ? (
-          <span className="flex items-center gap-2 text-sm text-slate-500">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Edit applied — describing it in the prompt…
-          </span>
-        ) : proposal ? (
-          <>
-            <span className="shrink-0 text-xs font-medium text-slate-400">Describe this edit</span>
+      {proposing ? (
+        <div className="flex items-center gap-2 text-sm text-slate-500">
+          <ArrowUpFromLine className="h-4 w-4 shrink-0 text-slate-400" />
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> Edit applied — describing it in the prompt…
+        </div>
+      ) : proposal ? (
+        <>
+          {/* Description row — full width, wraps naturally with no overflow. */}
+          <div className="mb-2 flex items-start gap-2">
+            <ArrowUpFromLine className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
             {rephrasing ? (
               <input
                 ref={inputRef}
@@ -58,12 +59,16 @@ export function DiffRibbon() {
                   if (e.key === 'Enter') accept(draft);
                   if (e.key === 'Escape') setRephrasing(false);
                 }}
-                className="flex-1 rounded-md border border-indigo-200 bg-white px-2 py-1 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-indigo-100"
+                className="flex-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-sm text-slate-800 outline-none focus:ring-2 focus:ring-slate-100"
               />
             ) : (
-              <span className="flex-1 text-sm text-slate-800">{proposal.deltaDescription}</span>
+              <span className="flex-1 min-w-0 text-sm leading-snug text-slate-800">
+                {proposal.deltaDescription}
+              </span>
             )}
-
+          </div>
+          {/* Actions row — right-aligned, always visible. */}
+          <div className="flex items-center justify-end gap-2">
             {rephrasing ? (
               <>
                 <Button size="sm" variant="outline" onClick={() => setRephrasing(false)}>
@@ -88,9 +93,9 @@ export function DiffRibbon() {
                 </Button>
               </>
             )}
-          </>
-        ) : null}
-      </div>
+          </div>
+        </>
+      ) : null}
 
       {menuOpen && alternatives.length > 0 && (
         <div className="absolute bottom-full right-4 mb-1 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg shadow-slate-300/40">
@@ -101,9 +106,9 @@ export function DiffRibbon() {
             <button
               key={i}
               onClick={() => accept(alt)}
-              className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-violet-50"
+              className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
             >
-              <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-violet-400" />
+              <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-slate-400" />
               <span className="leading-snug">{alt}</span>
             </button>
           ))}
