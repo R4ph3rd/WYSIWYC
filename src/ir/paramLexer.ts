@@ -39,6 +39,11 @@ const COMPOUND_COLOR_RE = new RegExp(
 const SHADOW_WORDS = ['shadow', 'elevation', 'elevated', 'drop shadow'];
 const TEXT_ROLES = new Set<IRNode['role']>(['text', 'heading', 'button', 'badge', 'icon']);
 
+// Shape descriptors: "round avatar", "circular icon", "square card".
+// Matched as 'shape' kind; written to style.borderRadius via a word→px mapping.
+const SHAPE_WORDS = { round: '9999', circular: '9999', rounded: '8', rectangular: '0', square: '0' } as const;
+const SHAPE_RE = new RegExp(`\\b(?:${Object.keys(SHAPE_WORDS).join('|')})\\b`, 'gi');
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -89,6 +94,7 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
   for (const m of scan(text, WEIGHT_RE, 'fontWeight')) raw.push(m);
   for (const m of scan(text, SHADOW_RE, 'shadow')) raw.push(m);
   for (const m of scan(text, ALIGN_RE, 'align')) raw.push(m);
+  for (const m of scan(text, SHAPE_RE, 'shape' as ParamKind)) raw.push(m);
 
   // Resolve overlaps: earliest first, longest at a tie.
   raw.sort((a, b) => a.start - b.start || b.end - a.end);
@@ -129,6 +135,19 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
         return { ...base, kind: 'shadow', nodeIds: fill.map((n) => n.id), path: 'style.shadow', value: '' };
       case 'align':
         return { ...base, kind: 'align', nodeIds: texts.map((n) => n.id), path: 'align', value: normalizeAlign(m.text) };
+      case 'shape': {
+        const key = m.text.toLowerCase() as keyof typeof SHAPE_WORDS;
+        const shapedNodes = [...fill, ...ownedNodes.filter((n) => n.role === 'circle' || n.role === 'image' || n.role === 'badge')];
+        const targets = shapedNodes.length ? shapedNodes : ownedNodes;
+        return {
+          ...base,
+          kind: 'shape',
+          nodeIds: targets.map((n) => n.id),
+          path: 'style.borderRadius',
+          value: SHAPE_WORDS[key] ?? '0',
+          options: Object.keys(SHAPE_WORDS),
+        };
+      }
       default:
         return { ...base, kind: 'text', nodeIds: [], path: 'content', value: m.text };
     }

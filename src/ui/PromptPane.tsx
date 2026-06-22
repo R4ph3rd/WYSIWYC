@@ -309,7 +309,7 @@ function ClauseContent({
 
 const PARAM_LABEL: Record<ParamSpan['kind'], string> = {
   color: 'color', length: 'size', fontFamily: 'font', fontWeight: 'weight', shadow: 'shadow',
-  radius: 'corners', opacity: 'opacity', align: 'alignment', enum: 'option', text: 'value',
+  radius: 'corners', opacity: 'opacity', align: 'alignment', enum: 'option', shape: 'shape', text: 'value',
 };
 
 /** One clickable parameter word inside a clause. */

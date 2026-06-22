@@ -171,10 +171,11 @@ export type ParamKind =
   | 'opacity'     // 0–1 → Slider
   | 'align'       // left/center/right → Segmented
   | 'enum'        // closed set from `options` → Segmented/Select
+  | 'shape'       // round/rounded/square/rectangle → maps to borderRadius → ShapeControl
   | 'text';       // fallback: free text → TextInput
 
 export const PARAM_KINDS: ParamKind[] = [
-  'color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'text',
+  'color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'shape', 'text',
 ];
 
 /**

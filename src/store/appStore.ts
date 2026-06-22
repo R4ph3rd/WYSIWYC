@@ -298,11 +298,19 @@ function tailwindValueFor(value: string): string {
   return value;
 }
 
+/** Shape word → borderRadius px value. */
+const SHAPE_RADIUS: Record<string, number> = { round: 9999, circular: 9999, rounded: 8, rectangular: 0, square: 0 };
+
 /** Write one parameter's value onto a node by its ParamSpan path. Deterministic. */
 function writeParam(ir: IR, node: IRNode, span: ParamSpan, value: string): IR {
   if (span.kind === 'align' || span.path === 'align') {
     const cls = value === 'left' ? 'text-left' : value === 'right' ? 'text-right' : 'text-center';
     return setNodeTailwindOnly(ir, node.id, setAlignment(node.tailwind, cls));
+  }
+  // Shape words map to a borderRadius number.
+  if (span.kind === 'shape') {
+    const r = SHAPE_RADIUS[value.toLowerCase()] ?? Number(value);
+    return updateNodeStyle(ir, node.id, { borderRadius: Number.isFinite(r) ? r : 0 });
   }
   const { path } = span;
   if (path.startsWith('style.')) {
@@ -336,6 +344,8 @@ function humanParamValue(span: ParamSpan, value: string): string | null {
     case 'length':
     case 'radius':
       return `${value}${span.unit ?? 'px'}`;
+    case 'shape':
+      return value; // the shape word itself ("round", "square", etc.)
     default:
       return value; // color hex, font family, weight, align word, enum, free text
   }
