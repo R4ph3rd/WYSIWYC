@@ -394,26 +394,26 @@ function ClauseItem({
         }
         onEdit();
       }}
-      title={pending ? 'Proposed update — accept or rephrase below' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
+      title={pending ? 'Proposed update — accept or rephrase below' : inferred ? 'Inferred — click for alternatives, double-click to edit' : clause.text}
       className={cn(
-        'group flex items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] leading-snug transition-colors',
+        'group flex items-center gap-2 rounded-md border px-2 py-1.5 text-[13px] overflow-hidden transition-colors',
         pending
-          ? 'border-dashed border-indigo-300 bg-indigo-50/60 text-indigo-900'
+          ? 'border-dashed border-amber-300 bg-amber-50/60 text-amber-900'
           : selected
-            ? 'cursor-pointer border-indigo-200 bg-indigo-50 text-indigo-900'
+            ? 'cursor-pointer border-slate-200 bg-slate-100 text-slate-900'
             : 'cursor-pointer border-transparent text-slate-700 hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
     >
       <span
         className={cn(
-          'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',
-          pending ? 'bg-indigo-500' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
+          'h-1.5 w-1.5 shrink-0 rounded-full',
+          pending ? 'bg-amber-500' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
         )}
       />
-      <span className="flex-1"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
+      <span className="flex-1 min-w-0 truncate"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
       {pending ? (
-        <span className="mt-0.5 shrink-0 rounded-full bg-indigo-100 px-1.5 text-[8px] font-bold uppercase tracking-wide text-indigo-600">
+        <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[8px] font-bold uppercase tracking-wide text-amber-700">
           Proposed
         </span>
       ) : (
@@ -481,13 +481,13 @@ function ClauseInline({
         'group -mx-0.5 rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
         CATEGORY_META[clause.category].underline,
         pending
-          ? 'bg-indigo-50 text-indigo-900 decoration-dashed'
-          : cn('cursor-pointer', selected ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-slate-50'),
+          ? 'bg-amber-50 text-amber-900 decoration-dashed'
+          : cn('cursor-pointer', selected ? 'bg-slate-100 text-slate-900' : 'hover:bg-slate-50'),
         flash && 'wysiwyc-flash',
       )}
     >
       {pending && (
-        <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-indigo-500 align-middle" aria-label="proposed" />
+        <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" aria-label="proposed" />
       )}
       {!pending && inferred && (
         <span
