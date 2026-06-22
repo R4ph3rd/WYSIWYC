@@ -28,9 +28,13 @@ function structuredStyle(node: IRNode): CSSProperties {
     // Lines/paths paint fill inside the SVG; everything else as background.
     out.background = s.fill;
   }
-  if (s.stroke && (s.strokeWidth ?? 0) > 0 && !STROKE_ROLES.includes(node.role)) {
-    out.border = `${s.strokeWidth}px solid ${s.stroke}`;
-  } else if (s.strokeWidth === 0 && SHAPE_ROLES.includes(node.role)) {
+  const sw = s.strokeWidth ?? 0;
+  if (sw > 0 && !STROKE_ROLES.includes(node.role)) {
+    // Default stroke to near-black if only strokeWidth was set without a color.
+    out.border = `${sw}px solid ${s.stroke || '#171717'}`;
+    // box-sizing:border-box prevents the border from expanding the element.
+    out.boxSizing = 'border-box';
+  } else if (sw === 0 && SHAPE_ROLES.includes(node.role)) {
     out.border = 'none';
   }
   if (s.borderRadius !== undefined) {
