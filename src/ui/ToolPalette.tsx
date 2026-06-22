@@ -27,7 +27,7 @@ export function ToolPalette() {
                 className={cn(
                   'flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
                   tool === t
-                    ? 'bg-indigo-600 text-white shadow-sm'
+                    ? 'bg-slate-900 text-white shadow-sm'
                     : 'text-slate-600 hover:bg-slate-100',
                 )}
                 aria-label={label}

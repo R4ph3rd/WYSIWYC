@@ -127,7 +127,7 @@ export function PromptPane() {
               onClick={() => setView(v)}
               className={cn(
                 'rounded px-2 py-0.5 text-[10px] font-medium capitalize transition-colors',
-                view === v ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100',
+                view === v ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100',
               )}
             >
               {v}
@@ -237,7 +237,7 @@ export function PromptPane() {
         <div className="border-t border-slate-100 px-2.5 pt-2.5">
           <button
             onClick={syncNow}
-            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700"
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-slate-800"
           >
             <RefreshCw className="h-3.5 w-3.5" /> Update spec from canvas
           </button>
