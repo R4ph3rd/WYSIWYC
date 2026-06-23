@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { ArrowUp, Loader2, Link2, Sparkles, Hash, Image as ImageIcon, MapPin, X } from 'lucide-react';
+import { ArrowUp, Loader2, Link2, Sparkles, Hash, Image as ImageIcon, Plus, X } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { ComposerValue, ExtractKind, PromptRef } from '@/ir/types';
 import { extractAttribute } from '@/ir/extract';
@@ -38,7 +38,8 @@ export interface RefComposerProps {
 }
 
 const CHIP_STYLE: Record<PromptRef['kind'], string> = {
-  node: 'bg-slate-100 text-slate-700 ring-slate-200',
+  // Node + location chips reuse the primary indigo, matching the canvas overlay.
+  node: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
   attribute: 'bg-violet-50 text-violet-700 ring-violet-200',
   param: 'bg-sky-50 text-sky-700 ring-sky-200',
   image: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
@@ -50,7 +51,7 @@ function ChipIcon({ kind }: { kind: PromptRef['kind'] }) {
   if (kind === 'node') return <Link2 className={cls} />;
   if (kind === 'attribute') return <Sparkles className={cls} />;
   if (kind === 'param') return <Hash className={cls} />;
-  if (kind === 'location') return <MapPin className={cls} />;
+  if (kind === 'location') return <Plus className={cls} />;
   return <ImageIcon className={cls} />;
 }
 
@@ -89,6 +90,10 @@ export function RefComposer({
   const segments = normalizeComposer(value);
   const lg = size === 'lg';
   const inputsDisabled = disabled || busy;
+
+  // A stable letter ID (A, B, …) per node chip, mirrored on the canvas overlay.
+  const nodeRefIds = segments.flatMap((s) => (s.type === 'ref' && s.ref.kind === 'node' ? [s.ref.refId] : []));
+  const nodeLetter = (refId: string) => String.fromCharCode(65 + nodeRefIds.indexOf(refId));
 
   // Canvas hand-off: when an element/location chip is dropped from the canvas
   // mid-draft, focus returns here so the user keeps typing without a reach for
@@ -218,7 +223,14 @@ export function RefComposer({
       <div className={cn('flex flex-wrap items-center gap-1', lg ? 'px-2 py-1.5' : 'px-1.5 py-1')}>
         {segments.map((seg, i) => {
           if (seg.type === 'ref') {
-            return <Chip key={seg.ref.refId} ref0={seg.ref} onRemove={() => onChange(removeRef(value, seg.ref.refId))} />;
+            return (
+              <Chip
+                key={seg.ref.refId}
+                ref0={seg.ref}
+                badge={seg.ref.kind === 'node' ? nodeLetter(seg.ref.refId) : undefined}
+                onRemove={() => onChange(removeRef(value, seg.ref.refId))}
+              />
+            );
           }
           // Stable key tied to the adjacent chip so removing one chip does not
           // remount (and steal focus from) the text inputs around other chips.
@@ -286,11 +298,11 @@ export function RefComposer({
   );
 }
 
-function Chip({ ref0, onRemove }: { ref0: PromptRef; onRemove: () => void }) {
+function Chip({ ref0, badge, onRemove }: { ref0: PromptRef; badge?: string; onRemove: () => void }) {
   return (
     <span
       className={cn(
-        'inline-flex max-w-[16rem] items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1',
+        'ml-0.5 inline-flex max-w-[16rem] items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1',
         CHIP_STYLE[ref0.kind],
       )}
     >
@@ -300,6 +312,9 @@ function Chip({ ref0, onRemove }: { ref0: PromptRef; onRemove: () => void }) {
         <ChipIcon kind={ref0.kind} />
       )}
       <span className="truncate">{ref0.label}</span>
+      {badge && (
+        <span className="rounded bg-indigo-600 px-1 text-[9px] font-bold leading-tight text-white">{badge}</span>
+      )}
       <button onClick={onRemove} aria-label="Remove reference" className="-mr-0.5 opacity-60 hover:opacity-100">
         <X className="h-3 w-3" />
       </button>
@@ -336,10 +351,11 @@ function TextSegment({
 }) {
   const ref = useRef<HTMLInputElement>(null);
   const reportCaret = () => onCaret(ref.current?.selectionStart ?? text.length);
-  // Non-trailing segments size to their content; the trailing one fills the row.
+  // Non-trailing segments size to their content (plus a little slack so a
+  // following chip never clips the last letter); the trailing one fills the row.
   const style: CSSProperties = last
     ? { flex: '1 1 60px', minWidth: 60 }
-    : { width: `${Math.max(text.length, 1)}ch` };
+    : { width: `calc(${Math.max(text.length, 1)}ch + 0.5rem)` };
   return (
     <input
       ref={ref}

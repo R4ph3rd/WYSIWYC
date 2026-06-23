@@ -2,16 +2,21 @@ import { create } from 'zustand';
 import type {
   ComposerValue,
   IR,
+  IRNode,
   IRPatch,
   ManipulationOp,
   NodeRole,
   NodeStyle,
+  ParamSpan,
   PathPoint,
   PromptRef,
   PromptUpdateProposal,
   Recipe,
   StructuredPrompt,
 } from '@/ir/types';
+import { setAlignment, setUtility } from '@/ir/tailwindEdit';
+import { familyFromStack } from '@/lib/fonts';
+import { loadGoogleFont } from '@/lib/loadFont';
 import {
   composerRefs,
   emptyComposer,
@@ -22,6 +27,8 @@ import {
 import { applyPatch } from '@/ir/applyPatch';
 import {
   applyManipulation,
+  cloneNodes,
+  collectSubtrees,
   createNode,
   toggleHidden,
   updateNodeContent,
@@ -134,6 +141,16 @@ interface AppState {
   recentIds: string[];
   history: Snapshot[];
   tool: Tool;
+  /** Copied subtree(s) for paste (Cmd/Ctrl+C → V). Project-scoped, not persisted. */
+  clipboard: IRNode[] | null;
+  /** Whether the slide-up keyboard-shortcuts panel is open. */
+  shortcutsOpen: boolean;
+  /** Set to a timestamp when an unbound hotkey is pressed (drives the hint banner). */
+  unknownShortcutAt: number | null;
+  /** Whether canvas edits auto-sync to the prompt (Call B) or wait for a manual trigger. */
+  irSyncMode: 'auto' | 'manual';
+  /** In manual mode, the held baseline IR + latest op awaiting a manual spec update. */
+  pendingSync: { op: ManipulationOp; prevIR: IR } | null;
 
   generating: boolean; // Compose / Call A in flight
   proposing: boolean; // Call B in flight
@@ -180,8 +197,41 @@ interface AppState {
    * from before the gesture started.
    */
   proposeManipulation: (op: ManipulationOp, prevIR: IR) => void;
-  acceptProposal: () => void;
-  rejectProposal: () => void;
+  /**
+   * Resolve the pending back-channel proposal by folding it into the prompt.
+   * `overrideText` replaces the primary edited clause's text (used when the
+   * user rephrases it or picks one of the proposed alternatives). There is no
+   * "reject" — a substantial IR change must be described in the spec.
+   */
+  acceptProposal: (overrideText?: string) => void;
+
+  /** Copy the current selection's subtree(s) to the clipboard. */
+  copySelection: () => void;
+  /** Paste the clipboard back into the scene, offset and re-selected. */
+  pasteClipboard: () => void;
+  /** Duplicate a node's subtree in place (alt-drag / Cmd+D); returns the new root id. */
+  duplicateNode: (id: string) => string | null;
+  setShortcutsOpen: (open: boolean) => void;
+  /** Flag an unbound hotkey so the canvas shows the "see all shortcuts" hint. */
+  flagUnknownShortcut: () => void;
+  /** Switch canvas→prompt syncing between automatic and manual. */
+  setIrSyncMode: (mode: 'auto' | 'manual') => void;
+  /** Manually run the held back-channel (manual sync mode). */
+  syncNow: () => void;
+
+  /**
+   * Forward edit (Prompt → IR): set a clause parameter token's value. Writes the
+   * bound IR field(s) deterministically (NO LLM, NO Call A/B), rewrites the
+   * token in the clause prose, keeps the node prompt-linked (not diverged), and
+   * adds ONE coalesced undo step per drag burst. `original` is the clause's
+   * text+params snapshot at popover-open, so live drags splice from a stable base.
+   */
+  setClauseParam: (
+    clauseId: string,
+    span: ParamSpan,
+    value: string,
+    original?: { text: string; params?: ParamSpan[] },
+  ) => void;
 
   // Deterministic editing. The edit* variants write the IR immediately AND
   // queue a debounced Call B proposal once the editing burst settles; the
@@ -210,6 +260,10 @@ const DEBOUNCE_MS = 700;
 const EDIT_SETTLE_MS = 1200;
 
 let callATimer: ReturnType<typeof setTimeout> | null = null;
+// One undo step per param-edit "burst" (e.g. a slider drag): a new history
+// snapshot is pushed only when the active (clause, span) changes or after idle.
+let paramBurstKey: string | null = null;
+let paramBurstTimer: ReturnType<typeof setTimeout> | null = null;
 
 function snapshot(s: AppState): Snapshot {
   return { ir: s.ir, prompt: s.prompt };
@@ -227,6 +281,64 @@ function affectedIdsOf(op: ManipulationOp): string[] {
 function defaultParentId(ir: IR): string | null {
   const frame = ir.nodes.find((n) => n.role === 'frame' && n.parentId === null);
   return frame?.id ?? null;
+}
+
+// --- Forward param edit (Prompt → IR, deterministic, no LLM) --------------
+
+const NUMERIC_STYLE = new Set(['fontSize', 'fontWeight', 'strokeWidth', 'borderRadius', 'opacity']);
+
+function setNodeTailwindOnly(ir: IR, id: string, tailwind: string): IR {
+  return { ...ir, nodes: ir.nodes.map((n) => (n.id === id ? { ...n, tailwind } : n)) };
+}
+
+/** Map a chosen value to a Tailwind utility value (arbitrary value for colors). */
+function tailwindValueFor(value: string): string {
+  if (/^#/.test(value)) return `[${value}]`;
+  if (/^rgb/i.test(value)) return `[${value.replace(/\s+/g, '')}]`;
+  return value;
+}
+
+/** Write one parameter's value onto a node by its ParamSpan path. Deterministic. */
+function writeParam(ir: IR, node: IRNode, span: ParamSpan, value: string): IR {
+  if (span.kind === 'align' || span.path === 'align') {
+    const cls = value === 'left' ? 'text-left' : value === 'right' ? 'text-right' : 'text-center';
+    return setNodeTailwindOnly(ir, node.id, setAlignment(node.tailwind, cls));
+  }
+  const { path } = span;
+  if (path.startsWith('style.')) {
+    const key = path.slice('style.'.length);
+    const v = NUMERIC_STYLE.has(key) ? Number(value) : value;
+    return updateNodeStyle(ir, node.id, { [key]: v } as Partial<NodeStyle>);
+  }
+  if (path.startsWith('layout.')) {
+    const key = path.slice('layout.'.length);
+    return updateNodeLayout(ir, node.id, { [key]: Number(value) });
+  }
+  if (path.startsWith('tailwind:')) {
+    const prefix = path.slice('tailwind:'.length);
+    return setNodeTailwindOnly(ir, node.id, setUtility(node.tailwind, prefix + tailwindValueFor(value)));
+  }
+  if (path === 'content') return updateNodeContent(ir, node.id, value);
+  return ir;
+}
+
+/** The deictic word ("here"/"there") a location chip's label starts with. */
+function keywordOf(label: string): string {
+  const m = label.match(/^(here|there)/i);
+  return m ? m[1].toLowerCase() : 'here';
+}
+
+/** The human-readable prose form of a value (null = leave the clause token unchanged). */
+function humanParamValue(span: ParamSpan, value: string): string | null {
+  switch (span.kind) {
+    case 'shadow':
+      return null; // a CSS box-shadow string would be unreadable in prose
+    case 'length':
+    case 'radius':
+      return `${value}${span.unit ?? 'px'}`;
+    default:
+      return value; // color hex, font family, weight, align word, enum, free text
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => {
@@ -312,6 +424,18 @@ export const useAppStore = create<AppState>((set, get) => {
     })();
   }
 
+  /**
+   * Route a canvas/panel manipulation's back-channel: run it now in "auto" sync
+   * mode, or hold it (baseline IR + latest op) for a manual "Update spec" click.
+   */
+  function maybePropose(op: ManipulationOp, prevIR: IR): void {
+    if (get().irSyncMode === 'auto') {
+      propose(op, prevIR);
+      return;
+    }
+    set((s) => ({ pendingSync: { op, prevIR: s.pendingSync?.prevIR ?? prevIR } }));
+  }
+
   // --- Debounced Properties-panel back-channel ----------------------------
   // Each keystroke / slider tick writes the IR immediately (deterministic);
   // once the burst settles we diff the node against its pre-burst state and
@@ -342,7 +466,7 @@ export const useAppStore = create<AppState>((set, get) => {
       ) {
         return;
       }
-      propose(
+      maybePropose(
         {
           kind: 'restyle',
           id,
@@ -370,6 +494,10 @@ export const useAppStore = create<AppState>((set, get) => {
       hoveredClauseId: null,
       recentIds: [],
       history: [],
+      clipboard: null,
+      shortcutsOpen: false,
+      unknownShortcutAt: null,
+      pendingSync: null,
       error: null,
     };
   }
@@ -390,6 +518,11 @@ export const useAppStore = create<AppState>((set, get) => {
     recentIds: [],
     history: [],
     tool: 'pointer',
+    clipboard: null,
+    shortcutsOpen: false,
+    unknownShortcutAt: null,
+    irSyncMode: 'auto',
+    pendingSync: null,
     generating: false,
     proposing: false,
     error: null,
@@ -451,30 +584,33 @@ export const useAppStore = create<AppState>((set, get) => {
 
     addComposerLocationRef: (x, y, nearNodeId) =>
       set((s) => {
+        const coords = `(${Math.round(x)}, ${Math.round(y)})`;
         // A draft has a single "here/there" pin — repeated clicks MOVE it rather
         // than stacking new chips (which the word "here" in the draft would spam).
         if (composerRefs(s.composerValue).some((r) => r.kind === 'location')) {
           const composerValue = s.composerValue.map((seg) =>
             seg.type === 'ref' && seg.ref.kind === 'location'
-              ? { ...seg, ref: { ...seg.ref, x, y, nearNodeId } }
+              ? { ...seg, ref: { ...seg.ref, x, y, nearNodeId, label: `${keywordOf(seg.ref.label)} ${coords}` } }
               : seg,
           );
           return { composerValue };
         }
         // If the draft says "here"/"there", the pin REPLACES that word so the
-        // sentence reads naturally with the chip standing in for the deixis.
+        // sentence reads naturally with the chip standing in for the deixis. The
+        // chip still shows the word plus the picked coordinates.
         const KEYWORD = /\b(here|there)\b/i;
         const match = s.composerValue
           .filter((seg): seg is { type: 'text'; text: string } => seg.type === 'text')
           .map((seg) => seg.text.match(KEYWORD)?.[0])
           .find(Boolean);
+        const word = (match ?? 'here').toLowerCase();
         const ref: PromptRef = {
           kind: 'location',
           refId: nextComposerRefId(s.composerValue),
           x,
           y,
           nearNodeId,
-          label: match ? match.toLowerCase() : `here (${Math.round(x)}, ${Math.round(y)})`,
+          label: `${word} ${coords}`,
         };
         const replaced = match
           ? insertRefReplacingKeyword(s.composerValue, ref, KEYWORD)
@@ -607,41 +743,158 @@ export const useAppStore = create<AppState>((set, get) => {
             ? s.selectedNodeIds.filter((id) => !affectedIds.includes(id))
             : s.selectedNodeIds,
       }));
-      propose(op, prevIR);
+      maybePropose(op, prevIR);
     },
 
-    proposeManipulation: (op, prevIR) => propose(op, prevIR),
+    proposeManipulation: (op, prevIR) => maybePropose(op, prevIR),
 
-    acceptProposal: () => {
+    acceptProposal: (overrideText) => {
       const { pendingProposal } = get();
       if (!pendingProposal) return;
+      // When the user rephrases or picks an alternative, the new wording lands on
+      // the FIRST updated clause (the one the manipulation primarily changed).
+      let clauses = pendingProposal.updatedClauses;
+      if (overrideText && overrideText.trim() && clauses.length > 0) {
+        clauses = clauses.map((c, i) => (i === 0 ? { ...c, text: overrideText.trim() } : c));
+      }
       set((s) => ({
-        prompt: mergeClauses(s.prompt, pendingProposal.updatedClauses, pendingProposal.removedClauseIds),
+        prompt: mergeClauses(s.prompt, clauses, pendingProposal.removedClauseIds),
         pendingProposal: null,
         pendingAffectedIds: [],
-        recentIds: pendingProposal.updatedClauses.map((c) => c.id),
+        recentIds: clauses.map((c) => c.id),
       }));
       setLastDecision(true);
     },
 
-    rejectProposal: () => {
-      const { pendingProposal, pendingAffectedIds } = get();
-      if (!pendingProposal) return;
-      // Reject semantics: keep the IR change, discard the prompt edit, mark
-      // affected nodes diverged (source=user, promptClauseId=null).
+    copySelection: () =>
+      set((s) => {
+        if (s.selectedNodeIds.length === 0) return {};
+        // Keep only top-level selected roots (a selected descendant is already
+        // carried by its selected ancestor's subtree).
+        const selected = new Set(s.selectedNodeIds);
+        const roots = s.selectedNodeIds.filter((id) => {
+          let p = s.ir.nodes.find((n) => n.id === id)?.parentId ?? null;
+          while (p) {
+            if (selected.has(p)) return false;
+            p = s.ir.nodes.find((n) => n.id === p)?.parentId ?? null;
+          }
+          return true;
+        });
+        return { clipboard: collectSubtrees(s.ir, roots) };
+      }),
+
+    pasteClipboard: () => {
+      const { clipboard } = get();
+      if (!clipboard || clipboard.length === 0) return;
+      set((s) => {
+        const present = new Set(s.ir.nodes.map((n) => n.id));
+        // Re-parent roots to their original parent if it still exists, else the
+        // default frame; offset so the paste is visible.
+        const resolveParent = (oldParentId: string | null): string | null =>
+          oldParentId && present.has(oldParentId) ? oldParentId : defaultParentId(s.ir);
+        const { ir, rootIds } = cloneNodes(s.ir, clipboard, resolveParent, { dx: 24, dy: 24 });
+        return {
+          history: [...s.history, snapshot(s)].slice(-50),
+          ir,
+          selectedNodeId: rootIds[rootIds.length - 1] ?? null,
+          selectedNodeIds: rootIds,
+          recentIds: rootIds,
+        };
+      });
+    },
+
+    duplicateNode: (id) => {
+      const subtree = collectSubtrees(get().ir, [id]);
+      if (subtree.length === 0) return null;
+      let newId: string | null = null;
+      set((s) => {
+        const node = s.ir.nodes.find((n) => n.id === id);
+        const resolveParent = () => node?.parentId ?? defaultParentId(s.ir);
+        const { ir, rootIds } = cloneNodes(s.ir, subtree, resolveParent, { dx: 24, dy: 24 });
+        newId = rootIds[0] ?? null;
+        return {
+          history: [...s.history, snapshot(s)].slice(-50),
+          ir,
+          selectedNodeId: newId,
+          selectedNodeIds: newId ? [newId] : [],
+          recentIds: rootIds,
+        };
+      });
+      return newId;
+    },
+
+    setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen, unknownShortcutAt: null }),
+    flagUnknownShortcut: () => set({ unknownShortcutAt: Date.now() }),
+
+    setIrSyncMode: (mode) => {
+      set({ irSyncMode: mode });
+      // Switching back to auto flushes any change held while in manual mode.
+      if (mode === 'auto') {
+        const ps = get().pendingSync;
+        if (ps) { set({ pendingSync: null }); propose(ps.op, ps.prevIR); }
+      }
+    },
+    syncNow: () => {
+      const ps = get().pendingSync;
+      if (!ps) return;
+      set({ pendingSync: null });
+      propose(ps.op, ps.prevIR);
+    },
+
+    setClauseParam: (clauseId, span, value, original) => {
+      const state = get();
+      const clause = state.prompt.clauses.find((c) => c.id === clauseId);
+      if (!clause) return;
+
+      // 1. Deterministic IR write, preserving provenance (NOT diverged: a forward
+      //    param edit keeps the node described by — linked to — its clause).
+      let ir = state.ir;
+      for (const nodeId of span.nodeIds) {
+        const before = ir.nodes.find((n) => n.id === nodeId);
+        if (!before) continue;
+        const prov = before.provenance;
+        ir = writeParam(ir, before, span, value);
+        ir = { ...ir, nodes: ir.nodes.map((n) => (n.id === nodeId ? { ...n, provenance: prov } : n)) };
+      }
+      if (span.kind === 'fontFamily') loadGoogleFont(familyFromStack(value) || value);
+
+      // 2. Rewrite the parameter token in the clause prose; shift later spans.
+      const baseText = original?.text ?? clause.text;
+      const baseParams = original?.params ?? clause.params;
+      const human = humanParamValue(span, value);
+      let newText = clause.text;
+      let newParams = clause.params;
+      if (human !== null) {
+        newText = baseText.slice(0, span.start) + human + baseText.slice(span.end);
+        const delta = human.length - (span.end - span.start);
+        if (baseParams) {
+          newParams = baseParams.map((p) => {
+            if (p.id === span.id) return { ...p, value, end: p.start + human.length };
+            if (p.start >= span.end) return { ...p, start: p.start + delta, end: p.end + delta };
+            return p;
+          });
+        }
+      } else if (baseParams) {
+        newParams = baseParams.map((p) => (p.id === span.id ? { ...p, value } : p));
+      }
+
+      // 3. One undo step per burst; flash; NO scheduleCallA, NO propose.
+      const key = `${clauseId}:${span.id}`;
+      const pushHistory = paramBurstKey !== key;
+      paramBurstKey = key;
+      if (paramBurstTimer) clearTimeout(paramBurstTimer);
+      paramBurstTimer = setTimeout(() => { paramBurstKey = null; }, 800);
+
       set((s) => ({
-        ir: {
-          ...s.ir,
-          nodes: s.ir.nodes.map((n) =>
-            pendingAffectedIds.includes(n.id)
-              ? { ...n, provenance: { source: 'user', promptClauseId: null } }
-              : n,
+        history: pushHistory ? [...s.history, snapshot(s)].slice(-50) : s.history,
+        ir,
+        prompt: {
+          clauses: s.prompt.clauses.map((c) =>
+            c.id === clauseId ? { ...c, text: newText, params: newParams } : c,
           ),
         },
-        pendingProposal: null,
-        pendingAffectedIds: [],
+        recentIds: span.nodeIds,
       }));
-      setLastDecision(false);
     },
 
     createShape: ({ role, x, y, w, h, parentId, points }) => {
@@ -702,6 +955,7 @@ export const useAppStore = create<AppState>((set, get) => {
           history: s.history.slice(0, -1),
           pendingProposal: null,
           pendingAffectedIds: [],
+          pendingSync: null,
           recentIds: [],
         };
       }),

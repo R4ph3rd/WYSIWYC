@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import {
-  ChevronRight, Box, Type as TypeIcon, MousePointer2, Image as ImageIcon,
+  ChevronRight, ChevronsLeft, Box, Type as TypeIcon, MousePointer2, Image as ImageIcon,
   Square, Circle, Minus, PenTool, Layers as LayersIcon, Eye, EyeOff, Trash2,
 } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
@@ -25,7 +25,7 @@ const ROLE_ICON: Record<NodeRole, React.ReactNode> = {
   path: <PenTool className="h-3.5 w-3.5" />,
 };
 
-export function LayersPanel() {
+export function LayersPanel({ onCollapse }: { onCollapse?: () => void }) {
   const ir = useAppStore((s) => s.ir);
   const selectedId = useAppStore((s) => s.selectedNodeId);
   const selectedIds = useAppStore((s) => s.selectedNodeIds);
@@ -43,6 +43,16 @@ export function LayersPanel() {
         <LayersIcon className="h-3.5 w-3.5 text-slate-500" />
         <span className="text-xs font-semibold tracking-tight text-slate-700">Layers</span>
         <span className="ml-auto text-[10px] text-slate-400">{ir.nodes.length} nodes</span>
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            title="Collapse layers"
+            aria-label="Collapse layers"
+            className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          >
+            <ChevronsLeft className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto p-1.5 text-xs">
         {tree.length === 0 && (
@@ -83,8 +93,6 @@ function TreeNode({ tree, depth, selectedId, selectedIds, onSelect, onHoverClaus
   const { node, children } = tree;
   const isSelected = selectedIds.includes(node.id);
   const hidden = node.tailwind.split(/\s+/).includes('hidden');
-  const isDiverged =
-    node.provenance.source === 'user' && node.provenance.promptClauseId === null;
 
   const label = node.content?.slice(0, 24) || node.role;
 
@@ -117,11 +125,6 @@ function TreeNode({ tree, depth, selectedId, selectedIds, onSelect, onHoverClaus
           {ROLE_ICON[node.role]}
         </span>
         <span className="flex-1 truncate text-[11px]">{label}</span>
-        {isDiverged && (
-          <span title="Diverged from prompt" className="text-[9px] font-semibold text-amber-600">
-            ⚠
-          </span>
-        )}
         <button
           className="opacity-0 transition-opacity hover:text-slate-900 group-hover:opacity-100"
           onClick={(e) => { e.stopPropagation(); onToggleHidden(node.id); }}

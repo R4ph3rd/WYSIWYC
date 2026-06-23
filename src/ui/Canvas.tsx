@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Sparkles } from 'lucide-react';
+import { Loader2, Sparkles, Keyboard, X } from 'lucide-react';
 import { useAppStore, toolToRole } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
 import type { ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
 import { SAMPLES } from '@/ir/samples';
-import { composerIsEmpty, composerRefs, emptyComposer, serializeComposer } from '@/lib/composer';
+import { composerIsEmpty, composerRefs, emptyComposer, removeRef, serializeComposer } from '@/lib/composer';
+import { cn } from '@/lib/utils';
 import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
@@ -27,6 +28,9 @@ interface PenState {
   points: PathPoint[]; // stage coordinates
   prevIR: IR;
 }
+
+/** Roles whose text content is editable inline by double-clicking on the canvas. */
+const TEXT_EDIT_ROLES: IRNode['role'][] = ['text', 'heading', 'button', 'badge', 'icon'];
 
 /** Default footprint when a drawing tool is clicked without dragging. */
 const CLICK_SIZE: Partial<Record<IRNode['role'], { w: number; h: number }>> = {
@@ -53,6 +57,14 @@ export function Canvas() {
   const setTool = useAppStore((s) => s.setTool);
   const requestFocus = useAppStore((s) => s.requestFocus);
   const focusRequest = useAppStore((s) => s.focusRequest);
+  const editContent = useAppStore((s) => s.editContent);
+  const duplicateNode = useAppStore((s) => s.duplicateNode);
+  const setComposerValue = useAppStore((s) => s.setComposerValue);
+  const shortcutsOpen = useAppStore((s) => s.shortcutsOpen);
+  const setShortcutsOpen = useAppStore((s) => s.setShortcutsOpen);
+  const unknownShortcutAt = useAppStore((s) => s.unknownShortcutAt);
+  const irSyncMode = useAppStore((s) => s.irSyncMode);
+  const setIrSyncMode = useAppStore((s) => s.setIrSyncMode);
 
   // Composing context: the canvas feeds the single composer when the user is
   // mid-prompt (focused, or a draft exists). Clicking an element then refers to
@@ -63,6 +75,11 @@ export function Canvas() {
   const promptRefs = composerRefs(composerValue);
   const referencedNodeIds = promptRefs.flatMap((r) => ('nodeId' in r && r.nodeId ? [r.nodeId] : []));
   const locationRefs = promptRefs.flatMap((r) => (r.kind === 'location' ? [r] : []));
+  // Letter IDs (A, B, …) for node chips, shown on the canvas overlay too.
+  const nodeLetters: Record<string, string> = {};
+  promptRefs
+    .filter((r) => r.kind === 'node')
+    .forEach((r, i) => { if ('nodeId' in r && r.nodeId) nodeLetters[r.nodeId] = String.fromCharCode(65 + i); });
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
   const createShape = useAppStore((s) => s.createShape);
@@ -75,6 +92,11 @@ export function Canvas() {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [pen, setPen] = useState<PenState | null>(null);
   const [penCursor, setPenCursor] = useState<PathPoint | null>(null);
+  // Inline canvas text editing (double-click a text node). Holds the node id
+  // plus its measured box (relative to the stage) for the overlay textarea.
+  const [editingText, setEditingText] = useState<
+    { id: string; left: number; top: number; width: number; height: number } | null
+  >(null);
   // Mirror for event listeners (keydown) that outlive a render's closure.
   const penRef = useRef<PenState | null>(null);
   penRef.current = pen;
@@ -86,6 +108,15 @@ export function Canvas() {
     if (focusRequest?.target === 'canvas') stageRef.current?.focus();
   }, [focusRequest?.seq, focusRequest?.target]);
 
+  // Surface the "unbound shortcut" hint for a few seconds after it is flagged.
+  const [hintVisible, setHintVisible] = useState(false);
+  useEffect(() => {
+    if (!unknownShortcutAt) return;
+    setHintVisible(true);
+    const t = setTimeout(() => setHintVisible(false), 6000);
+    return () => clearTimeout(t);
+  }, [unknownShortcutAt]);
+
   const role = toolToRole(tool);
   const drawing = Boolean(role) || tool === 'path';
   // The Lovable-style hero greets an empty project — but steps aside the
@@ -94,6 +125,24 @@ export function Canvas() {
 
   function nodeById(id: string): IRNode | undefined {
     return useAppStore.getState().ir.nodes.find((n) => n.id === id);
+  }
+
+  /** Begin inline editing of a text-bearing node, measured against the stage. */
+  function startTextEdit(id: string): void {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const el = stage.querySelector(`[data-node-id="${CSS.escape(id)}"]`);
+    if (!el) return;
+    const sr = stage.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    selectNode(id);
+    setEditingText({
+      id,
+      left: r.left - sr.left,
+      top: r.top - sr.top,
+      width: Math.max(40, r.width),
+      height: Math.max(20, r.height),
+    });
   }
 
   function relativePoint(e: React.MouseEvent): PathPoint | null {
@@ -196,14 +245,27 @@ export function Canvas() {
     const node = id ? nodeById(id) : undefined;
     if (node && node.layout?.x !== undefined && node.layout?.y !== undefined) {
       e.preventDefault();
-      selectNode(node.id);
+      const origX = node.layout.x;
+      const origY = node.layout.y;
+      // Alt-drag duplicates: clone the node onto its own position and drag the
+      // copy, leaving the original in place (Figma convention).
+      let dragId = node.id;
+      if (e.altKey) {
+        const dup = duplicateNode(node.id);
+        if (dup) {
+          updateLayout(dup, { x: origX, y: origY });
+          dragId = dup;
+        }
+      } else {
+        selectNode(node.id);
+      }
       setDrag({
         mode: 'move',
-        id: node.id,
+        id: dragId,
         startX: p.x,
         startY: p.y,
-        origX: node.layout.x,
-        origY: node.layout.y,
+        origX,
+        origY,
         moved: false,
         prevIR: useAppStore.getState().ir,
       });
@@ -339,6 +401,26 @@ export function Canvas() {
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
+      {/* Sync mode (top-right): auto-sync canvas edits to the spec, or hold them
+          for a manual "Update spec" click shown above the chat. */}
+      <div
+        className="absolute right-3 top-3 z-20 flex flex-col rounded-md border border-slate-200 bg-white/95 p-0.5 text-[10px] shadow-sm backdrop-blur"
+        title="How canvas edits update the spec"
+      >
+        {(['auto', 'manual'] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setIrSyncMode(m)}
+            className={cn(
+              'rounded px-2 py-0.5 font-medium capitalize transition-colors',
+              irSyncMode === m ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100',
+            )}
+          >
+            {m}
+          </button>
+        ))}
+      </div>
+
       {/* Floating tool palette (bottom center) */}
       <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
         <div className="pointer-events-auto">
@@ -346,8 +428,21 @@ export function Canvas() {
         </div>
       </div>
 
+      {/* Unbound-shortcut hint: click to open the full shortcut sheet. */}
+      {hintVisible && !shortcutsOpen && (
+        <button
+          onClick={() => { setShortcutsOpen(true); setHintVisible(false); }}
+          className="absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-900/90 px-3 py-1.5 text-[11px] text-white shadow-lg backdrop-blur transition hover:bg-slate-900"
+        >
+          <Keyboard className="h-3.5 w-3.5" />
+          That shortcut isn’t bound — see all shortcuts
+        </button>
+      )}
+
+      <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+
       {generating && !isEmpty && (
-        <div className="absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-600 shadow">
+        <div className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-600 shadow">
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Composing…
         </div>
       )}
@@ -387,10 +482,20 @@ export function Canvas() {
             }
             selectNode(null);
           }}
-          onDoubleClick={() => {
+          onDoubleClick={(e) => {
             if (pen) { commitPen(false); return; }
-            // A double-click mid-draft means "I want the canvas now" — hand
-            // focus back to it instead of the prompt composer.
+            // Double-clicking a text node edits its content inline.
+            if (tool === 'pointer') {
+              const el = (e.target as HTMLElement).closest('[data-node-id]');
+              const id = el?.getAttribute('data-node-id');
+              const node = id ? nodeById(id) : undefined;
+              if (node && TEXT_EDIT_ROLES.includes(node.role)) {
+                startTextEdit(node.id);
+                return;
+              }
+            }
+            // Otherwise a double-click mid-draft means "I want the canvas now" —
+            // hand focus back to it instead of the prompt composer.
             if (isComposing) requestFocus('canvas');
           }}
           onMouseDown={onStageMouseDown}
@@ -429,7 +534,50 @@ export function Canvas() {
           />
 
           {/* Labeled borders on elements referred to by the prompt + here/there pins. */}
-          <PromptTargetOverlay stageRef={stageRef} nodeIds={referencedNodeIds} locations={locationRefs} />
+          <PromptTargetOverlay
+            stageRef={stageRef}
+            nodeIds={referencedNodeIds}
+            letters={nodeLetters}
+            locations={locationRefs}
+            onRemoveLocation={(refId) => {
+              // Removing a pin must not blur the composer — keep typing.
+              setComposerValue(removeRef(useAppStore.getState().composerValue, refId));
+              requestFocus('composer');
+            }}
+          />
+
+          {/* Inline text editor (double-click a text node). */}
+          {editingText && (
+            <textarea
+              autoFocus
+              defaultValue={nodeById(editingText.id)?.content ?? ''}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={(e) => {
+                editContent(editingText.id, e.target.value);
+                setEditingText(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  editContent(editingText.id, (e.target as HTMLTextAreaElement).value);
+                  setEditingText(null);
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setEditingText(null);
+                }
+              }}
+              style={{
+                position: 'absolute',
+                left: editingText.left,
+                top: editingText.top,
+                width: editingText.width,
+                minHeight: editingText.height,
+              }}
+              className="z-30 resize-none overflow-hidden rounded-sm bg-white/95 px-1 py-0.5 text-inherit leading-tight text-slate-900 shadow-[0_0_0_2px_#4f46e5] outline-none"
+            />
+          )}
 
           {/* Pen preview: committed segments + rubber band to the cursor. */}
           {pen && (
@@ -489,6 +637,79 @@ function SelectionHandles({
           style={{ left: hd.left, top: hd.top, cursor: hd.cursor }}
         />
       ))}
+    </>
+  );
+}
+
+/** A panel that slides up from the bottom of the canvas listing all shortcuts. */
+function ShortcutsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const mod =
+    typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl';
+  const groups: { title: string; items: [string, string][] }[] = [
+    {
+      title: 'Tools',
+      items: [
+        ['V', 'Select'], ['R', 'Rectangle'], ['O', 'Circle'],
+        ['L', 'Line'], ['P', 'Pen'], ['T', 'Text'],
+      ],
+    },
+    {
+      title: 'Edit',
+      items: [
+        [`${mod} Z`, 'Undo'],
+        [`${mod} C`, 'Copy'],
+        [`${mod} V`, 'Paste'],
+        [`${mod} D`, 'Duplicate'],
+        ['Alt-drag', 'Duplicate'],
+        ['Delete', 'Delete selection'],
+      ],
+    },
+    {
+      title: 'Canvas',
+      items: [
+        ['Double-click', 'Edit text'],
+        ['Shift-click', 'Add to selection'],
+        ['Drag corner', 'Resize'],
+        ['Esc', 'Deselect'],
+        ['?', 'This sheet'],
+      ],
+    },
+  ];
+
+  return (
+    <>
+      {open && <div className="absolute inset-0 z-30 bg-slate-900/10" onClick={onClose} />}
+      <div
+        className={
+          'absolute inset-x-0 bottom-0 z-40 transform border-t border-slate-200 bg-white shadow-[0_-8px_30px_rgba(0,0,0,0.12)] transition-transform duration-300 ' +
+          (open ? 'translate-y-0' : 'translate-y-full')
+        }
+      >
+        <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-2.5">
+          <Keyboard className="h-4 w-4 text-slate-500" />
+          <span className="text-sm font-semibold tracking-tight text-slate-800">Keyboard shortcuts</span>
+          <button onClick={onClose} className="ml-auto rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Close">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-x-8 gap-y-5 p-5 sm:grid-cols-3">
+          {groups.map((g) => (
+            <div key={g.title}>
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{g.title}</div>
+              <div className="space-y-1.5">
+                {g.items.map(([key, label]) => (
+                  <div key={key} className="flex items-center justify-between gap-3 text-xs">
+                    <span className="text-slate-600">{label}</span>
+                    <kbd className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
+                      {key}
+                    </kbd>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </>
   );
 }

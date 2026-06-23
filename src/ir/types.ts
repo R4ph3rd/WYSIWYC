@@ -148,6 +148,54 @@ export interface PromptClause {
   origin?: ClauseOrigin;
   /** Up to 3 plausible alternative values/phrasings the user can swap in. */
   alternatives?: string[];
+  /**
+   * Optional addressable parameter spans: substrings of `text` that name a
+   * concrete, editable visual value bound to IR field(s) on specific node(s).
+   * Optional everywhere — clauses without it render and behave exactly as before.
+   */
+  params?: ParamSpan[];
+}
+
+/**
+ * A directly-editable visual parameter the prose can name. Clicking the bound
+ * token opens a widget; `'text'` is the universal fallback so ANY parameter is
+ * at least editable as free text.
+ */
+export type ParamKind =
+  | 'color'       // → ColorPicker
+  | 'length'      // px-like scalar (stroke width, font size, spacing) → Slider+number
+  | 'fontFamily'  // → FontPicker (Google Fonts)
+  | 'fontWeight'  // 100–900 → WeightControl
+  | 'shadow'      // elevation → ShadowPicker
+  | 'radius'      // border radius → Slider+number
+  | 'opacity'     // 0–1 → Slider
+  | 'align'       // left/center/right → Segmented
+  | 'enum'        // closed set from `options` → Segmented/Select
+  | 'text';       // fallback: free text → TextInput
+
+export const PARAM_KINDS: ParamKind[] = [
+  'color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'text',
+];
+
+/**
+ * Binds a token in a clause to concrete IR field(s) on one or more nodes.
+ * `path` forms:
+ *   - "style.<key>"       → structured NodeStyle field (e.g. "style.fontWeight")
+ *   - "layout.<key>"      → "layout.w" etc.
+ *   - "tailwind:<prefix>" → a Tailwind utility family via setUtility (e.g. "tailwind:bg-")
+ *   - "align"             → text alignment via setAlignment
+ *   - "content"           → the node's text content
+ */
+export interface ParamSpan {
+  id: string;          // "param_1", unique within the clause
+  start: number;       // char offset into clause.text (inclusive)
+  end: number;         // char offset (exclusive)
+  kind: ParamKind;
+  nodeIds: string[];   // IR nodes this token controls (⊆ nodes owned by the clause)
+  path: string;        // see above
+  value: string;       // current value, seeds the widget (e.g. "#4f46e5", "600", "16", "Inter")
+  options?: string[];  // for kind:'enum'
+  unit?: string;       // optional display unit for 'length'/'radius' (e.g. "px")
 }
 
 export interface StructuredPrompt {

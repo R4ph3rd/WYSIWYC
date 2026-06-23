@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Undo2, Download, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon } from 'lucide-react';
+import { Undo2, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon } from 'lucide-react';
 import { useAppStore, type Tool } from './store/appStore';
 import { useSettingsStore } from './store/settingsStore';
+import { familyFromStack } from './lib/fonts';
+import { loadGoogleFont } from './lib/loadFont';
 import { SAMPLES } from './ir/samples';
-import { downloadBackChannelLog } from './lib/log';
 import { PromptPane } from './ui/PromptPane';
 import { Canvas } from './ui/Canvas';
 import { LayersPanel } from './ui/LayersPanel';
 import { PropertiesPanel } from './ui/PropertiesPanel';
-import { DiffRibbon } from './ui/DiffRibbon';
 import { ConnectDialog } from './ui/ConnectDialog';
 import { Button } from './ui/primitives/button';
 
@@ -26,43 +26,65 @@ export default function App() {
 
   const [connectOpen, setConnectOpen] = useState(false);
   const [layersOpen, setLayersOpen] = useState(false);
+
+  // Lazily load any Google font actually in use by a node's style.fontFamily
+  // (deduped in loadGoogleFont). Never loads the whole catalogue up front.
+  const irNodes = useAppStore((s) => s.ir.nodes);
+  useEffect(() => {
+    const families = new Set<string>();
+    for (const n of irNodes) {
+      const f = familyFromStack(n.style?.fontFamily);
+      if (f) families.add(f);
+    }
+    families.forEach((f) => loadGoogleFont(f));
+  }, [irNodes]);
   useEffect(() => {
     if (needsConnect) setConnectOpen(true);
   }, [needsConnect]);
 
   // Figma-style keyboard shortcuts: V/R/O/L/P/T pick tools, Delete removes the
-  // selection (a manipulation — it runs the back-channel), ⌘Z undoes.
+  // selection, ⌘Z undo, ⌘C/⌘V copy/paste, ⌘D duplicate, ? opens the shortcut
+  // sheet. An unbound modifier combo flags the "see all shortcuts" hint.
   useEffect(() => {
     const TOOL_KEYS: Record<string, Tool> = {
       v: 'pointer', r: 'rectangle', o: 'circle', l: 'line', p: 'path', t: 'text',
     };
+    // Modifier combos the browser owns — never hijack or flag these.
+    const RESERVED = new Set([
+      'r', 't', 'w', 'n', 'q', 's', 'p', 'f', 'a', 'x', '+', '-', '=', '0',
+      '1', '2', '3', '4', '5', '6', '7', '8', '9',
+    ]);
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.isContentEditable
-      ) {
-        return;
-      }
+      const typing =
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
       const store = useAppStore.getState();
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        store.undo();
+
+      if (e.metaKey || e.ctrlKey) {
+        if (typing) return; // leave text-field clipboard/undo to the browser
+        const k = e.key.toLowerCase();
+        if (k === 'z') { e.preventDefault(); store.undo(); return; }
+        if (k === 'c') { if (store.selectedNodeIds.length) { e.preventDefault(); store.copySelection(); } return; }
+        if (k === 'v') { if (store.clipboard) { e.preventDefault(); store.pasteClipboard(); } return; }
+        if (k === 'd') { if (store.selectedNodeId) { e.preventDefault(); store.duplicateNode(store.selectedNodeId); } return; }
+        // Any other (non-reserved) combo isn't bound — hint at the shortcut sheet.
+        if (k.length === 1 && !RESERVED.has(k)) store.flagUnknownShortcut();
         return;
       }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.altKey) return;
+      if (typing) return;
+
+      if (e.key === '?') { store.setShortcutsOpen(true); return; }
+      if (e.key === 'Escape') {
+        if (store.shortcutsOpen) store.setShortcutsOpen(false);
+        else if (store.tool === 'pointer') store.selectNode(null);
+        return;
+      }
       const toolKey = TOOL_KEYS[e.key.toLowerCase()];
-      if (toolKey) {
-        store.setTool(toolKey);
-        return;
-      }
+      if (toolKey) { store.setTool(toolKey); return; }
       if ((e.key === 'Delete' || e.key === 'Backspace') && store.selectedNodeId) {
         e.preventDefault();
         store.manipulate({ kind: 'delete', id: store.selectedNodeId });
-      }
-      if (e.key === 'Escape' && store.tool === 'pointer') {
-        store.selectNode(null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -100,25 +122,11 @@ export default function App() {
 
           <div className="mx-1 h-5 w-px bg-slate-200" />
 
-          <Button
-            size="sm"
-            variant={layersOpen ? 'secondary' : 'ghost'}
-            onClick={() => setLayersOpen((v) => !v)}
-            title="Toggle layers panel"
-          >
-            <LayersIcon className="h-3.5 w-3.5" /> Layers
-          </Button>
-
-          <div className="mx-1 h-5 w-px bg-slate-200" />
-
           <Button size="sm" variant="ghost" onClick={newBlank}>
             <FilePlus2 className="h-3.5 w-3.5" /> New
           </Button>
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo}>
             <Undo2 className="h-3.5 w-3.5" /> Undo
-          </Button>
-          <Button size="sm" variant="ghost" onClick={downloadBackChannelLog} title="Download back-channel study log">
-            <Download className="h-3.5 w-3.5" /> Log
           </Button>
         </div>
       </header>
@@ -138,18 +146,30 @@ export default function App() {
         </div>
       )}
 
-      {/* Body: prompt rail | (toggleable layers) | canvas | properties rail */}
+      {/* Body: prompt rail | layers bar/panel | canvas | properties rail */}
       <div className="flex flex-1 overflow-hidden">
         {/* Full-height prompt rail. */}
         <div className="flex w-96 shrink-0 flex-col border-r border-slate-200 bg-white">
           <PromptPane />
         </div>
 
-        {/* Layers — toggleable, sits to the right of the prompt panel. */}
-        {layersOpen && (
+        {/* Layers — a vertical bar on the right of the spec that expands into
+            the full panel when toggled on. */}
+        {layersOpen ? (
           <div className="flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white">
-            <LayersPanel />
+            <LayersPanel onCollapse={() => setLayersOpen(false)} />
           </div>
+        ) : (
+          <button
+            onClick={() => setLayersOpen(true)}
+            title="Show layers"
+            className="flex w-8 shrink-0 flex-col items-center gap-2 border-r border-slate-200 bg-white py-3 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+          >
+            <LayersIcon className="h-4 w-4" />
+            {/* <span className="text-[10px] font-semibold uppercase tracking-wider [writing-mode:vertical-rl]">
+              Layers
+            </span> */}
+          </button>
         )}
 
         <Canvas />
@@ -158,8 +178,6 @@ export default function App() {
           <PropertiesPanel />
         </div>
       </div>
-
-      <DiffRibbon />
     </div>
   );
 }

@@ -15,108 +15,81 @@ Three artifacts and **one source of truth**:
 PROMPT (natural-language living spec)  ⇄  IR (JSON scene graph = SOURCE OF TRUTH)  ⇄  RENDER (React + Tailwind)
 ```
 
-- **IR is the single source of truth.** The prompt view and the rendered UI are
-  both *projections* of it.
-- **Instruction → Spec + IR** (Compose): entry point. You just *talk* ("a
-  pricing page with three plans…", "make the button green"); one LLM call folds
-  the instruction into the living spec (clause upserts) AND emits the IR patch
-  realizing it, so provenance lines up clause-by-node.
-- **Prompt → IR** (Call A): editing a spec sentence in place makes the LLM emit
-  a *patch* (add / update / remove / reorder), never a full regeneration unless
-  the IR is empty.
-- **IR → Render**: deterministic, pure function — no LLM, no SVG generation;
-  the LLM authors *data* (Tailwind classNames), the renderer projects it.
+- **IR is the single source of truth.** The prompt view and the rendered UI
+  are both *projections* of it.
+- **Instruction → Spec + IR** (Compose): entry point. You
+  just *talk* ("a pricing page with three plans…", "make the button green");
+  one LLM call folds the instruction into the living spec (clause upserts) AND
+  emits the IR patch realizing it, so provenance lines up clause-by-node.
+- **Prompt → IR** (Call A): editing a spec sentence in place makes the LLM
+  emit a *patch* (add / update / remove / reorder), never a full regeneration
+  unless the IR is empty.
+- **IR → Render**: deterministic, pure function — no LLM in the projection.
+  The LLM authors *data* (Tailwind classNames + a structured `style` block); the
+  renderer projects it to React + Tailwind, emitting plain HTML for flow
+  elements and **SVG only for vector primitives** (the `line` and `path` roles).
+  No LLM is involved in turning IR into pixels.
 - **Render → IR**: direct manipulation (drawing tools, drag-move, resize
-  handles, properties panel, drag-to-reorder) writes **deterministically** — no
-  LLM in the gesture itself.
-- **IR → Prompt** (Call B, the lossy back-channel): after a manipulation the
-  LLM proposes a one-sentence prompt delta the user **accepts or rejects** (the
-  Diff Ribbon). Rejecting keeps the IR change but marks the node *diverged*.
-  This covers *every* manipulation: canvas drags, hand-drawn shapes, and
-  (debounced per editing burst) Properties-panel changes.
+  handles, properties panel, drag-to-reorder) writes **deterministically** —
+  no LLM in the gesture itself.
+- **IR → Prompt** (Call B, the lossy back-channel): the manipulation is applied
+  to the IR immediately; a banner then proposes a one-sentence prompt delta the
+  user must resolve — **Accept** it, swap in one of **three generated
+  alternatives**, or **rephrase** it inline. A substantial change has to be
+  described in the spec, so there is no silent "reject"/diverge. This covers
+  *every* manipulation: canvas drags, hand-drawn shapes, and (debounced per
+  editing burst) Properties-panel changes.
 
 **The asymmetry is intentional and visible in the UX:** prompt→output is
-authoritative; output→prompt is a *proposal*, never auto-applied.
+authoritative; output→prompt is a *proposal* applied only once the user
+accepts, swaps, or rephrases it.
 
 **The prompt reads like a person, not a config file.** The spec is rendered as
-flowing sentences (each one a hoverable, editable span) and both LLM directions
-are instructed to use *semantic* values first — "place the CTA below the form",
-"a softer pink" — never raw pixels or hex codes unless the user typed them.
+short, categorized sentences and offers two views you can switch between — a
+**Structured** view (clauses grouped into Layout / Components / Style / Content
+sections) and a **Prose** view (the same clauses as flowing text, each
+underlined in its category color). Each clause is hoverable (it traces the UI
+nodes it owns), single-click opens alternatives/remove, and double-click edits
+it in place. Both LLM directions are instructed to use *semantic* values first
+— "place the CTA below the form", "a softer pink" — never raw pixels or hex
+codes unless the user typed them.
 
+## Workspace
 
-## UI layout
+- **Top bar** — branding, one-click **Examples**, a **Layers** toggle, the
+  **Connect** button (provider + key), and global actions (**New / Undo / Log**).
+- **Left rail** — the full-height **Spec** panel (the living prompt, with the
+  Structured/Prose toggle and the inline composer at the bottom). A toggleable
+  **Layers** tree can sit beside it.
+- **Center** — the **Canvas**. A floating tool palette sits at the **bottom**
+  (Pointer / Rectangle / Circle / Line / Pen / Text — V R O L P T). A
+  **sync-mode toggle** sits in the top-left corner (see below). Drawn shapes
+  default to a neutral grey.
+- **Right rail** — the **Properties** panel: Figma-style controls for the
+  selected node (position/size, fill/stroke with opacity, a structured drop/
+  inner **shadow** editor, a searchable Google-Fonts family picker, weight,
+  alignment, …). Number fields have +/- steppers; colors have a swatch + hex +
+  opacity.
+- **Bottom** — the **Diff Ribbon**: the proposed prompt delta + confidence,
+  resolved by Accept / Alternatives / Rephrase.
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ Top bar: WYSIWYC  Examples: [...]  │  Connect  Layers  New  Undo  Log   │
-├──────────────┬──────────────┬──────────────────────┬────────────────────┤
-│ Prompt pane  │ Layers panel │      Canvas           │  Properties panel  │
-│ (living spec)│ (toggleable) │  (tool palette + IR)  │  (style / layout)  │
-│              │              │                       │                    │
-│ [clauses…]   │ [tree…]      │                       │ [fill, stroke,…]   │
-│              │              │                       │                    │
-│ [Recipes]    │              │                       │                    │
-│ [Composer ↵] │              │                       │                    │
-└──────────────┴──────────────┴──────────────────────┴────────────────────┘
-│                        Diff Ribbon (accept / reject)                    │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+## Direct manipulation & shortcuts
 
+Direct edits write the IR deterministically (no LLM in the gesture):
 
-## Tool palette & keyboard shortcuts
+- Draw with the palette; drag to move, corner-handles to resize, drag flow
+  elements to reorder.
+- **Double-click a text node** to edit its content inline on the canvas.
+- **⌘/Ctrl+C / V** copy & paste, **⌘/Ctrl+D** or **Alt-drag** to duplicate,
+  **Shift-click** to multi-select, **Delete** to remove, **⌘/Ctrl+Z** to undo.
+- Press **?** (or trigger any unbound hotkey) to open a slide-up keyboard
+  shortcuts sheet.
 
-| Key | Tool | Effect |
-|-----|------|--------|
-| `V` | Pointer | Select, move, resize |
-| `R` | Rectangle | Draw rectangle |
-| `O` | Circle | Draw circle |
-| `L` | Line | Draw line |
-| `P` | Path | Pen tool (click anchors, double-click to close) |
-| `T` | Text | Place a text node |
-| `⌘Z` / `Ctrl+Z` | — | Undo (50-step history) |
-| `Delete` / `Backspace` | — | Delete selected node (triggers back-channel) |
-| `Escape` | — | Deselect |
-
-
-## DirectGPT interaction layer
-
-The composer is a **rich text + chip field** implementing the four DirectGPT
-principles (CHI 2024, Masson et al.) on top of the prompt⇄IR⇄render pipeline:
-
-| Principle | Implementation |
-|-----------|----------------|
-| **a — Object references** | Click an element on the canvas or in the Layers panel while typing to drop a node-reference chip (`«ref_n»`) into the composer; the chip is serialized as a stable marker before the LLM call |
-| **b — Attribute extraction** | Right-drag a node chip to open the Extract menu and promote it to a semantic value chip (layout / colorScheme / fontStyling / componentStyle / …) |
-| **c — Parameter references** | Drag a numeric/string field from the Properties panel to drop a `#param` chip carrying the live value |
-| **d — Reusable recipes** | Any accepted instruction can be saved as a one-click Recipe pill; clicking a recipe re-applies its instruction scoped to the current selection |
-
-Additional composer features:
-- **Image chips**: paste or drop an image into the composer; it is sent as a
-  vision block to Anthropic or OpenAI (Mistral / Groq reject image chips with a
-  clear error).
-- **Location pins**: typing "here" or "there" then clicking the canvas converts
-  the word into a `📍(x, y)` chip; repeated clicks move the pin rather than
-  stacking new ones.
-- **Selection-scoped prompting**: when the composer is focused and nodes are
-  selected, the instruction is scoped to those nodes; the scope indicator shows
-  "Editing N selected elements".
-- **Multi-selection**: `Shift`-click to toggle nodes in/out of selection.
-
-
-## Prompt pane — clause features
-
-Each sentence of the living spec is a `PromptClause` with:
-
-- **Category** colour-coded with an underline: sky (layout), violet (component),
-  amber (style), emerald (content).
-- **Origin**: `explicit` (user stated it) or `inferred` (model filled in a
-  sensible default, flagged with an amber dot). Inferred clauses are offered as
-  alternatives via a context menu.
-- **Alternatives**: single-click opens a menu with up to 3 model-proposed
-  phrasings; picking one triggers a debounced Call A patch.
-- **Inline edit**: double-click to edit the clause text in place; blur or Enter
-  commits, Escape cancels.
-- **Remove**: hover → ×  button removes the clause and triggers a Call A patch.
+**Sync mode (canvas → spec).** A corner toggle controls how canvas edits update
+the spec: **Auto** runs the Call B back-channel immediately after each edit;
+**Manual** holds the edits (the IR still updates live) and shows an *Update
+spec* button to run the back-channel on demand. Switching back to Auto flushes
+anything held.
 
 
 ## LLM providers (Connect button)
@@ -154,6 +127,22 @@ The split between `tailwind` and `style` is intentional: tailwind is what the
 LLM authors freely; style is what the user dialled in by hand and we don't
 want to round-trip through tokens. The renderer applies both.
 
+## Fonts & inline parameter editing
+
+The font controls draw from a bundled, curated catalogue of popular Google
+Fonts (`src/lib/fonts.ts`); families load **lazily** (`src/lib/loadFont.ts`) —
+only when shown in the picker or actually used by a node — never the whole
+catalogue up front. The complete Google Fonts list can be regenerated at build
+time from
+`https://www.googleapis.com/webfonts/v1/webfonts?key=$GOOGLE_FONTS_API_KEY&sort=popularity`
+into the same `{ family, category }[]` shape (the key stays build-time only).
+
+Style words inside spec clauses (a color, a size, a font, a weight, a shadow,
+a radius, …) are clickable: clicking one opens a small widget (color picker,
+slider, font selector, …) that edits the bound IR field **deterministically**
+(no LLM) and rewrites the word in the prose. Any token the system can't type
+precisely still opens a plain text input. This is a forward Prompt→IR edit, so
+it does not run the Call B back-channel.
 
 ## Running locally
 
@@ -165,6 +154,20 @@ npm run dev        # http://localhost:5173
 Open the app, click **Connect**, paste an API key, pick a model. No backend
 required — all LLM calls go from the browser directly to the provider.
 
+## Tailwind at runtime
+
+Because the LLM authors arbitrary Tailwind classes **at runtime**, build-time
+JIT purging cannot know them. This PoC uses the **Tailwind Play CDN** (in-browser
+compiler, see `index.html`) so any class — including arbitrary values like
+`bg-[#4f46e5]` written by inline parameter edits — compiles on the fly.
+
+## Deploying
+
+CI builds and publishes `dist/` to the `gh-pages` branch on **every push**
+(`.github/workflows/deploy.yml`). The deployed demo is fully functional: bring
+your own key on the live site.
+
+## Research framing (spec §7)
 
 ## Research framing
 

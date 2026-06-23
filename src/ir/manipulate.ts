@@ -134,10 +134,12 @@ const DEFAULT_STYLE: Record<NodeRole, NodeStyle> = {
   icon: { fontSize: 20 },
   divider: { stroke: '#e2e8f0', strokeWidth: 1 },
   badge: { fill: '#eef2ff', fontColor: '#4338ca', borderRadius: 9999, fontSize: 12 },
-  rectangle: { fill: '#e0e7ff', stroke: '#4f46e5', strokeWidth: 2, borderRadius: 4 },
-  circle: { fill: '#fce7f3', stroke: '#db2777', strokeWidth: 2 },
-  line: { stroke: '#0f172a', strokeWidth: 2 },
-  path: { stroke: '#0f172a', strokeWidth: 2 },
+  // Drawn primitives default to a neutral grey, not a brand color, so a fresh
+  // shape reads as "unstyled" until the user (or the prompt) colors it.
+  rectangle: { fill: '#e2e8f0', stroke: '#94a3b8', strokeWidth: 1, borderRadius: 4 },
+  circle: { fill: '#e2e8f0', stroke: '#94a3b8', strokeWidth: 1 },
+  line: { stroke: '#94a3b8', strokeWidth: 2 },
+  path: { stroke: '#94a3b8', strokeWidth: 2 },
 };
 
 const DEFAULT_CONTENT: Partial<Record<NodeRole, string>> = {
@@ -177,6 +179,86 @@ export function createNode(
     provenance: { promptClauseId: null, source: 'user' },
   };
   return { ir: { ...ir, nodes: [...ir.nodes, node] }, id };
+}
+
+/** All descendant ids of a node (excluding the node itself). */
+export function descendantIds(ir: IR, rootId: string): string[] {
+  const out: string[] = [];
+  const stack = [rootId];
+  while (stack.length) {
+    const id = stack.pop()!;
+    for (const n of ir.nodes) {
+      if (n.parentId === id) {
+        out.push(n.id);
+        stack.push(n.id);
+      }
+    }
+  }
+  return out;
+}
+
+/** The subtree (root + descendants) of each given root, flattened and de-duped. */
+export function collectSubtrees(ir: IR, rootIds: string[]): IRNode[] {
+  const ids = new Set<string>();
+  for (const r of rootIds) {
+    ids.add(r);
+    for (const d of descendantIds(ir, r)) ids.add(d);
+  }
+  return ir.nodes.filter((n) => ids.has(n.id));
+}
+
+/**
+ * Clone a self-contained set of subtree nodes into fresh ids (copy/paste,
+ * alt-duplicate). parentIds pointing inside the set are remapped; root nodes
+ * (parent outside the set) are re-parented via `resolveParent` and offset.
+ * Every clone is user-authored and unlinked from any prompt clause.
+ */
+export function cloneNodes(
+  ir: IR,
+  nodes: IRNode[],
+  resolveParent: (oldParentId: string | null) => string | null,
+  offset: { dx: number; dy: number },
+): { ir: IR; rootIds: string[] } {
+  const inSet = new Set(nodes.map((n) => n.id));
+  const idMap = new Map<string, string>();
+  let idx = Number.parseInt(nextNodeId(ir.nodes.map((n) => n.id)).slice('node_'.length), 10);
+  for (const n of nodes) idMap.set(n.id, `node_${idx++}`);
+
+  // Append roots after the current max order under their resolved parent.
+  const orderBase = new Map<string | null, number>();
+  const nextOrder = (parentId: string | null): number => {
+    if (!orderBase.has(parentId)) {
+      const max = ir.nodes
+        .filter((n) => n.parentId === parentId)
+        .reduce((m, n) => Math.max(m, n.order), -1);
+      orderBase.set(parentId, max);
+    }
+    const next = orderBase.get(parentId)! + 1;
+    orderBase.set(parentId, next);
+    return next;
+  };
+
+  const rootIds: string[] = [];
+  const cloned: IRNode[] = nodes.map((n) => {
+    const isRoot = !(n.parentId && inSet.has(n.parentId));
+    const newId = idMap.get(n.id)!;
+    const parentId = isRoot ? resolveParent(n.parentId) : idMap.get(n.parentId!)!;
+    if (isRoot) rootIds.push(newId);
+    const offsetLayout =
+      isRoot && n.layout && (n.layout.x !== undefined || n.layout.y !== undefined)
+        ? { ...n.layout, x: (n.layout.x ?? 0) + offset.dx, y: (n.layout.y ?? 0) + offset.dy }
+        : n.layout;
+    return {
+      ...n,
+      id: newId,
+      parentId,
+      order: isRoot ? nextOrder(parentId) : n.order,
+      layout: offsetLayout,
+      provenance: { promptClauseId: null, source: 'user' as const },
+    };
+  });
+
+  return { ir: { ...ir, nodes: [...ir.nodes, ...cloned] }, rootIds };
 }
 
 /** Patch a node's structured style block. Marks it user-authored. */

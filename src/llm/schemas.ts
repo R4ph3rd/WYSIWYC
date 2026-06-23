@@ -160,6 +160,29 @@ export const IR_PATCH_SCHEMA = {
   required: ['ops'],
 } as const;
 
+const paramSpanSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'string', description: 'Unique within the clause, e.g. "param_1".' },
+    start: { type: 'integer', description: 'Char offset into clause.text (inclusive).' },
+    end: { type: 'integer', description: 'Char offset into clause.text (exclusive).' },
+    kind: {
+      type: 'string',
+      enum: ['color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'text'],
+    },
+    nodeIds: { type: 'array', items: { type: 'string' } },
+    path: {
+      type: 'string',
+      description: 'IR field: "style.<key>", "layout.<key>", "tailwind:<prefix>", "align", or "content".',
+    },
+    value: { type: 'string', description: 'Current value (e.g. "#4f46e5", "600", "16", "Inter").' },
+    options: { type: 'array', items: { type: 'string' } },
+    unit: { type: 'string' },
+  },
+  required: ['id', 'start', 'end', 'kind', 'nodeIds', 'path', 'value'],
+};
+
 const clauseSchema = {
   type: 'object',
   additionalProperties: false,
@@ -176,6 +199,11 @@ const clauseSchema = {
       type: 'array',
       items: { type: 'string' },
       description: 'Up to 3 plausible alternative values/phrasings the user might prefer.',
+    },
+    params: {
+      type: 'array',
+      items: paramSpanSchema,
+      description: 'Optional addressable parameter spans binding a token in `text` to IR field(s).',
     },
   },
   required: ['id', 'text', 'category', 'origin'],

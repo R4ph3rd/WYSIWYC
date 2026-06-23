@@ -71,31 +71,70 @@ const login: Sample = {
         'A pill-shaped gradient "Sign in" button',
         'An outline "Sign in" button',
       ]),
-      clause('clause_6', 'content', 'A small "Forgot password?" link below the button', [
+      clause('clause_6', 'content', 'A small "Forgot password?" link beside the password row', [
         'A "Create an account" link below the button',
         'No helper link',
         'A "Need help signing in?" link',
       ]),
+      clause('clause_7', 'component', 'Social sign-in buttons under an "or" divider', [
+        'A single "Continue with Google" button',
+        'No social sign-in',
+        'Google, GitHub, and SSO buttons',
+      ]),
+      clause('clause_8', 'component', 'A "Remember me" checkbox and a sign-up footer link', [
+        'A "Keep me signed in" toggle',
+        'No remember-me option',
+        'A sign-up link only',
+      ]),
     ],
   },
   ir: {
-    canvas: { w: 1000, h: 700, background: '#eef2ff' },
+    canvas: { w: 1000, h: 820, background: '#eef2ff' },
     nodes: [
       node('node_1', 'frame', null, 0,
         'min-h-full w-full flex items-center justify-center bg-gradient-to-br from-indigo-100 via-white to-sky-100 p-10', 'clause_1'),
       node('node_2', 'container', 'node_1', 0,
         'w-full max-w-sm bg-white rounded-2xl shadow-xl shadow-indigo-100 ring-1 ring-slate-100 p-8 flex flex-col gap-5', 'clause_2'),
-      node('node_3', 'heading', 'node_2', 0, 'text-2xl font-semibold tracking-tight text-slate-900', 'clause_3', 'Welcome back'),
-      node('node_4', 'text', 'node_2', 1, 'text-sm text-slate-500 -mt-3', 'clause_3', 'Sign in to continue to your workspace.'),
-      node('node_5', 'text', 'node_2', 2, 'text-xs font-medium text-slate-600', 'clause_4', 'Email'),
-      node('node_6', 'input', 'node_2', 3,
+
+      // Brand mark
+      node('node_11', 'container', 'node_2', 0, 'flex items-center gap-2 self-center', 'clause_2'),
+      node('node_12', 'image', 'node_11', 0, 'h-9 w-9 rounded-xl bg-gradient-to-br from-indigo-500 to-sky-400 shadow-sm', 'clause_2'),
+      node('node_13', 'text', 'node_11', 1, 'text-sm font-bold tracking-tight text-slate-800', 'clause_2', 'Acme'),
+
+      node('node_3', 'heading', 'node_2', 1, 'text-2xl font-semibold tracking-tight text-slate-900 text-center', 'clause_3', 'Welcome back'),
+      node('node_4', 'text', 'node_2', 2, 'text-sm text-slate-500 -mt-3 text-center', 'clause_3', 'Sign in to continue to your workspace.'),
+
+      node('node_5', 'text', 'node_2', 3, 'text-xs font-medium text-slate-600', 'clause_4', 'Email'),
+      node('node_6', 'input', 'node_2', 4,
         'w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 -mt-3', 'clause_4', 'you@company.com'),
-      node('node_7', 'text', 'node_2', 4, 'text-xs font-medium text-slate-600', 'clause_4', 'Password'),
-      node('node_8', 'input', 'node_2', 5,
+      node('node_7', 'text', 'node_2', 5, 'text-xs font-medium text-slate-600', 'clause_4', 'Password'),
+      node('node_8', 'input', 'node_2', 6,
         'w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 -mt-3', 'clause_4', '••••••••'),
-      node('node_9', 'button', 'node_2', 6,
+
+      // Remember me + forgot
+      node('node_14', 'container', 'node_2', 7, 'flex items-center justify-between text-xs -mt-1', 'clause_8'),
+      node('node_15', 'container', 'node_14', 0, 'flex items-center gap-2 text-slate-600', 'clause_8'),
+      node('node_16', 'container', 'node_15', 0, 'h-4 w-4 rounded border border-slate-300 bg-indigo-600 grid place-items-center text-[10px] text-white', 'clause_8', '✓'),
+      node('node_17', 'text', 'node_15', 1, '', 'clause_8', 'Remember me'),
+      node('node_10', 'text', 'node_14', 1, 'font-medium text-indigo-600 hover:text-indigo-700 cursor-pointer', 'clause_6', 'Forgot password?'),
+
+      node('node_9', 'button', 'node_2', 8,
         'w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-colors', 'clause_5', 'Sign in'),
-      node('node_10', 'text', 'node_2', 7, 'text-center text-xs text-indigo-600 hover:text-indigo-700 cursor-pointer', 'clause_6', 'Forgot password?'),
+
+      // Divider
+      node('node_18', 'container', 'node_2', 9, 'flex items-center gap-3 text-[10px] uppercase tracking-wide text-slate-400', 'clause_7'),
+      node('node_19', 'container', 'node_18', 0, 'h-px flex-1 bg-slate-200', 'clause_7'),
+      node('node_20', 'text', 'node_18', 1, '', 'clause_7', 'or'),
+      node('node_21', 'container', 'node_18', 2, 'h-px flex-1 bg-slate-200', 'clause_7'),
+
+      // Social buttons
+      node('node_22', 'container', 'node_2', 10, 'grid grid-cols-2 gap-2', 'clause_7'),
+      node('node_23', 'button', 'node_22', 0,
+        'flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors', 'clause_7', 'G  Google'),
+      node('node_24', 'button', 'node_22', 1,
+        'flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors', 'clause_7', '⌥  GitHub'),
+
+      node('node_25', 'text', 'node_2', 11, 'text-center text-xs text-slate-500', 'clause_8', "Don't have an account? Sign up"),
     ],
   },
 };
@@ -139,28 +178,54 @@ const pricing: Sample = {
         'An outline "Choose Pro" button',
         'A gradient "Get started" button',
       ]),
+      clause('clause_7', 'component', 'A monthly / annual billing toggle above the price', [
+        'No billing toggle',
+        'A monthly / annual toggle with a "save 20%" hint',
+        'A three-way monthly / quarterly / annual toggle',
+      ]),
+      clause('clause_8', 'content', 'A reassurance footnote and a "Compare all plans" link', [
+        'Just a "No credit card required" note',
+        'A money-back guarantee note',
+        'No footnote',
+      ]),
     ],
   },
   ir: {
-    canvas: { w: 1000, h: 760, background: '#f8fafc' },
+    canvas: { w: 1000, h: 900, background: '#f8fafc' },
     nodes: [
       node('node_1', 'frame', null, 0, 'min-h-full w-full flex items-center justify-center bg-slate-50 p-10', 'clause_1'),
       node('node_2', 'container', 'node_1', 0,
         'w-full max-w-sm bg-white rounded-2xl shadow-2xl shadow-slate-200 ring-1 ring-slate-100 overflow-hidden', 'clause_2'),
       node('node_3', 'container', 'node_2', 0, 'h-2 w-full bg-gradient-to-r from-emerald-400 to-teal-500', 'clause_2'),
       node('node_4', 'container', 'node_2', 1, 'p-8 flex flex-col gap-5', 'clause_2'),
+
       node('node_5', 'badge', 'node_4', 0,
         'self-start rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-100', 'clause_3', 'Most popular'),
       node('node_6', 'heading', 'node_4', 1, 'text-xl font-semibold text-slate-900', 'clause_3', 'Pro'),
-      node('node_7', 'container', 'node_4', 2, 'flex items-baseline gap-1', 'clause_4'),
+      node('node_15', 'text', 'node_4', 2, 'text-sm text-slate-500 -mt-3', 'clause_3', 'For growing teams that need more power.'),
+
+      // Billing toggle
+      node('node_16', 'container', 'node_4', 3, 'flex items-center gap-1 self-start rounded-full bg-slate-100 p-0.5 text-xs', 'clause_7'),
+      node('node_17', 'text', 'node_16', 0, 'rounded-full px-3 py-1 text-slate-500 cursor-pointer', 'clause_7', 'Monthly'),
+      node('node_18', 'text', 'node_16', 1, 'rounded-full bg-white px-3 py-1 font-medium text-slate-800 shadow-sm cursor-pointer', 'clause_7', 'Annual'),
+
+      // Price
+      node('node_7', 'container', 'node_4', 4, 'flex items-baseline gap-1', 'clause_4'),
       node('node_8', 'heading', 'node_7', 0, 'text-4xl font-bold tracking-tight text-slate-900', 'clause_4', '$29'),
       node('node_9', 'text', 'node_7', 1, 'text-sm text-slate-500', 'clause_4', '/mo'),
-      node('node_10', 'text', 'node_4', 3, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Unlimited projects'),
-      node('node_11', 'text', 'node_4', 4, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Advanced analytics'),
-      node('node_12', 'text', 'node_4', 5, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Priority support'),
-      node('node_13', 'text', 'node_4', 6, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Custom integrations'),
-      node('node_14', 'button', 'node_4', 7,
+
+      // Features
+      node('node_10', 'text', 'node_4', 5, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Unlimited projects'),
+      node('node_11', 'text', 'node_4', 6, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Advanced analytics'),
+      node('node_12', 'text', 'node_4', 7, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Priority support'),
+      node('node_13', 'text', 'node_4', 8, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Custom integrations'),
+      node('node_19', 'text', 'node_4', 9, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Single sign-on (SSO)'),
+      node('node_20', 'text', 'node_4', 10, 'flex items-center gap-2 text-sm text-slate-600', 'clause_5', '✓  Audit logs & exports'),
+
+      node('node_14', 'button', 'node_4', 11,
         'mt-2 w-full rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 transition-colors', 'clause_6', 'Start free trial'),
+      node('node_21', 'text', 'node_4', 12, 'text-center text-xs text-slate-400', 'clause_8', 'No credit card required · cancel anytime'),
+      node('node_22', 'text', 'node_4', 13, 'text-center text-xs font-medium text-emerald-600 hover:text-emerald-700 cursor-pointer', 'clause_8', 'Compare all plans →'),
     ],
   },
 };
@@ -204,30 +269,74 @@ const dashboard: Sample = {
         'Each stat card shows a value and a sparkline',
         'Each stat card shows just a large value',
       ]),
+      clause('clause_7', 'component', 'A row of navigation tabs below the bar', [
+        'Navigation tabs inside the bar',
+        'A breadcrumb trail instead of tabs',
+        'No navigation tabs',
+      ]),
+      clause('clause_8', 'style', 'Each stat card shows a colored change vs last period', [
+        'Changes use neutral gray arrows',
+        'Changes are shown as small pills',
+        'No change indicator',
+      ]),
+      clause('clause_9', 'component', 'A revenue bar chart spanning the width below the stats', [
+        'A line chart below the stats',
+        'A recent-activity list below the stats',
+        'No chart',
+      ]),
     ],
   },
   ir: {
-    canvas: { w: 1100, h: 520, background: '#f8fafc' },
+    canvas: { w: 1100, h: 820, background: '#f8fafc' },
     nodes: [
       node('node_1', 'frame', null, 0, 'min-h-full w-full bg-slate-50 p-6 flex flex-col gap-6', 'clause_1'),
+
+      // Top bar
       node('node_2', 'container', 'node_1', 0,
         'w-full flex items-center justify-between bg-white rounded-xl shadow-sm ring-1 ring-slate-100 px-5 py-3', 'clause_1'),
-      node('node_3', 'heading', 'node_2', 0, 'text-lg font-bold tracking-tight text-slate-900', 'clause_2', 'Northwind'),
+      node('node_18', 'container', 'node_2', 0, 'flex items-center gap-2.5', 'clause_2'),
+      node('node_19', 'image', 'node_18', 0, 'h-8 w-8 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-500 shadow-sm', 'clause_2'),
+      node('node_3', 'heading', 'node_18', 1, 'text-lg font-bold tracking-tight text-slate-900', 'clause_2', 'Northwind'),
       node('node_4', 'input', 'node_2', 1,
         'w-80 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 outline-none focus:ring-2 focus:ring-sky-100', 'clause_3', 'Search…'),
       node('node_5', 'container', 'node_2', 2, 'flex items-center gap-3', 'clause_4'),
-      node('node_6', 'icon', 'node_5', 0, 'h-9 w-9 grid place-items-center rounded-full bg-slate-100 text-slate-600', 'clause_4', '🔔'),
-      node('node_7', 'image', 'node_5', 1, 'h-9 w-9 rounded-full bg-gradient-to-br from-sky-400 to-indigo-500', 'clause_4'),
-      node('node_8', 'container', 'node_1', 1, 'grid grid-cols-3 gap-4', 'clause_5'),
+      node('node_20', 'button', 'node_5', 0, 'rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-colors', 'clause_4', '+ New'),
+      node('node_6', 'icon', 'node_5', 1, 'h-9 w-9 grid place-items-center rounded-full bg-slate-100 text-slate-600', 'clause_4', '🔔'),
+      node('node_7', 'image', 'node_5', 2, 'h-9 w-9 rounded-full bg-gradient-to-br from-sky-400 to-indigo-500', 'clause_4'),
+
+      // Nav tabs
+      node('node_21', 'container', 'node_1', 1, 'flex items-center gap-1', 'clause_7'),
+      node('node_22', 'text', 'node_21', 0, 'rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-slate-900 shadow-sm ring-1 ring-slate-100 cursor-pointer', 'clause_7', 'Overview'),
+      node('node_23', 'text', 'node_21', 1, 'rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-white/60 cursor-pointer', 'clause_7', 'Reports'),
+      node('node_24', 'text', 'node_21', 2, 'rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-white/60 cursor-pointer', 'clause_7', 'Settings'),
+
+      // Stat cards
+      node('node_8', 'container', 'node_1', 2, 'grid grid-cols-3 gap-4', 'clause_5'),
       node('node_9', 'container', 'node_8', 0, 'bg-white rounded-xl shadow-sm ring-1 ring-slate-100 p-5 flex flex-col gap-1', 'clause_6'),
       node('node_10', 'text', 'node_9', 0, 'text-xs font-medium uppercase tracking-wide text-slate-400', 'clause_6', 'Revenue'),
       node('node_11', 'heading', 'node_9', 1, 'text-2xl font-bold text-slate-900', 'clause_6', '$48.2k'),
+      node('node_25', 'text', 'node_9', 2, 'text-xs font-medium text-emerald-600', 'clause_8', '▲ 12.4% vs last month'),
       node('node_12', 'container', 'node_8', 1, 'bg-white rounded-xl shadow-sm ring-1 ring-slate-100 p-5 flex flex-col gap-1', 'clause_6'),
       node('node_13', 'text', 'node_12', 0, 'text-xs font-medium uppercase tracking-wide text-slate-400', 'clause_6', 'Active users'),
       node('node_14', 'heading', 'node_12', 1, 'text-2xl font-bold text-slate-900', 'clause_6', '2,318'),
+      node('node_26', 'text', 'node_12', 2, 'text-xs font-medium text-emerald-600', 'clause_8', '▲ 3.2% vs last month'),
       node('node_15', 'container', 'node_8', 2, 'bg-white rounded-xl shadow-sm ring-1 ring-slate-100 p-5 flex flex-col gap-1', 'clause_6'),
       node('node_16', 'text', 'node_15', 0, 'text-xs font-medium uppercase tracking-wide text-slate-400', 'clause_6', 'Churn'),
       node('node_17', 'heading', 'node_15', 1, 'text-2xl font-bold text-slate-900', 'clause_6', '1.4%'),
+      node('node_27', 'text', 'node_15', 2, 'text-xs font-medium text-rose-600', 'clause_8', '▼ 0.4% vs last month'),
+
+      // Revenue chart
+      node('node_28', 'container', 'node_1', 3, 'bg-white rounded-xl shadow-sm ring-1 ring-slate-100 p-5 flex flex-col gap-4', 'clause_9'),
+      node('node_29', 'container', 'node_28', 0, 'flex items-center justify-between', 'clause_9'),
+      node('node_30', 'heading', 'node_29', 0, 'text-sm font-semibold text-slate-900', 'clause_9', 'Revenue over time'),
+      node('node_31', 'text', 'node_29', 1, 'text-xs text-slate-400', 'clause_9', 'Last 6 months'),
+      node('node_32', 'container', 'node_28', 1, 'flex items-end gap-3 h-40', 'clause_9'),
+      node('node_33', 'container', 'node_32', 0, 'flex-1 rounded-t-md bg-indigo-200 h-16', 'clause_9'),
+      node('node_34', 'container', 'node_32', 1, 'flex-1 rounded-t-md bg-indigo-300 h-24', 'clause_9'),
+      node('node_35', 'container', 'node_32', 2, 'flex-1 rounded-t-md bg-indigo-300 h-20', 'clause_9'),
+      node('node_36', 'container', 'node_32', 3, 'flex-1 rounded-t-md bg-indigo-400 h-32', 'clause_9'),
+      node('node_37', 'container', 'node_32', 4, 'flex-1 rounded-t-md bg-indigo-400 h-28', 'clause_9'),
+      node('node_38', 'container', 'node_32', 5, 'flex-1 rounded-t-md bg-indigo-600 h-40', 'clause_9'),
     ],
   },
 };
