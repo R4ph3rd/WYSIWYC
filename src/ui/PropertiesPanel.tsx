@@ -44,6 +44,7 @@ export function PropertiesPanel() {
   const selectedId = useAppStore((s) => s.selectedNodeId);
   const node = useAppStore((s) => selectedId ? s.ir.nodes.find((n) => n.id === selectedId) ?? null : null);
   const computedBounds = useAppStore((s) => s.computedBounds);
+  const computedStyle = useAppStore((s) => s.computedStyle);
   // edit* write the IR immediately and, once the burst settles, run the Call B
   // back-channel so panel edits propose prompt updates like any manipulation.
   const editStyle = useAppStore((s) => s.editStyle);
@@ -96,22 +97,22 @@ export function PropertiesPanel() {
 
         {/* Appearance */}
         <Section title="Appearance" icon={<SquareIcon className="h-3 w-3" />}>
-          <Row label="Fill" param={{ nodeId: node.id, path: 'style.fill', value: node.style?.fill }}>
-            <ColorField value={node.style?.fill ?? ''} onChange={(v) => set({ fill: v })} />
+          <Row label="Fill" param={{ nodeId: node.id, path: 'style.fill', value: node.style?.fill ?? computedStyle?.fill }}>
+            <ColorField value={node.style?.fill ?? computedStyle?.fill ?? ''} onChange={(v) => set({ fill: v })} />
           </Row>
           <Row label="Stroke">
-            <ColorField value={node.style?.stroke ?? ''} onChange={(v) => set({ stroke: v })} />
+            <ColorField value={node.style?.stroke ?? computedStyle?.stroke ?? ''} onChange={(v) => set({ stroke: v })} />
           </Row>
           <Row label="Stroke W">
-            <NumberField value={node.style?.strokeWidth} onChange={(v) => set({ strokeWidth: v })} min={0} max={32} />
+            <NumberField value={node.style?.strokeWidth ?? computedStyle?.strokeWidth} onChange={(v) => set({ strokeWidth: v })} min={0} max={32} />
           </Row>
           {!isShapeRole(node.role) || node.role === 'rectangle' ? (
-            <Row label="Radius" param={{ nodeId: node.id, path: 'style.borderRadius', value: node.style?.borderRadius }}>
-              <NumberField value={node.style?.borderRadius} onChange={(v) => set({ borderRadius: v })} min={0} max={9999} />
+            <Row label="Radius" param={{ nodeId: node.id, path: 'style.borderRadius', value: node.style?.borderRadius ?? computedStyle?.borderRadius }}>
+              <NumberField value={node.style?.borderRadius ?? computedStyle?.borderRadius} onChange={(v) => set({ borderRadius: v })} min={0} max={9999} />
             </Row>
           ) : null}
           <Row label="Opacity">
-            <OpacityField value={node.style?.opacity} onChange={(v) => set({ opacity: v })} />
+            <OpacityField value={node.style?.opacity ?? computedStyle?.opacity} onChange={(v) => set({ opacity: v })} />
           </Row>
         </Section>
 
@@ -120,16 +121,16 @@ export function PropertiesPanel() {
           <Section title="Typography" icon={<TypeIcon className="h-3 w-3" />}>
             <Row label="Family">
               <FontField
-                value={node.style?.fontFamily}
+                value={node.style?.fontFamily ?? computedStyle?.fontFamily}
                 onChange={(family) => set({ fontFamily: fontStack(family) })}
               />
             </Row>
-            <Row label="Size" param={{ nodeId: node.id, path: 'style.fontSize', value: node.style?.fontSize }}>
-              <NumberField value={node.style?.fontSize} onChange={(v) => set({ fontSize: v })} min={8} max={200} />
+            <Row label="Size" param={{ nodeId: node.id, path: 'style.fontSize', value: node.style?.fontSize ?? computedStyle?.fontSize }}>
+              <NumberField value={node.style?.fontSize ?? computedStyle?.fontSize} onChange={(v) => set({ fontSize: v })} min={8} max={200} />
             </Row>
             <Row label="Weight">
               <select
-                value={String(node.style?.fontWeight ?? 400)}
+                value={String(node.style?.fontWeight ?? computedStyle?.fontWeight ?? 400)}
                 onChange={(e) => set({ fontWeight: Number(e.target.value) })}
                 className="w-full rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px]"
               >
@@ -138,8 +139,8 @@ export function PropertiesPanel() {
                 ))}
               </select>
             </Row>
-            <Row label="Color" param={{ nodeId: node.id, path: 'style.fontColor', value: node.style?.fontColor }}>
-              <ColorField value={node.style?.fontColor ?? ''} onChange={(v) => set({ fontColor: v })} />
+            <Row label="Color" param={{ nodeId: node.id, path: 'style.fontColor', value: node.style?.fontColor ?? computedStyle?.fontColor }}>
+              <ColorField value={node.style?.fontColor ?? computedStyle?.fontColor ?? ''} onChange={(v) => set({ fontColor: v })} />
             </Row>
             <Row label="Style">
               <div className="flex gap-1">

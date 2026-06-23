@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, Sparkles, Keyboard, X } from 'lucide-react';
-import { useAppStore, toolToRole } from '@/store/appStore';
+import { useAppStore, toolToRole, type ComputedNodeStyle } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
 import type { ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
@@ -31,6 +31,38 @@ interface PenState {
 
 /** Roles whose text content is editable inline by double-clicking on the canvas. */
 const TEXT_EDIT_ROLES: IRNode['role'][] = ['text', 'heading', 'button', 'badge', 'icon'];
+
+/** A computed color is "real" only if it isn't fully transparent. */
+function opaqueColor(c: string): string | undefined {
+  if (!c) return undefined;
+  const m = c.match(/rgba?\(([^)]+)\)/i);
+  if (m) {
+    const parts = m[1].split(',').map((p) => parseFloat(p));
+    if (parts.length >= 4 && parts[3] === 0) return undefined; // transparent
+  }
+  return c === 'transparent' ? undefined : c;
+}
+
+/** Read the rendered CSS of a node into a structured style for the inspector. */
+function readComputedStyle(el: HTMLElement): ComputedNodeStyle {
+  const cs = getComputedStyle(el);
+  const num = (v: string) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const borderW = num(cs.borderTopWidth) ?? 0;
+  return {
+    fill: opaqueColor(cs.backgroundColor),
+    stroke: borderW > 0 ? opaqueColor(cs.borderTopColor) : undefined,
+    strokeWidth: borderW > 0 ? Math.round(borderW) : undefined,
+    borderRadius: num(cs.borderTopLeftRadius),
+    fontFamily: cs.fontFamily || undefined,
+    fontSize: num(cs.fontSize),
+    fontWeight: num(cs.fontWeight),
+    fontColor: opaqueColor(cs.color),
+    opacity: num(cs.opacity),
+  };
+}
 
 /** Default footprint when a drawing tool is clicked without dragging. */
 const CLICK_SIZE: Partial<Record<IRNode['role'], { w: number; h: number }>> = {
@@ -81,6 +113,7 @@ export function Canvas() {
     .filter((r) => r.kind === 'node')
     .forEach((r, i) => { if ('nodeId' in r && r.nodeId) nodeLetters[r.nodeId] = String.fromCharCode(65 + i); });
   const setComputedBounds = useAppStore((s) => s.setComputedBounds);
+  const setComputedStyle = useAppStore((s) => s.setComputedStyle);
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
   const createShape = useAppStore((s) => s.createShape);
@@ -113,11 +146,11 @@ export function Canvas() {
   // write them to the store so the Properties panel can display them even for
   // flow nodes that have no stored layout.x/y/w/h.
   useEffect(() => {
-    if (!selectedNodeId) { setComputedBounds(null); return; }
+    if (!selectedNodeId) { setComputedBounds(null); setComputedStyle(null); return; }
     const stage = stageRef.current;
     if (!stage) return;
     const el = stage.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(selectedNodeId)}"]`);
-    if (!el) { setComputedBounds(null); return; }
+    if (!el) { setComputedBounds(null); setComputedStyle(null); return; }
     const parentEl = el.offsetParent as HTMLElement | null;
     const elRect = el.getBoundingClientRect();
     if (parentEl) {
@@ -137,6 +170,9 @@ export function Canvas() {
         h: Math.round(elRect.height),
       });
     }
+    // Resolve the rendered visual style so the inspector shows real defaults
+    // even for LLM nodes that style themselves through Tailwind classes.
+    setComputedStyle(readComputedStyle(el));
   // Remeasure after any re-render (IR change) or selection change.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedNodeId, ir]);

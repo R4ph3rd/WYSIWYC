@@ -109,6 +109,19 @@ interface Snapshot {
   prompt: StructuredPrompt;
 }
 
+/** Resolved visual style read from the DOM for the Properties panel fallback. */
+export interface ComputedNodeStyle {
+  fill?: string;
+  stroke?: string;
+  strokeWidth?: number;
+  borderRadius?: number;
+  fontFamily?: string;
+  fontSize?: number;
+  fontWeight?: number;
+  fontColor?: string;
+  opacity?: number;
+}
+
 interface AppState {
   ir: IR;
   prompt: StructuredPrompt;
@@ -158,6 +171,13 @@ interface AppState {
    * Position is relative to the parent element.
    */
   computedBounds: { x: number; y: number; w: number; h: number } | null;
+  /**
+   * Computed visual style of the selected node, read from the DOM by Canvas.
+   * LLM-authored nodes carry their look in `tailwind`, not the structured
+   * `style` block, so the Properties panel falls back to these resolved values
+   * (fill, stroke, font color/size/family, …) to show meaningful defaults.
+   */
+  computedStyle: ComputedNodeStyle | null;
 
   generating: boolean; // Compose / Call A in flight
   proposing: boolean; // Call B in flight
@@ -229,6 +249,8 @@ interface AppState {
   syncNow: () => void;
   /** Update the computed DOM bounds of the selected node (called by Canvas). */
   setComputedBounds: (bounds: { x: number; y: number; w: number; h: number } | null) => void;
+  /** Update the computed DOM style of the selected node (called by Canvas). */
+  setComputedStyle: (style: ComputedNodeStyle | null) => void;
 
   /**
    * Forward edit (Prompt → IR): set a clause parameter token's value. Writes the
@@ -545,6 +567,7 @@ export const useAppStore = create<AppState>((set, get) => {
     irSyncMode: 'auto',
     pendingSync: null,
     computedBounds: null,
+    computedStyle: null,
     generating: false,
     proposing: false,
     error: null,
@@ -872,6 +895,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     setComputedBounds: (bounds) => set({ computedBounds: bounds }),
+    setComputedStyle: (style) => set({ computedStyle: style }),
 
     setClauseParam: (clauseId, span, value, original) => {
       const state = get();
