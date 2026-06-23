@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sliders, Type as TypeIcon, Square as SquareIcon, MoveHorizontal, ChevronDown } from 'lucide-react';
+import {
+  Sliders, Type as TypeIcon, Square as SquareIcon, MoveHorizontal, ChevronDown,
+  Italic, Underline, AlignLeft, AlignCenter, AlignRight,
+} from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { IRNode, NodeStyle } from '@/ir/types';
 import { fontStack, familyFromStack } from '@/lib/fonts';
@@ -144,19 +147,28 @@ export function PropertiesPanel() {
             </Row>
             <Row label="Style">
               <div className="flex gap-1">
-                <ToggleButton active={node.style?.italic} onClick={() => set({ italic: !node.style?.italic })}>i</ToggleButton>
-                <ToggleButton active={node.style?.underline} onClick={() => set({ underline: !node.style?.underline })}>U</ToggleButton>
+                <ToggleButton active={node.style?.italic} onClick={() => set({ italic: !node.style?.italic })} label="Italic">
+                  <Italic className="h-3 w-3" />
+                </ToggleButton>
+                <ToggleButton active={node.style?.underline} onClick={() => set({ underline: !node.style?.underline })} label="Underline">
+                  <Underline className="h-3 w-3" />
+                </ToggleButton>
               </div>
             </Row>
             <Row label="Align">
               <div className="flex gap-1">
-                {(['left', 'center', 'right'] as const).map((a) => (
+                {([
+                  ['left', AlignLeft],
+                  ['center', AlignCenter],
+                  ['right', AlignRight],
+                ] as const).map(([a, Icon]) => (
                   <ToggleButton
                     key={a}
                     active={node.style?.textAlign === a}
                     onClick={() => manipulate({ kind: 'align', ids: [node.id], axis: a })}
+                    label={`Align ${a}`}
                   >
-                    {a[0].toUpperCase()}
+                    <Icon className="h-3 w-3" />
                   </ToggleButton>
                 ))}
               </div>

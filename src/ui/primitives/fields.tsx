@@ -318,12 +318,14 @@ export function ColorField({
   );
 }
 
-export function ToggleButton({ active, onClick, children }: {
-  active?: boolean; onClick: () => void; children: React.ReactNode;
+export function ToggleButton({ active, onClick, children, label }: {
+  active?: boolean; onClick: () => void; children: React.ReactNode; label?: string;
 }) {
   return (
     <button
       onClick={onClick}
+      title={label}
+      aria-label={label}
       className={
         'rounded border px-2 py-1 text-[10px] font-medium transition-colors ' +
         (active
