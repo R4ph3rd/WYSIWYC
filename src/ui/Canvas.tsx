@@ -764,7 +764,7 @@ function HeroComposer() {
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="w-full max-w-xl px-6 text-center">
-        <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-[11px] font-medium text-indigo-600 ring-1 ring-indigo-100">
+        <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-slate-900 px-3 py-1 text-[11px] font-medium text-white ring-1 ring-slate-900">
           <Sparkles className="h-3 w-3" /> WYSIWYC
         </div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">
@@ -793,7 +793,7 @@ function HeroComposer() {
               key={s.id}
               onClick={() => loadSample(s.id)}
               disabled={generating}
-              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-900"
             >
               {s.title}
             </button>

@@ -159,7 +159,7 @@ export function PromptPane() {
 
       {clauses.length > 0 && (
         <div className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 text-[10px] text-slate-400">
-          <span className="rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2">
+          <span className="rounded-sm bg-slate-100 px-0.5 font-semibold text-slate-900 underline decoration-dotted decoration-slate-400 underline-offset-2">
             highlighted
           </span>
           values are editable. click to tweak
@@ -364,7 +364,7 @@ function ParamToken({
       title={`Edit ${PARAM_LABEL[span.kind]}`}
       onClick={(e) => { e.stopPropagation(); onParam(span, e); }}
       onDoubleClick={(e) => e.stopPropagation()}
-      className="inline-block cursor-pointer whitespace-nowrap rounded-sm bg-indigo-50/70 px-0.5 align-baseline font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2 hover:bg-indigo-100"
+      className="inline-block cursor-pointer whitespace-nowrap rounded-sm bg-slate-100 px-0.5 align-baseline font-semibold text-slate-900 underline decoration-dotted decoration-slate-400 underline-offset-2 hover:bg-slate-200"
     >
       {swatch && (
         <span
@@ -435,7 +435,7 @@ function ClauseItem({
           ? 'cursor-pointer border-dashed border-amber-300 bg-amber-50/60 text-amber-900'
           : selected
             ? 'cursor-pointer border-slate-200 bg-slate-100 text-slate-900'
-            : 'cursor-pointer border-transparent text-slate-700 hover:bg-slate-50',
+            : 'cursor-pointer border-transparent text-slate-600 hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
     >

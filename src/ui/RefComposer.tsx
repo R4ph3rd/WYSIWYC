@@ -212,8 +212,8 @@ export function RefComposer({
       className={cn(
         'rounded-xl border bg-white shadow-sm transition-colors',
         lg ? 'rounded-2xl p-2 shadow-lg shadow-slate-200/60' : 'p-1.5',
-        dragOver ? 'border-indigo-400 ring-2 ring-indigo-100' : 'border-slate-200',
-        'focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-50',
+        dragOver ? 'border-slate-400 ring-2 ring-slate-200' : 'border-slate-200',
+        'focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-100',
       )}
       onDrop={onDrop}
       onDragOver={onDragOver}
@@ -313,7 +313,7 @@ function Chip({ ref0, badge, onRemove }: { ref0: PromptRef; badge?: string; onRe
       )}
       <span className="truncate">{ref0.label}</span>
       {badge && (
-        <span className="rounded bg-indigo-600 px-1 text-[9px] font-bold leading-tight text-white">{badge}</span>
+        <span className="rounded bg-slate-900 px-1 text-[9px] font-bold leading-tight text-white">{badge}</span>
       )}
       <button onClick={onRemove} aria-label="Remove reference" className="-mr-0.5 opacity-60 hover:opacity-100">
         <X className="h-3 w-3" />
