@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 import { HexColorPicker } from 'react-colorful';
 
@@ -199,14 +200,36 @@ export function ColorField({
   const [hexDraft, setHexDraft] = useState(hex.slice(1).toUpperCase());
   const [open, setOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
+  const swatchRef = useRef<HTMLButtonElement>(null);
+  // The popover is portalled to <body> with fixed coords clamped to the
+  // viewport, so it never spills off the right/top edges inside narrow panels.
+  const [pos, setPos] = useState({ left: 0, top: 0 });
 
   useEffect(() => setHexDraft(hex.slice(1).toUpperCase()), [hex]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const anchor = swatchRef.current?.getBoundingClientRect();
+    const pop = popoverRef.current?.getBoundingClientRect();
+    if (!anchor) return;
+    const w = pop?.width ?? 220;
+    const h = pop?.height ?? 260;
+    const margin = 8;
+    // Prefer dropping below the swatch; flip above if it would clip the bottom.
+    let top = anchor.bottom + 6;
+    if (top + h + margin > window.innerHeight) top = Math.max(margin, anchor.top - h - 6);
+    const left = Math.max(margin, Math.min(anchor.left, window.innerWidth - w - margin));
+    setPos({ left, top });
+  }, [open]);
 
   // Close picker when clicking outside.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) setOpen(false);
+      if (
+        popoverRef.current && !popoverRef.current.contains(e.target as Node) &&
+        swatchRef.current && !swatchRef.current.contains(e.target as Node)
+      ) setOpen(false);
     };
     window.addEventListener('mousedown', onDown);
     return () => window.removeEventListener('mousedown', onDown);
@@ -225,6 +248,7 @@ export function ColorField({
     <div className="relative flex items-center gap-1.5 rounded border border-slate-200 bg-white px-1.5 py-1">
       {/* Swatch button — opens the react-colorful popover */}
       <button
+        ref={swatchRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="relative h-4 w-4 shrink-0 overflow-hidden rounded border border-slate-200 focus:outline-none"
@@ -262,11 +286,12 @@ export function ColorField({
         </div>
       )}
 
-      {/* react-colorful popover */}
-      {open && (
+      {/* react-colorful popover — portalled & viewport-clamped (no overflow) */}
+      {open && createPortal(
         <div
           ref={popoverRef}
-          className="absolute bottom-full left-0 z-50 mb-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-300/40"
+          style={{ left: pos.left, top: pos.top }}
+          className="fixed z-[60] rounded-xl border border-slate-200 bg-white p-2 shadow-xl shadow-slate-300/40"
           onMouseDown={(e) => e.stopPropagation()}
         >
           <HexColorPicker
@@ -286,7 +311,8 @@ export function ColorField({
               maxLength={6}
             />
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
