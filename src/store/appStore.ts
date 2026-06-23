@@ -211,6 +211,8 @@ interface AppState {
    * "reject" — a substantial IR change must be described in the spec.
    */
   acceptProposal: (overrideText?: string) => void;
+  /** Discard a pending proposal's spec wording without folding it in. */
+  discardProposal: () => void;
 
   /** Copy the current selection's subtree(s) to the clipboard. */
   copySelection: () => void;
@@ -783,6 +785,14 @@ export const useAppStore = create<AppState>((set, get) => {
         pendingAffectedIds: [],
         recentIds: clauses.map((c) => c.id),
       }));
+      setLastDecision(true);
+    },
+
+    discardProposal: () => {
+      if (!get().pendingProposal) return;
+      // Drop the proposed spec wording without folding it in. The IR edit it
+      // describes is already applied; the user chose not to record it now.
+      set({ pendingProposal: null, pendingAffectedIds: [] });
       setLastDecision(true);
     },
 
