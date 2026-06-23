@@ -111,12 +111,13 @@ export function PromptPane() {
     setEditingId(null);
     if (text !== null && text.trim() && text !== c.text) editClause(c.id, text);
   };
-  // Rephrasing a proposed clause accepts the proposal with the new wording. An
-  // empty/cancelled edit leaves it proposed (point 4: stays pending until
-  // accept / rephrase / delete).
-  const onDonePendingEdit = () => (text: string | null) => {
+  // Rephrasing a proposed clause accepts the proposal with the new wording.
+  // A cancel (Esc), an empty value, or a blur that left the text unchanged all
+  // leave it proposed — it stays pending until the user accepts, genuinely
+  // rephrases, or discards it.
+  const onDonePendingEdit = (c: PromptClause) => (text: string | null) => {
     setEditingId(null);
-    if (text !== null && text.trim()) acceptProposal(text);
+    if (text !== null && text.trim() && text.trim() !== c.text.trim()) acceptProposal(text);
   };
   // Proposed (pending) clauses expose no param tokens (their value isn't in the
   // store yet), but ARE interactive: single click opens alternatives, double
@@ -193,7 +194,7 @@ export function PromptPane() {
                   <div className="space-y-0.5">
                     {items.map((c) =>
                       editingId === c.id ? (
-                        <ClauseEditor key={c.id} clause={c} onDone={pendingIds.has(c.id) ? onDonePendingEdit() : onDoneEdit(c)} />
+                        <ClauseEditor key={c.id} clause={c} onDone={pendingIds.has(c.id) ? onDonePendingEdit(c) : onDoneEdit(c)} />
                       ) : (
                         <ClauseItem key={c.id} clause={c} pending={pendingIds.has(c.id)} {...clauseHandlers(c, pendingIds.has(c.id))} />
                       ),
@@ -208,7 +209,7 @@ export function PromptPane() {
             <p className="text-[13px] leading-7 text-slate-700">
               {displayClauses.map((c) =>
                 editingId === c.id ? (
-                  <ClauseEditor key={c.id} clause={c} onDone={pendingIds.has(c.id) ? onDonePendingEdit() : onDoneEdit(c)} />
+                  <ClauseEditor key={c.id} clause={c} onDone={pendingIds.has(c.id) ? onDonePendingEdit(c) : onDoneEdit(c)} />
                 ) : (
                   <ClauseInline key={c.id} clause={c} pending={pendingIds.has(c.id)} {...clauseHandlers(c, pendingIds.has(c.id))} />
                 ),
