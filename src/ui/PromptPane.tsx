@@ -90,6 +90,15 @@ export function PromptPane() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [altMenu, setAltMenu] = useState<{ clauseId: string; x: number; y: number } | null>(null);
   const [view, setView] = useState<SpecView>('structured');
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // "Review changes" (DiffRibbon) scrolls the spec to the first proposed clause.
+  const reviewChanges = () => {
+    const firstId = pendingProposal?.updatedClauses[0]?.id;
+    if (!firstId) return;
+    const el = scrollRef.current?.querySelector<HTMLElement>(`[data-clause-id="${CSS.escape(firstId)}"]`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
   // A clicked parameter token → its widget popover. `original` snapshots the
   // clause text+params at open so live drags splice from a stable base.
   const [paramPopover, setParamPopover] = useState<
@@ -147,6 +156,7 @@ export function PromptPane() {
 
       {/* Clicking empty space in the spec clears any canvas selection. */}
       <div
+        ref={scrollRef}
         className="flex-1 overflow-y-auto px-3 py-3"
         onClick={(e) => { if (e.target === e.currentTarget) selectNode(null); }}
       >
@@ -244,8 +254,8 @@ export function PromptPane() {
         </div>
       )}
 
-      {/* Pending Call B proposal — accept / alternatives / rephrase, inline. */}
-      <DiffRibbon />
+      {/* Pending Call B proposal — slim banner; per-change actions are inline. */}
+      <DiffRibbon onReview={reviewChanges} />
 
       <div className="border-t border-slate-100 p-2.5">
         <RecipesRail />
@@ -375,6 +385,7 @@ function ClauseItem({
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   return (
     <div
+      data-clause-id={clause.id}
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
       onClick={(e) => {
@@ -457,6 +468,7 @@ function ClauseInline({
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   return (
     <span
+      data-clause-id={clause.id}
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
       onClick={(e) => {
