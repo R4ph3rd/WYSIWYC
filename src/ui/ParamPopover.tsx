@@ -80,6 +80,7 @@ const LABELS: Record<ParamKind, string> = {
   opacity: 'Opacity',
   align: 'Align',
   enum: 'Option',
+  shape: 'Shape',
   text: 'Value',
 };
 
@@ -146,6 +147,19 @@ function Widget({
           ))}
         </div>
       );
+
+    case 'shape': {
+      const SHAPE_MAP: Record<string, number> = { round: 9999, circular: 9999, rounded: 8, rectangular: 0, square: 0 };
+      return (
+        <div className="flex flex-wrap gap-1">
+          {(span.options ?? Object.keys(SHAPE_MAP)).map((o) => (
+            <ToggleButton key={o} active={span.value === SHAPE_MAP[o]?.toString()} onClick={() => onCommitClose(String(SHAPE_MAP[o] ?? 0))}>
+              {o}
+            </ToggleButton>
+          ))}
+        </div>
+      );
+    }
 
     case 'fontFamily':
       return <FontPicker value={span.value} onChange={(f) => onCommitClose(f)} />;

@@ -80,6 +80,7 @@ export function Canvas() {
   promptRefs
     .filter((r) => r.kind === 'node')
     .forEach((r, i) => { if ('nodeId' in r && r.nodeId) nodeLetters[r.nodeId] = String.fromCharCode(65 + i); });
+  const setComputedBounds = useAppStore((s) => s.setComputedBounds);
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
   const createShape = useAppStore((s) => s.createShape);
@@ -107,6 +108,38 @@ export function Canvas() {
   useEffect(() => {
     if (focusRequest?.target === 'canvas') stageRef.current?.focus();
   }, [focusRequest?.seq, focusRequest?.target]);
+
+  // Measure the selected node's DOM bounds (relative to its parent element) and
+  // write them to the store so the Properties panel can display them even for
+  // flow nodes that have no stored layout.x/y/w/h.
+  useEffect(() => {
+    if (!selectedNodeId) { setComputedBounds(null); return; }
+    const stage = stageRef.current;
+    if (!stage) return;
+    const el = stage.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(selectedNodeId)}"]`);
+    if (!el) { setComputedBounds(null); return; }
+    const parentEl = el.offsetParent as HTMLElement | null;
+    const elRect = el.getBoundingClientRect();
+    if (parentEl) {
+      const parentRect = parentEl.getBoundingClientRect();
+      setComputedBounds({
+        x: Math.round(elRect.left - parentRect.left),
+        y: Math.round(elRect.top - parentRect.top),
+        w: Math.round(elRect.width),
+        h: Math.round(elRect.height),
+      });
+    } else {
+      const stageRect = stage.getBoundingClientRect();
+      setComputedBounds({
+        x: Math.round(elRect.left - stageRect.left),
+        y: Math.round(elRect.top - stageRect.top),
+        w: Math.round(elRect.width),
+        h: Math.round(elRect.height),
+      });
+    }
+  // Remeasure after any re-render (IR change) or selection change.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNodeId, ir]);
 
   // Surface the "unbound shortcut" hint for a few seconds after it is flagged.
   const [hintVisible, setHintVisible] = useState(false);
@@ -401,10 +434,9 @@ export function Canvas() {
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
-      {/* Sync mode (top-right): auto-sync canvas edits to the spec, or hold them
-          for a manual "Update spec" click shown above the chat. */}
+      {/* Sync mode toggle: bottom-right, horizontal, aligned with the tool palette. */}
       <div
-        className="absolute right-3 top-3 z-20 flex flex-col rounded-md border border-slate-200 bg-white/95 p-0.5 text-[10px] shadow-sm backdrop-blur"
+        className="absolute bottom-4 right-3 z-20 flex flex-row rounded-md border border-slate-200 bg-white/95 p-0.5 text-[10px] shadow-sm backdrop-blur"
         title="How canvas edits update the spec"
       >
         {(['auto', 'manual'] as const).map((m) => (
@@ -413,7 +445,7 @@ export function Canvas() {
             onClick={() => setIrSyncMode(m)}
             className={cn(
               'rounded px-2 py-0.5 font-medium capitalize transition-colors',
-              irSyncMode === m ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100',
+              irSyncMode === m ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100',
             )}
           >
             {m}

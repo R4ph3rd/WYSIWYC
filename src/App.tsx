@@ -25,6 +25,7 @@ export default function App() {
   const activeLabel = useSettingsStore((s) => s.activeLabel());
 
   const [connectOpen, setConnectOpen] = useState(false);
+  // Layers panel collapses to a narrow icon bar by default (false).
   const [layersOpen, setLayersOpen] = useState(false);
 
   // Lazily load any Google font actually in use by a node's style.fontFamily

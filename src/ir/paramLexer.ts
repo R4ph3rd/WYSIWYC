@@ -28,8 +28,21 @@ const WEIGHT_WORDS: Record<string, number> = {
   semibold: 600, bold: 700, extrabold: 800, heavy: 800, black: 900,
 };
 
+// Compound color phrases like "light grey", "dark blue" — matched BEFORE single
+// weight or color words so "light" is not misread as font-weight 300.
+const COMPOUND_COLOR_MODIFIERS = ['light', 'dark', 'deep', 'soft', 'bright', 'pale', 'muted', 'warm', 'cool', 'vivid', 'rich', 'dull'];
+const COMPOUND_COLOR_RE = new RegExp(
+  `\\b(?:${COMPOUND_COLOR_MODIFIERS.join('|')})\\s+(?:${Object.keys(COLOR_NAMES).join('|')})\\b`,
+  'gi',
+);
+
 const SHADOW_WORDS = ['shadow', 'elevation', 'elevated', 'drop shadow'];
 const TEXT_ROLES = new Set<IRNode['role']>(['text', 'heading', 'button', 'badge', 'icon']);
+
+// Shape descriptors: "round avatar", "circular icon", "square card".
+// Matched as 'shape' kind; written to style.borderRadius via a word→px mapping.
+const SHAPE_WORDS = { round: '9999', circular: '9999', rounded: '8', rectangular: '0', square: '0' } as const;
+const SHAPE_RE = new RegExp(`\\b(?:${Object.keys(SHAPE_WORDS).join('|')})\\b`, 'gi');
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -71,12 +84,17 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
   for (const re of FONT_RES) for (const m of scan(text, re, 'fontFamily')) raw.push(m);
   for (const m of scan(text, HEX_RE, 'color')) raw.push(m);
   for (const m of scan(text, RGB_RE, 'color')) raw.push(m);
+  // Compound color phrases ("light grey", "dark blue") must come BEFORE both the
+  // single color-name scan and the font-weight scan, so "light grey" is treated
+  // as one color token instead of "light" (weight 300) + "grey" (color).
+  for (const m of scan(text, COMPOUND_COLOR_RE, 'color')) raw.push(m);
   for (const m of scan(text, COLOR_NAME_RE, 'color')) raw.push(m);
   for (const m of scan(text, RADIUS_RE, 'radius')) raw.push(m);
   for (const m of scan(text, NUMBER_RE, 'length')) raw.push(m);
   for (const m of scan(text, WEIGHT_RE, 'fontWeight')) raw.push(m);
   for (const m of scan(text, SHADOW_RE, 'shadow')) raw.push(m);
   for (const m of scan(text, ALIGN_RE, 'align')) raw.push(m);
+  for (const m of scan(text, SHAPE_RE, 'shape' as ParamKind)) raw.push(m);
 
   // Resolve overlaps: earliest first, longest at a tie.
   raw.sort((a, b) => a.start - b.start || b.end - a.end);
@@ -96,7 +114,11 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
         const targets = fill.length ? fill : texts;
         const path = fill.length ? 'style.fill' : texts.length ? 'style.fontColor' : 'style.fill';
         const lc = m.text.toLowerCase();
-        const value = m.text.startsWith('#') || lc.startsWith('rgb') ? m.text : (COLOR_NAMES[lc] ?? '#4f46e5');
+        // For compound phrases like "light grey", resolve the base color name (last word).
+        const baseWord = lc.split(/\s+/).pop() ?? lc;
+        const value = m.text.startsWith('#') || lc.startsWith('rgb')
+          ? m.text
+          : (COLOR_NAMES[lc] ?? COLOR_NAMES[baseWord] ?? '#4f46e5');
         return { ...base, kind: 'color', nodeIds: targets.map((n) => n.id), path, value };
       }
       case 'fontFamily':
@@ -113,6 +135,19 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
         return { ...base, kind: 'shadow', nodeIds: fill.map((n) => n.id), path: 'style.shadow', value: '' };
       case 'align':
         return { ...base, kind: 'align', nodeIds: texts.map((n) => n.id), path: 'align', value: normalizeAlign(m.text) };
+      case 'shape': {
+        const key = m.text.toLowerCase() as keyof typeof SHAPE_WORDS;
+        const shapedNodes = [...fill, ...ownedNodes.filter((n) => n.role === 'circle' || n.role === 'image' || n.role === 'badge')];
+        const targets = shapedNodes.length ? shapedNodes : ownedNodes;
+        return {
+          ...base,
+          kind: 'shape',
+          nodeIds: targets.map((n) => n.id),
+          path: 'style.borderRadius',
+          value: SHAPE_WORDS[key] ?? '0',
+          options: Object.keys(SHAPE_WORDS),
+        };
+      }
       default:
         return { ...base, kind: 'text', nodeIds: [], path: 'content', value: m.text };
     }
