@@ -363,7 +363,7 @@ function ParamToken({
       title={`Edit ${PARAM_LABEL[span.kind]}`}
       onClick={(e) => { e.stopPropagation(); onParam(span, e); }}
       onDoubleClick={(e) => e.stopPropagation()}
-      className="cursor-pointer rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2 hover:bg-indigo-100"
+      className="inline-block cursor-pointer whitespace-nowrap rounded-sm bg-indigo-50/70 px-0.5 align-baseline font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2 hover:bg-indigo-100"
     >
       {swatch && (
         <span
@@ -429,7 +429,7 @@ function ClauseItem({
       }}
       title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
-        'group flex items-center gap-2 rounded-md border px-2 py-1.5 text-[13px] overflow-hidden transition-colors',
+        'group flex items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] transition-colors',
         pending
           ? 'cursor-pointer border-dashed border-amber-300 bg-amber-50/60 text-amber-900'
           : selected
@@ -440,16 +440,18 @@ function ClauseItem({
     >
       <span
         className={cn(
-          'h-1.5 w-1.5 shrink-0 rounded-full',
+          'mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full',
           pending ? 'bg-amber-500' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
         )}
       />
-      <span className="min-w-0 flex-1 truncate"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
+      {/* IR items wrap freely so the whole sentence is visible; only the
+          interactive param tokens inside stay on one line (see ParamToken). */}
+      <span className="min-w-0 flex-1 break-words"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
       {pending ? (
         <button
           onClick={(e) => { e.stopPropagation(); onAccept?.(); }}
           title="Accept this change"
-          className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 transition-colors group-hover:bg-slate-900 group-hover:text-white"
+          className="mt-px shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 transition-colors group-hover:bg-slate-900 group-hover:text-white"
         >
           <span className="group-hover:hidden">Proposed</span>
           <span className="hidden group-hover:inline">Accept</span>
