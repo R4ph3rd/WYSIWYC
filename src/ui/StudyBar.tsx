@@ -105,7 +105,7 @@ export function StudyBar() {
 
       {/* Reference thumbnail */}
       <img
-        src={`/tasks/${taskId}.png`}
+        src={`/tasks/${taskId}.svg`}
         alt="Reference"
         className="h-8 w-14 rounded border border-violet-200 object-cover"
         onError={(e) => (e.currentTarget.style.display = 'none')}
