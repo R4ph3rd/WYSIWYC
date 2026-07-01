@@ -15,6 +15,7 @@ import type {
   StructuredPrompt,
 } from '@/ir/types';
 import { setAlignment, setUtility } from '@/ir/tailwindEdit';
+import { COLOR_NAMES } from '@/ir/paramLexer';
 import { familyFromStack } from '@/lib/fonts';
 import { loadGoogleFont } from '@/lib/loadFont';
 import {
@@ -369,6 +370,36 @@ function keywordOf(label: string): string {
   return m ? m[1].toLowerCase() : 'here';
 }
 
+/** Map a borderRadius number back to the closest semantic shape word. */
+function nearestShapeWord(borderRadius: number): string {
+  if (borderRadius >= 9000) return 'round';
+  if (borderRadius > 0) return 'rounded';
+  return 'square';
+}
+
+/** Map a 6-digit hex color back to the closest named color in the lexer palette. */
+function nearestColorName(hex: string): string {
+  const lc = hex.toLowerCase();
+  // Exact match: avoid a distance search when the picker lands on a palette color.
+  const exact = Object.keys(COLOR_NAMES).find((name) => COLOR_NAMES[name].toLowerCase() === lc);
+  if (exact) return exact;
+  // Nearest by RGB Euclidean distance.
+  if (!/^#[0-9a-f]{6}$/.test(lc)) return hex; // not a 6-char hex — return as-is
+  const r1 = parseInt(lc.slice(1, 3), 16);
+  const g1 = parseInt(lc.slice(3, 5), 16);
+  const b1 = parseInt(lc.slice(5, 7), 16);
+  let best = 'blue';
+  let bestDist = Infinity;
+  for (const [name, namedHex] of Object.entries(COLOR_NAMES)) {
+    const r2 = parseInt(namedHex.slice(1, 3), 16);
+    const g2 = parseInt(namedHex.slice(3, 5), 16);
+    const b2 = parseInt(namedHex.slice(5, 7), 16);
+    const dist = (r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2;
+    if (dist < bestDist) { bestDist = dist; best = name; }
+  }
+  return best;
+}
+
 /** The human-readable prose form of a value (null = leave the clause token unchanged). */
 function humanParamValue(span: ParamSpan, value: string): string | null {
   switch (span.kind) {
@@ -378,9 +409,14 @@ function humanParamValue(span: ParamSpan, value: string): string | null {
     case 'radius':
       return `${value}${span.unit ?? 'px'}`;
     case 'shape':
-      return value; // the shape word itself ("round", "square", etc.)
+      // The widget sends numeric borderRadius values (9999, 8, 0); convert back
+      // to a shape word so the prose stays "round/rounded/square", not "9999".
+      return nearestShapeWord(Number(value));
+    case 'color':
+      // Color picker emits hex; keep the prose readable with a named color.
+      return value.startsWith('#') ? nearestColorName(value) : value;
     default:
-      return value; // color hex, font family, weight, align word, enum, free text
+      return value; // font family, weight, align word, enum, free text
   }
 }
 
