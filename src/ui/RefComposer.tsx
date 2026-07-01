@@ -212,7 +212,7 @@ export function RefComposer({
       className={cn(
         'rounded-xl border bg-white shadow-sm transition-colors',
         lg ? 'rounded-2xl p-2 shadow-lg shadow-slate-200/60' : 'p-1.5',
-        dragOver ? 'border-slate-400 ring-2 ring-slate-100' : 'border-slate-200',
+        dragOver ? 'border-slate-400 ring-2 ring-slate-200' : 'border-slate-200',
         'focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-100',
       )}
       onDrop={onDrop}
