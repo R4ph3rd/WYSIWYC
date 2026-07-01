@@ -58,7 +58,7 @@ export function ParamPopover({
       className="fixed z-50 w-60 rounded-xl border border-slate-200 bg-white p-2.5 shadow-lg shadow-slate-300/40 ring-1 ring-black/5"
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
         {LABELS[span.kind]}
         {span.nodeIds.length === 0 && (
           <span className="ml-auto normal-case text-[9px] text-slate-300">prose only</span>

@@ -140,7 +140,7 @@ export function PromptPane() {
   return (
     <div className="flex h-full flex-col bg-white">
       <div className="flex items-center gap-2 border-b border-slate-100 px-3 py-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Spec</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Spec</span>
         <div className="ml-auto flex rounded-md border border-slate-200 p-0.5">
           {(['structured', 'prose'] as SpecView[]).map((v) => (
             <button
@@ -158,7 +158,7 @@ export function PromptPane() {
       </div>
 
       {clauses.length > 0 && (
-        <div className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 text-[10px] text-slate-400">
+        <div className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 text-[10px] text-slate-500">
           <span className="rounded-sm bg-slate-100 px-0.5 font-semibold text-slate-900 underline decoration-dotted decoration-slate-400 underline-offset-2">
             highlighted
           </span>
@@ -173,7 +173,7 @@ export function PromptPane() {
         onClick={(e) => { if (e.target === e.currentTarget) selectNode(null); }}
       >
         {displayClauses.length === 0 ? (
-          <p className="px-1 py-6 text-center text-xs text-slate-400">
+          <p className="px-1 py-6 text-center text-xs text-slate-500">
             Nothing here yet — describe what you want below, or pick an example.
           </p>
         ) : view === 'structured' ? (
@@ -217,7 +217,7 @@ export function PromptPane() {
             </p>
             <div className="mt-4 flex flex-wrap items-center gap-2.5 border-t border-slate-100 pt-2.5">
               {CLAUSE_CATEGORIES.map((cat) => (
-                <span key={cat} className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-slate-400">
+                <span key={cat} className="flex items-center gap-1 text-[9px] uppercase tracking-wide text-slate-500">
                   <span className={cn('h-1.5 w-1.5 rounded-full', CATEGORY_META[cat].dot)} /> {CATEGORY_META[cat].label}
                 </span>
               ))}

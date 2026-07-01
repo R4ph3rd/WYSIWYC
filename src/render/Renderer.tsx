@@ -250,7 +250,7 @@ export function Renderer(props: RendererProps) {
   const roots = buildTree(props.ir);
   if (roots.length === 0) {
     return (
-      <div className="grid h-full place-items-center text-sm text-slate-400">
+      <div className="grid h-full place-items-center text-sm text-slate-500">
         Empty canvas — draw a shape with the tool palette, or describe a UI in the prompt pane.
       </div>
     );

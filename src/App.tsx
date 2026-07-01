@@ -98,7 +98,7 @@ export default function App() {
       <header className="flex h-12 items-center gap-3 border-b border-slate-200 bg-white px-4">
         <div className="flex items-baseline gap-2">
           <span className="text-sm font-bold tracking-tight text-slate-900">WYSIWYC</span>
-          <span className="text-[11px] text-slate-400">What You See Is What You Chat</span>
+          <span className="text-[11px] text-slate-500">What You See Is What You Chat</span>
         </div>
 
         <div className="mx-2 h-5 w-px bg-slate-200" />

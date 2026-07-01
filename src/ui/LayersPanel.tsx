@@ -42,13 +42,13 @@ export function LayersPanel({ onCollapse }: { onCollapse?: () => void }) {
       <div className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-2">
         <LayersIcon className="h-3.5 w-3.5 text-slate-500" />
         <span className="text-xs font-semibold tracking-tight text-slate-700">Layers</span>
-        <span className="ml-auto text-[10px] text-slate-400">{ir.nodes.length} nodes</span>
+        <span className="ml-auto text-[10px] text-slate-500">{ir.nodes.length} nodes</span>
         {onCollapse && (
           <button
             onClick={onCollapse}
             title="Collapse layers"
             aria-label="Collapse layers"
-            className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            className="rounded p-0.5 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
           >
             <ChevronsLeft className="h-3.5 w-3.5" />
           </button>
@@ -56,7 +56,7 @@ export function LayersPanel({ onCollapse }: { onCollapse?: () => void }) {
       </div>
       <div className="flex-1 overflow-y-auto p-1.5 text-xs">
         {tree.length === 0 && (
-          <p className="px-2 py-4 text-center text-[11px] text-slate-400">
+          <p className="px-2 py-4 text-center text-[11px] text-slate-500">
             Nothing here yet. Draw a shape or generate from the prompt.
           </p>
         )}
@@ -117,11 +117,11 @@ function TreeNode({ tree, depth, selectedId, selectedIds, onSelect, onHoverClaus
         style={{ paddingLeft: 6 + depth * 12 }}
       >
         {children.length > 0 ? (
-          <ChevronRight className="h-3 w-3 rotate-90 text-slate-400" />
+          <ChevronRight className="h-3 w-3 rotate-90 text-slate-500" />
         ) : (
           <span className="w-3" />
         )}
-        <span className={isSelected ? 'text-indigo-600' : 'text-slate-400'}>
+        <span className={isSelected ? 'text-indigo-600' : 'text-slate-500'}>
           {ROLE_ICON[node.role]}
         </span>
         <span className="flex-1 truncate text-[11px]">{label}</span>

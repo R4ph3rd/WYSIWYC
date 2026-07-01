@@ -268,7 +268,7 @@ export function RefComposer({
           onClick={send}
           disabled={disabled || busy || composerIsEmpty(value)}
           className={cn(
-            'flex items-center justify-center rounded-full bg-slate-900 text-white transition-colors hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400',
+            'flex items-center justify-center rounded-full bg-slate-900 text-white transition-colors hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-500',
             lg ? 'h-8 w-8' : 'h-6 w-6',
           )}
           aria-label="Send"
@@ -382,7 +382,7 @@ function TextSegment({
         }
       }}
       className={cn(
-        'bg-transparent text-slate-800 outline-none placeholder:text-slate-400',
+        'bg-transparent text-slate-800 outline-none placeholder:text-slate-500',
         size === 'lg' ? 'text-sm' : 'text-xs',
       )}
     />

@@ -67,13 +67,13 @@ export function ExtractMenu({
         onClick={() => onPick(null)}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50"
       >
-        <Link2 className="h-3.5 w-3.5 text-slate-400" />
+        <Link2 className="h-3.5 w-3.5 text-slate-500" />
         <span className="font-medium">Just reference it</span>
-        <span className="ml-auto truncate text-[10px] text-slate-400">{node.role}</span>
+        <span className="ml-auto truncate text-[10px] text-slate-500">{node.role}</span>
       </button>
 
       <div className="my-1 border-t border-slate-100" />
-      <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+      <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
         <Sparkles className="h-3 w-3" /> Extract a property
       </div>
 
@@ -87,7 +87,7 @@ export function ExtractMenu({
               className="flex w-full flex-col items-start px-3 py-1.5 text-left hover:bg-violet-50"
             >
               <span className="text-xs font-medium capitalize text-slate-700">{label}</span>
-              <span className="w-full truncate text-[10px] text-slate-400">{value}</span>
+              <span className="w-full truncate text-[10px] text-slate-500">{value}</span>
             </button>
           );
         })}

@@ -58,7 +58,7 @@ export function PropertiesPanel() {
     return (
       <div className="flex h-full flex-col bg-white">
         <PanelHeader title="Properties" />
-        <p className="px-4 py-6 text-center text-[11px] text-slate-400">
+        <p className="px-4 py-6 text-center text-[11px] text-slate-500">
           Select a layer to edit its properties.
         </p>
       </div>
@@ -94,7 +94,7 @@ export function PropertiesPanel() {
               labelProps={paramDragProps({ nodeId: node.id, path: 'layout.h', value: node.layout?.h ?? computedBounds?.h })} />
           </div>
           {node.layout?.x === undefined && computedBounds && (
-            <p className="mt-1 text-[9px] text-slate-400">Computed — edit to switch to absolute layout</p>
+            <p className="mt-1 text-[9px] text-slate-500">Computed — edit to switch to absolute layout</p>
           )}
         </Section>
 
@@ -190,7 +190,7 @@ export function PropertiesPanel() {
           {node.style?.shadow?.trim() ? (
             <ShadowEditor value={node.style.shadow} onChange={(v) => set({ shadow: v })} />
           ) : (
-            <p className="text-[10px] text-slate-400">No shadow. Toggle it on to add a drop shadow.</p>
+            <p className="text-[10px] text-slate-500">No shadow. Toggle it on to add a drop shadow.</p>
           )}
         </Section>
       </div>
@@ -214,7 +214,7 @@ function Section({ title, icon, accessory, children }: {
 }) {
   return (
     <div className="mb-3 border-b border-slate-100 pb-3 last:border-b-0">
-      <div className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+      <div className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
         {icon} {title}
         {accessory && <span className="ml-auto normal-case">{accessory}</span>}
       </div>
@@ -254,7 +254,7 @@ function FontField({ value, onChange }: { value: string | undefined; onChange: (
         className="flex w-full items-center justify-between rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] text-slate-700 hover:border-slate-300"
       >
         <span className="truncate">{family || 'Default'}</span>
-        <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />
+        <ChevronDown className="h-3 w-3 shrink-0 text-slate-500" />
       </button>
       {open && (
         <div className="absolute right-0 top-full z-30 mt-1 w-56 rounded-xl border border-slate-200 bg-white p-2 shadow-lg shadow-slate-300/40">

@@ -56,7 +56,7 @@ export function FontPicker({
             <span className="shrink-0 text-[9px] uppercase tracking-wide text-slate-300">{f.category}</span>
           </button>
         ))}
-        {results.length === 0 && <p className="px-2 py-4 text-center text-[11px] text-slate-400">No fonts match.</p>}
+        {results.length === 0 && <p className="px-2 py-4 text-center text-[11px] text-slate-500">No fonts match.</p>}
       </div>
     </div>
   );

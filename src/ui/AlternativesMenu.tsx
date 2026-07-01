@@ -71,7 +71,7 @@ export function AlternativesMenu({
 
       {alternatives.length > 0 ? (
         <>
-          <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
             <RefreshCw className="h-3 w-3" /> Alternatives
           </div>
           {alternatives.map((alt, i) => (
@@ -87,11 +87,11 @@ export function AlternativesMenu({
           <div className="my-1 border-t border-slate-100" />
         </>
       ) : (
-        <div className="px-3 py-1.5 text-[11px] text-slate-400">No alternatives suggested.</div>
+        <div className="px-3 py-1.5 text-[11px] text-slate-500">No alternatives suggested.</div>
       )}
 
       <button onClick={onEdit} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-50">
-        <Pencil className="h-3 w-3 text-slate-400" /> Edit text…
+        <Pencil className="h-3 w-3 text-slate-500" /> Edit text…
       </button>
       <button onClick={onRemove} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-rose-600 hover:bg-rose-50">
         <Trash2 className="h-3 w-3" /> Remove

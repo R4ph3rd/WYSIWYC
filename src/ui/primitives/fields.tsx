@@ -74,7 +74,7 @@ export function composeColor(hex: string, alpha: number): string {
 /** Figma-style stacked +/- chevrons that nudge a number field. */
 export function Stepper({ onUp, onDown }: { onUp: () => void; onDown: () => void }) {
   const btn =
-    'flex h-1/2 w-full items-center justify-center text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700';
+    'flex h-1/2 w-full items-center justify-center text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700';
   return (
     <div className="flex h-6 w-4 shrink-0 flex-col border-l border-slate-200">
       <button type="button" tabIndex={-1} aria-label="Increase" className={btn} onClick={onUp}>
@@ -111,7 +111,7 @@ export function NumberField({
   return (
     <div className="flex items-center gap-1 rounded border border-slate-200 bg-white pl-1.5 focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-100">
       {label && (
-        <span {...labelProps} className={'text-[9px] uppercase text-slate-400' + (labelProps?.className ? ' ' + labelProps.className : '')}>
+        <span {...labelProps} className={'text-[9px] uppercase text-slate-500' + (labelProps?.className ? ' ' + labelProps.className : '')}>
           {label}
         </span>
       )}
@@ -161,7 +161,7 @@ export function Slider({
           onChange={(e) => onChange(Number(e.target.value))}
           className="w-9 bg-transparent text-right text-[11px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
-        {unit && <span className="text-[9px] text-slate-400">{unit}</span>}
+        {unit && <span className="text-[9px] text-slate-500">{unit}</span>}
       </div>
     </div>
   );
@@ -282,7 +282,7 @@ export function ColorField({
             }}
             className="w-7 bg-transparent text-right text-[10px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
-          <span className="text-[9px] text-slate-400">%</span>
+          <span className="text-[9px] text-slate-500">%</span>
         </div>
       )}
 
@@ -302,7 +302,7 @@ export function ColorField({
           />
           {/* Quick hex input inside the picker for power users */}
           <div className="mt-1.5 flex items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-1">
-            <span className="text-[10px] text-slate-400">#</span>
+            <span className="text-[10px] text-slate-500">#</span>
             <input
               type="text"
               value={hexDraft}
