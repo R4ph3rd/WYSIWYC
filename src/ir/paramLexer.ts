@@ -111,14 +111,18 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
     const base = { id: `lex_${i + 1}`, start: m.start, end: m.end };
     switch (m.kind) {
       case 'color': {
-        const targets = fill.length ? fill : texts;
-        const path = fill.length ? 'style.fill' : texts.length ? 'style.fontColor' : 'style.fill';
         const lc = m.text.toLowerCase();
         // For compound phrases like "light grey", resolve the base color name (last word).
         const baseWord = lc.split(/\s+/).pop() ?? lc;
         const value = m.text.startsWith('#') || lc.startsWith('rgb')
           ? m.text
           : (COLOR_NAMES[lc] ?? COLOR_NAMES[baseWord] ?? '#4f46e5');
+        const path = resolveColorPath(text, fill, texts);
+        const targets = path === 'style.fontColor'
+          ? (texts.length ? texts : fill)
+          : path === 'style.stroke'
+            ? fill
+            : (fill.length ? fill : texts);
         return { ...base, kind: 'color', nodeIds: targets.map((n) => n.id), path, value };
       }
       case 'fontFamily':
@@ -152,6 +156,61 @@ export function lexParams(clause: PromptClause, ownedNodes: IRNode[]): ParamSpan
         return { ...base, kind: 'text', nodeIds: [], path: 'content', value: m.text };
     }
   });
+}
+
+/**
+ * Choose the CSS property a color token in a clause maps to.
+ *
+ * Priority:
+ *  1. Clause phrasing — explicit words like "background" / "border" /
+ *     "highlighted" / "text color" are unambiguous.
+ *  2. Existing Tailwind utilities on the owned nodes — `text-<color>`
+ *     means font color; `bg-<color>` means fill; `border-<color>` means stroke.
+ *  3. Node role — pure text-role nodes default to fontColor; everything
+ *     else defaults to fill.
+ */
+// Precompiled Tailwind-class matchers for color dimension detection.
+// Anchored to a preceding space (or start) so "text-sm" doesn't match "text-blue".
+const _colorFamilies = Object.keys(COLOR_NAMES).join('|');
+const TW_TEXT_COLOR = new RegExp(`(?:^|\\s)(?:hover:)?text-(?:${_colorFamilies}|\\[)`);
+const TW_BG_COLOR   = new RegExp(`(?:^|\\s)(?:hover:)?bg-(?:${_colorFamilies}|\\[)`);
+const TW_BORDER_COLOR = new RegExp(`(?:^|\\s)(?:hover:)?border-(?:${_colorFamilies}|\\[)`);
+
+/**
+ * Choose the CSS property a color token in a clause maps to.
+ *
+ * Priority:
+ *  1. Clause phrasing — explicit words like "background" / "border" /
+ *     "highlighted" / "text color" are unambiguous.
+ *  2. Existing Tailwind utilities on the owned nodes — `text-<color>`
+ *     means font color; `bg-<color>` means fill; `border-<color>` means stroke.
+ *  3. Node role — pure text-role nodes default to fontColor; everything
+ *     else defaults to fill.
+ */
+function resolveColorPath(clauseText: string, fill: IRNode[], texts: IRNode[]): string {
+  const lower = clauseText.toLowerCase();
+
+  // Explicit background/fill phrasing → fill
+  if (/\b(?:background|fill|backdrop|surface)\b/.test(lower)) return 'style.fill';
+  // Explicit border/stroke phrasing → stroke
+  if (/\b(?:border(?:\s+colou?r)?|outline(?:\s+colou?r)?|stroke)\b/.test(lower)) return 'style.stroke';
+  // Explicit text-color phrasing → fontColor
+  if (/\b(?:highlighted?|text\s+colou?r|font\s+colou?r|colou?r(?:ed)?\s+(?:text|link|label))\b/.test(lower)) return 'style.fontColor';
+
+  // Check existing Tailwind classes (prepend space so anchor works on first class too).
+  const allNodes = [...fill, ...texts];
+  const hasTwText   = allNodes.some((n) => TW_TEXT_COLOR.test(' ' + n.tailwind));
+  const hasTwBg     = allNodes.some((n) => TW_BG_COLOR.test(' ' + n.tailwind));
+  const hasTwBorder = allNodes.some((n) => TW_BORDER_COLOR.test(' ' + n.tailwind));
+
+  if (hasTwText && !hasTwBg) return 'style.fontColor';
+  if (hasTwBg && !hasTwText) return 'style.fill';
+  if (hasTwBorder && !hasTwText && !hasTwBg) return 'style.stroke';
+
+  // Fall back by node role: pure text nodes → fontColor; anything with a
+  // fill-role node present → fill (the background is more salient there).
+  if (texts.length > 0 && fill.length === 0) return 'style.fontColor';
+  return 'style.fill';
 }
 
 function normalizeAlign(text: string): string {
