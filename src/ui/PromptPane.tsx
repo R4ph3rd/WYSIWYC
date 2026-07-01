@@ -134,7 +134,7 @@ export function PromptPane() {
     onParam: pending
       ? () => {}
       : (span: ParamSpan, e: React.MouseEvent) =>
-          setParamPopover({ clauseId: c.id, span, original: { text: c.text, params: c.params }, x: e.clientX, y: e.clientY }),
+          setParamPopover({ clauseId: c.id, span, original: { text: c.text, params: spansFor(c) }, x: e.clientX, y: e.clientY }),
   });
 
   return (
