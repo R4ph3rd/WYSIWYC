@@ -78,11 +78,11 @@ export function PromptTargetOverlay({
             top: b.top,
             width: b.width,
             height: b.height,
-            outline: '2px solid #4f46e5',
+            outline: '2px solid #0f172a',
             outlineOffset: 2,
           }}
         >
-          <span className="absolute -top-[18px] left-0 grid h-4 min-w-[16px] place-items-center rounded-full bg-indigo-600 px-1 text-[9px] font-bold text-white shadow-sm">
+          <span className="absolute -top-[18px] left-0 grid h-4 min-w-[16px] place-items-center rounded-full bg-slate-900 px-1 text-[9px] font-bold text-white shadow-sm">
             {letters[b.id] ?? '•'}
           </span>
         </div>
@@ -95,7 +95,7 @@ export function PromptTargetOverlay({
           style={{ left: loc.x, top: loc.y }}
         >
           <div className="flex flex-col items-center">
-            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full bg-indigo-600 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full bg-slate-900 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
               {loc.label}
               {onRemoveLocation && (
                 <button
@@ -107,7 +107,7 @@ export function PromptTargetOverlay({
                 </button>
               )}
             </span>
-            <Plus className="h-4 w-4 text-indigo-600 drop-shadow" strokeWidth={3} />
+            <Plus className="h-4 w-4 text-slate-900 drop-shadow" strokeWidth={3} />
           </div>
         </div>
       ))}

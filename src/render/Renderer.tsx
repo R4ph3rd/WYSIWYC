@@ -88,10 +88,10 @@ function overlayStyle(node: IRNode, opts: {
     style.outline = '2px dashed #8b5cf6';
     style.outlineOffset = '2px';
   } else if (opts.selected) {
-    style.outline = '2px solid #4f46e5';
+    style.outline = '2px solid #0f172a';
     style.outlineOffset = '2px';
   } else if (opts.clauseHover) {
-    style.outline = '2px dashed #0ea5e9';
+    style.outline = '2px dashed #64748b';
     style.outlineOffset = '2px';
   }
   return style;

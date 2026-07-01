@@ -607,7 +607,7 @@ export function Canvas() {
                 width: editingText.width,
                 minHeight: editingText.height,
               }}
-              className="z-30 resize-none overflow-hidden rounded-sm bg-white/95 px-1 py-0.5 text-inherit leading-tight text-slate-900 shadow-[0_0_0_2px_#4f46e5] outline-none"
+              className="z-30 resize-none overflow-hidden rounded-sm bg-white/95 px-1 py-0.5 text-inherit leading-tight text-slate-900 shadow-[0_0_0_2px_#0f172a] outline-none"
             />
           )}
 
@@ -619,13 +619,13 @@ export function Canvas() {
                   .map((p) => `${p.x},${p.y}`)
                   .join(' ')}
                 fill="none"
-                stroke="#4f46e5"
+                stroke="#0f172a"
                 strokeWidth={2}
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
               {pen.points.map((p, i) => (
-                <circle key={i} cx={p.x} cy={p.y} r={3} fill="#fff" stroke="#4f46e5" strokeWidth={1.5} />
+                <circle key={i} cx={p.x} cy={p.y} r={3} fill="#fff" stroke="#0f172a" strokeWidth={1.5} />
               ))}
             </svg>
           )}
@@ -665,7 +665,7 @@ function SelectionHandles({
         <div
           key={hd.id}
           onMouseDown={(e) => onStart(e, hd.id)}
-          className="absolute z-10 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-indigo-600 bg-white shadow-sm"
+          className="absolute z-10 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-sm border border-slate-900 bg-white shadow-sm"
           style={{ left: hd.left, top: hd.top, cursor: hd.cursor }}
         />
       ))}
@@ -764,7 +764,7 @@ function HeroComposer() {
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="w-full max-w-xl px-6 text-center">
-        <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-[11px] font-medium text-indigo-600 ring-1 ring-indigo-100">
+        <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
           <Sparkles className="h-3 w-3" /> WYSIWYC
         </div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">
@@ -793,7 +793,7 @@ function HeroComposer() {
               key={s.id}
               onClick={() => loadSample(s.id)}
               disabled={generating}
-              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] text-slate-600 transition-colors hover:border-indigo-200 hover:text-indigo-600"
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-900"
             >
               {s.title}
             </button>

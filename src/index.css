@@ -8,14 +8,14 @@
   --foreground: 0 0% 9%;
   --border: 0 0% 89%;
   --input: 0 0% 89%;
-  --ring: 210 70% 55%;
+  --ring: 0 0% 15%;
   --primary: 0 0% 9%;
   --primary-foreground: 0 0% 98%;
   --secondary: 0 0% 96%;
   --secondary-foreground: 0 0% 9%;
   --muted: 0 0% 96%;
   --muted-foreground: 0 0% 45%;
-  --accent: 210 40% 96%;
+  --accent: 0 0% 96%;
   --accent-foreground: 0 0% 9%;
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 98%;
@@ -70,8 +70,8 @@ body {
 
 /* Provenance highlight pulse shared by prompt clauses and rendered nodes. */
 @keyframes wysiwyc-flash {
-  0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.5); }
-  100% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(15, 23, 42, 0.35); }
+  100% { box-shadow: 0 0 0 6px rgba(15, 23, 42, 0); }
 }
 .wysiwyc-flash {
   animation: wysiwyc-flash 0.9s ease-out;

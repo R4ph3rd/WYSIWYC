@@ -138,7 +138,7 @@ export function PromptPane() {
 
       {clauses.length > 0 && (
         <div className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 text-[10px] text-slate-400">
-          <span className="rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2">
+          <span className="rounded-sm bg-slate-200 px-0.5 font-semibold text-slate-900">
             highlighted
           </span>
           values are editable. click to tweak
@@ -332,7 +332,7 @@ function ParamToken({
       title={`Edit ${PARAM_LABEL[span.kind]}`}
       onClick={(e) => { e.stopPropagation(); onParam(span, e); }}
       onDoubleClick={(e) => e.stopPropagation()}
-      className="cursor-pointer rounded-sm bg-indigo-50/70 px-0.5 font-medium text-indigo-700 underline decoration-dotted decoration-indigo-300 underline-offset-2 hover:bg-indigo-100"
+      className="cursor-pointer whitespace-nowrap rounded-sm bg-slate-200 px-0.5 font-semibold text-slate-900 hover:bg-slate-300"
     >
       {swatch && (
         <span
@@ -396,12 +396,12 @@ function ClauseItem({
       }}
       title={pending ? 'Proposed update — accept or rephrase below' : inferred ? 'Inferred — click for alternatives, double-click to edit' : clause.text}
       className={cn(
-        'group flex items-center gap-2 rounded-md border px-2 py-1.5 text-[13px] overflow-hidden transition-colors',
+        'group flex items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] transition-colors',
         pending
           ? 'border-dashed border-amber-300 bg-amber-50/60 text-amber-900'
           : selected
-            ? 'cursor-pointer border-slate-200 bg-slate-100 text-slate-900'
-            : 'cursor-pointer border-transparent text-slate-700 hover:bg-slate-50',
+            ? 'cursor-pointer border-slate-200 bg-slate-100 text-slate-700'
+            : 'cursor-pointer border-transparent text-slate-400 hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
     >
@@ -411,7 +411,7 @@ function ClauseItem({
           pending ? 'bg-amber-500' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
         )}
       />
-      <span className="flex-1 min-w-0 truncate"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
+      <span className="flex-1 min-w-0"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
       {pending ? (
         <span className="shrink-0 rounded-full bg-amber-100 px-1.5 text-[8px] font-bold uppercase tracking-wide text-amber-700">
           Proposed
@@ -419,7 +419,7 @@ function ClauseItem({
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(); }}
-          className="mt-0.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+          className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
           aria-label="Remove sentence"
         >
           <X className="h-3 w-3 text-slate-300 hover:text-rose-500" />
@@ -536,7 +536,7 @@ function ClauseEditor({
         if (e.key === 'Escape') onDone(null);
       }}
       rows={2}
-      className="my-0.5 w-full resize-none rounded-md border border-indigo-200 bg-indigo-50/40 px-1.5 py-1 text-xs leading-snug text-slate-800 outline-none focus:ring-2 focus:ring-indigo-100"
+      className="my-0.5 w-full resize-none rounded-md border border-slate-200 bg-slate-50/40 px-1.5 py-1 text-xs leading-snug text-slate-800 outline-none focus:ring-2 focus:ring-slate-100"
     />
   );
 }

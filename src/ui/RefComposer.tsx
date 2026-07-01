@@ -39,11 +39,11 @@ export interface RefComposerProps {
 
 const CHIP_STYLE: Record<PromptRef['kind'], string> = {
   // Node + location chips reuse the primary indigo, matching the canvas overlay.
-  node: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+  node: 'bg-slate-100 text-slate-700 ring-slate-300',
   attribute: 'bg-violet-50 text-violet-700 ring-violet-200',
   param: 'bg-sky-50 text-sky-700 ring-sky-200',
   image: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  location: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+  location: 'bg-slate-100 text-slate-700 ring-slate-300',
 };
 
 function ChipIcon({ kind }: { kind: PromptRef['kind'] }) {
@@ -212,8 +212,8 @@ export function RefComposer({
       className={cn(
         'rounded-xl border bg-white shadow-sm transition-colors',
         lg ? 'rounded-2xl p-2 shadow-lg shadow-slate-200/60' : 'p-1.5',
-        dragOver ? 'border-indigo-400 ring-2 ring-indigo-100' : 'border-slate-200',
-        'focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-50',
+        dragOver ? 'border-slate-400 ring-2 ring-slate-100' : 'border-slate-200',
+        'focus-within:border-slate-400 focus-within:ring-2 focus-within:ring-slate-100',
       )}
       onDrop={onDrop}
       onDragOver={onDragOver}
@@ -313,7 +313,7 @@ function Chip({ ref0, badge, onRemove }: { ref0: PromptRef; badge?: string; onRe
       )}
       <span className="truncate">{ref0.label}</span>
       {badge && (
-        <span className="rounded bg-indigo-600 px-1 text-[9px] font-bold leading-tight text-white">{badge}</span>
+        <span className="rounded bg-slate-900 px-1 text-[9px] font-bold leading-tight text-white">{badge}</span>
       )}
       <button onClick={onRemove} aria-label="Remove reference" className="-mr-0.5 opacity-60 hover:opacity-100">
         <X className="h-3 w-3" />
