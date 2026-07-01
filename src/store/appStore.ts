@@ -50,6 +50,7 @@ import {
   setLastDecision,
   type GestureProvenance,
 } from '@/lib/log';
+import { useStudyStore } from '@/store/studyStore';
 import { nextRecipeId } from '@/ir/ids';
 
 /** Options for a compose send (DirectGPT scope + reference chips + recipe). */
@@ -488,6 +489,7 @@ export const useAppStore = create<AppState>((set, get) => {
           accepted: null,
           confidence: proposal.confidence,
         });
+        useStudyStore.getState().logEvent('backchannel', { kind: op.kind, confidence: proposal.confidence });
         set({ pendingProposal: proposal, proposing: false });
       } catch (err) {
         logBackChannel({
@@ -824,6 +826,7 @@ export const useAppStore = create<AppState>((set, get) => {
             ? s.selectedNodeIds.filter((id) => !affectedIds.includes(id))
             : s.selectedNodeIds,
       }));
+      useStudyStore.getState().logEvent('manipulation', { kind: op.kind });
       maybePropose(op, prevIR);
     },
 
