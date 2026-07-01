@@ -18,6 +18,8 @@ import {
 } from './prompts';
 import { callJSON, LLMError } from './providers';
 import { useSettingsStore } from '@/store/settingsStore';
+import { useStudyStore } from '@/store/studyStore';
+import type { LLMCallRecord } from '@/store/studyStore';
 
 /** Thrown when no provider is connected. The UI surfaces this with the Connect dialog. */
 export class NotConnectedError extends Error {
@@ -33,11 +35,12 @@ async function callConnected<T>(
   schemaName: string,
   maxTokens: number,
   images?: string[],
+  callType: LLMCallRecord['callType'] = 'compose',
 ): Promise<T> {
   const active = useSettingsStore.getState().active();
   if (!active) throw new NotConnectedError();
   try {
-    return (await callJSON(active.provider, {
+    const { data, inputTokens, outputTokens } = await callJSON(active.provider, {
       apiKey: active.apiKey,
       model: active.model,
       system,
@@ -46,7 +49,11 @@ async function callConnected<T>(
       schemaName,
       maxTokens,
       images,
-    })) as T;
+    });
+    const study = useStudyStore.getState();
+    study.logLLMCall({ callType, provider: active.provider, model: active.model, inputTokens, outputTokens, ts: Date.now() });
+    if (callType !== 'call_b') study.logEvent('generation');
+    return data as T;
   } catch (err) {
     if (err instanceof LLMError) throw err;
     throw new LLMError((err as Error).message);
@@ -74,6 +81,7 @@ export function composeFromInstruction(
     'compose',
     8000,
     images,
+    'compose',
   );
 }
 
@@ -89,6 +97,8 @@ export function generatePatch(
     IR_PATCH_SCHEMA,
     'ir_patch',
     8000,
+    undefined,
+    'call_a',
   );
 }
 
@@ -105,5 +115,7 @@ export function proposePromptUpdate(
     PROMPT_UPDATE_SCHEMA,
     'prompt_update',
     1500,
+    undefined,
+    'call_b',
   );
 }

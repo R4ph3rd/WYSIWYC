@@ -93,6 +93,12 @@ export interface CallJSONOptions {
 
 export class LLMError extends Error {}
 
+export interface CallJSONResult {
+  data: unknown;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 /** Split a `data:<mime>;base64,<data>` URL into its parts (for Anthropic blocks). */
 function parseDataUrl(dataUrl: string): { mediaType: string; data: string } | null {
   const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
@@ -129,7 +135,7 @@ async function fetchJSON(url: string, init: RequestInit): Promise<unknown> {
 
 // --- Anthropic Claude ---
 
-async function callAnthropic(opts: CallJSONOptions): Promise<unknown> {
+async function callAnthropic(opts: CallJSONOptions): Promise<CallJSONResult> {
   // Vision: when image chips are present, send a content-block array (images
   // first, then the text) instead of a bare string.
   const imageBlocks = (opts.images ?? [])
@@ -164,12 +170,16 @@ async function callAnthropic(opts: CallJSONOptions): Promise<unknown> {
   });
   const text = (data.content ?? []).find((b: { type: string }) => b.type === 'text')?.text;
   if (!text) throw new LLMError('Anthropic returned no text block.');
-  return parseJSON(text);
+  return {
+    data: parseJSON(text),
+    inputTokens: data.usage?.input_tokens ?? 0,
+    outputTokens: data.usage?.output_tokens ?? 0,
+  };
 }
 
 // --- OpenAI (Chat Completions, json_schema strict) ---
 
-async function callOpenAI(opts: CallJSONOptions): Promise<unknown> {
+async function callOpenAI(opts: CallJSONOptions): Promise<CallJSONResult> {
   // Vision: OpenAI takes image_url parts (data URLs allowed) in the user turn.
   const userContent = (opts.images ?? []).length
     ? [
@@ -199,12 +209,16 @@ async function callOpenAI(opts: CallJSONOptions): Promise<unknown> {
   });
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new LLMError('OpenAI returned no message content.');
-  return parseJSON(text);
+  return {
+    data: parseJSON(text),
+    inputTokens: data.usage?.prompt_tokens ?? 0,
+    outputTokens: data.usage?.completion_tokens ?? 0,
+  };
 }
 
 // --- Mistral (Chat Completions, json_schema) ---
 
-async function callMistral(opts: CallJSONOptions): Promise<unknown> {
+async function callMistral(opts: CallJSONOptions): Promise<CallJSONResult> {
   if (opts.images?.length) {
     throw new LLMError('The Mistral connection here does not support image references. Remove the image chip or switch to Anthropic / OpenAI.');
   }
@@ -230,12 +244,16 @@ async function callMistral(opts: CallJSONOptions): Promise<unknown> {
   });
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new LLMError('Mistral returned no message content.');
-  return parseJSON(text);
+  return {
+    data: parseJSON(text),
+    inputTokens: data.usage?.prompt_tokens ?? 0,
+    outputTokens: data.usage?.completion_tokens ?? 0,
+  };
 }
 
 // --- Groq (json_object mode + prompt-conditioning; validate client-side) ---
 
-async function callGroq(opts: CallJSONOptions): Promise<unknown> {
+async function callGroq(opts: CallJSONOptions): Promise<CallJSONResult> {
   if (opts.images?.length) {
     throw new LLMError('The Groq connection here does not support image references. Remove the image chip or switch to Anthropic / OpenAI.');
   }
@@ -267,13 +285,17 @@ ${JSON.stringify(opts.schema)}`;
   });
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new LLMError('Groq returned no message content.');
-  return parseJSON(text);
+  return {
+    data: parseJSON(text),
+    inputTokens: data.usage?.prompt_tokens ?? 0,
+    outputTokens: data.usage?.completion_tokens ?? 0,
+  };
 }
 
 export async function callJSON(
   provider: ProviderId,
   opts: CallJSONOptions,
-): Promise<unknown> {
+): Promise<CallJSONResult> {
   switch (provider) {
     case 'anthropic':
       return callAnthropic(opts);
