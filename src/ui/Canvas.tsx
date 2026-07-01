@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
+import { useStudyStore } from '@/store/studyStore';
 
 type DragState =
   | { mode: 'draw'; id: string; role: IRNode['role']; startX: number; startY: number; prevIR: IR }
@@ -97,6 +98,7 @@ export function Canvas() {
   const unknownShortcutAt = useAppStore((s) => s.unknownShortcutAt);
   const irSyncMode = useAppStore((s) => s.irSyncMode);
   const setIrSyncMode = useAppStore((s) => s.setIrSyncMode);
+  const chatOnly = useStudyStore((s) => s.condition === 'chat_only');
 
   // Composing context: the canvas feeds the single composer when the user is
   // mid-prompt (focused, or a draft exists). Clicking an element then refers to
@@ -284,6 +286,8 @@ export function Canvas() {
   function onStageMouseDown(e: React.MouseEvent) {
     const p = relativePoint(e);
     if (!p) return;
+    // In chat_only mode the canvas is a read-only preview; only allow selection.
+    if (chatOnly && tool !== 'pointer') return;
     // Every fresh press starts a clean gesture; a real move will re-arm this.
     draggedRef.current = false;
 
@@ -309,10 +313,11 @@ export function Canvas() {
 
     // Pointer tool: start a move-drag when pressing an absolute-positioned
     // node (drawn shapes). Flow nodes keep HTML5 drag-to-reorder.
+    // In chat_only mode, allow selection only — no dragging.
     const target = (e.target as HTMLElement).closest('[data-node-id]');
     const id = target?.getAttribute('data-node-id');
     const node = id ? nodeById(id) : undefined;
-    if (node && node.layout?.x !== undefined && node.layout?.y !== undefined) {
+    if (!chatOnly && node && node.layout?.x !== undefined && node.layout?.y !== undefined) {
       e.preventDefault();
       const origX = node.layout.x;
       const origY = node.layout.y;
@@ -430,6 +435,7 @@ export function Canvas() {
   }
 
   function startResize(e: React.MouseEvent, handle: 'nw' | 'ne' | 'sw' | 'se') {
+    if (chatOnly) return;
     const node = selectedNodeId ? nodeById(selectedNodeId) : undefined;
     const p = relativePoint(e);
     if (!node || !p || node.layout?.x === undefined) return;

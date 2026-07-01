@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Undo2, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon } from 'lucide-react';
 import { useAppStore, type Tool } from './store/appStore';
 import { useSettingsStore } from './store/settingsStore';
+import { useStudyStore } from './store/studyStore';
 import { familyFromStack } from './lib/fonts';
 import { loadGoogleFont } from './lib/loadFont';
 import { SAMPLES } from './ir/samples';
@@ -10,6 +11,7 @@ import { Canvas } from './ui/Canvas';
 import { LayersPanel } from './ui/LayersPanel';
 import { PropertiesPanel } from './ui/PropertiesPanel';
 import { ConnectDialog } from './ui/ConnectDialog';
+import { StudyBar } from './ui/StudyBar';
 import { Button } from './ui/primitives/button';
 
 export default function App() {
@@ -23,6 +25,16 @@ export default function App() {
 
   const isConnected = useSettingsStore((s) => Boolean(s.keys[s.activeProvider]?.trim()));
   const activeLabel = useSettingsStore((s) => s.activeLabel());
+
+  const isStudyMode = useStudyStore((s) => s.isStudyMode);
+  const chatOnly = useStudyStore((s) => s.condition === 'chat_only');
+  const setStudyMode = useStudyStore((s) => s.setStudyMode);
+
+  // Activate study mode once when ?study=1 is in the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('study') === '1') setStudyMode(true);
+  }, [setStudyMode]);
 
   const [connectOpen, setConnectOpen] = useState(false);
   // Layers panel collapses to a narrow icon bar by default (false).
@@ -94,6 +106,9 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
+      {/* Study instrumentation bar — only when ?study=1 */}
+      {isStudyMode && <StudyBar />}
+
       {/* Top bar */}
       <header className="flex h-12 items-center gap-3 border-b border-slate-200 bg-white px-4">
         <div className="flex items-baseline gap-2">
@@ -175,9 +190,11 @@ export default function App() {
 
         <Canvas />
 
-        <div className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white">
-          <PropertiesPanel />
-        </div>
+        {!chatOnly && (
+          <div className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white">
+            <PropertiesPanel />
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { Loader2, Sparkles } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
+import { useStudyStore } from '@/store/studyStore';
 
 /**
  * The back-channel banner. A direct manipulation is ALREADY in the IR; the
@@ -14,8 +15,9 @@ export function DiffRibbon({ onReview }: { onReview: () => void }) {
   const proposing = useAppStore((s) => s.proposing);
   const proposal = useAppStore((s) => s.pendingProposal);
   const accept = useAppStore((s) => s.acceptProposal);
+  const chatOnly = useStudyStore((s) => s.condition === 'chat_only');
 
-  if (!proposing && !proposal) return null;
+  if (chatOnly || (!proposing && !proposal)) return null;
 
   if (proposing) {
     return (
