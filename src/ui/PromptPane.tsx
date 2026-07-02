@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { X, RefreshCw } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
-import { CLAUSE_CATEGORIES, type ClauseCategory, type IRNode, type ParamSpan, type PromptClause } from '@/ir/types';
+import { CLAUSE_CATEGORIES, type ClauseCategory, type IRNode, type ParamKind, type ParamSpan, type PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
 import { paramsForClause, COLOR_NAMES } from '@/ir/paramLexer';
 import { RefComposer } from './RefComposer';
@@ -34,6 +34,29 @@ function sentence(text: string): string {
   if (!t) return t;
   const capped = t[0].toUpperCase() + t.slice(1);
   return /[.!?…]$/.test(capped) ? capped : `${capped}.`;
+}
+
+/**
+ * Character offsets of a DOM selection range within a clause's rendered text
+ * root. The rendered content only re-cases the first letter and may append a
+ * trailing period, so text-node offsets map 1:1 onto `clause.text` (the caller
+ * clamps the tail). Returns null for selections not fully inside text nodes.
+ */
+function selectionOffsets(root: Element, range: Range): { start: number; end: number } | null {
+  const offsetOf = (node: Node, offset: number): number | null => {
+    let acc = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let n: Node | null;
+    while ((n = walker.nextNode())) {
+      if (n === node) return acc + offset;
+      acc += n.textContent?.length ?? 0;
+    }
+    return null;
+  };
+  const a = offsetOf(range.startContainer, range.startOffset);
+  const b = offsetOf(range.endContainer, range.endOffset);
+  if (a === null || b === null || a === b) return null;
+  return { start: Math.min(a, b), end: Math.max(a, b) };
 }
 
 export function PromptPane() {
@@ -110,6 +133,41 @@ export function PromptPane() {
     { clauseId: string; span: ParamSpan; original: { text: string; params?: ParamSpan[] }; x: number; y: number } | null
   >(null);
 
+  // Manual span binding: a text selection inside a clause → "bind to widget"
+  // menu (Malleable Prompting: reify ANY preference expression, not just the
+  // ones the lexer or model recognized).
+  const bindClauseParam = useAppStore((s) => s.bindClauseParam);
+  const [bindMenu, setBindMenu] = useState<
+    { clauseId: string; start: number; end: number; x: number; y: number } | null
+  >(null);
+  const onSpecMouseUp = (e: React.MouseEvent) => {
+    const { clientX, clientY } = e;
+    // Defer one tick so the browser finalizes the selection before we read it.
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) { setBindMenu(null); return; }
+      const range = sel.getRangeAt(0);
+      const anchor = range.commonAncestorContainer;
+      const el = anchor instanceof Element ? anchor : anchor.parentElement;
+      const textRoot = el?.closest('[data-clause-text]');
+      const clauseEl = el?.closest('[data-clause-id]');
+      const clauseId = clauseEl?.getAttribute('data-clause-id');
+      if (!textRoot || !clauseId) return;
+      const clause = clauses.find((c) => c.id === clauseId);
+      if (!clause) return;
+      const offs = selectionOffsets(textRoot, range);
+      if (!offs) return;
+      // Clamp to the raw clause text (display appends a trailing period) and
+      // trim whitespace from the selection edges.
+      let start = Math.min(offs.start, clause.text.length);
+      let end = Math.min(offs.end, clause.text.length);
+      while (start < end && /\s/.test(clause.text[start])) start++;
+      while (end > start && /\s/.test(clause.text[end - 1])) end--;
+      if (start >= end) return;
+      setBindMenu({ clauseId, start, end, x: clientX, y: clientY });
+    }, 0);
+  };
+
   const onDoneEdit = (c: PromptClause) => (text: string | null) => {
     setEditingId(null);
     if (text !== null && text.trim() && text !== c.text) editClause(c.id, text);
@@ -176,6 +234,7 @@ export function PromptPane() {
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-3 py-3"
         onClick={(e) => { if (e.target === e.currentTarget) selectNode(null); }}
+        onMouseUp={onSpecMouseUp}
       >
         {displayClauses.length === 0 ? (
           <p className="px-1 py-6 text-center text-xs text-slate-500">
@@ -230,6 +289,24 @@ export function PromptPane() {
           </>
         )}
       </div>
+
+      {bindMenu && (() => {
+        const clause = clauses.find((c) => c.id === bindMenu.clauseId);
+        if (!clause) return null;
+        return (
+          <BindMenu
+            label={clause.text.slice(bindMenu.start, bindMenu.end)}
+            x={bindMenu.x}
+            y={bindMenu.y}
+            onPick={(kind) => {
+              bindClauseParam(bindMenu.clauseId, bindMenu.start, bindMenu.end, kind);
+              window.getSelection()?.removeAllRanges();
+              setBindMenu(null);
+            }}
+            onClose={() => setBindMenu(null)}
+          />
+        );
+      })()}
 
       {paramPopover && (
         <ParamPopover
@@ -452,6 +529,9 @@ function ClauseItem({
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
       onClick={(e) => {
+        // A drag-select inside the clause ends in a click; that's the manual
+        // span-binding gesture, not a request for the alternatives menu.
+        if (!window.getSelection()?.isCollapsed) return;
         const { clientX, clientY } = e;
         if (clickTimer.current) return;
         clickTimer.current = setTimeout(() => {
@@ -485,7 +565,7 @@ function ClauseItem({
       />
       {/* IR items wrap freely so the whole sentence is visible; only the
           interactive param tokens inside stay on one line (see ParamToken). */}
-      <span className="min-w-0 flex-1 break-words">
+      <span data-clause-text className="min-w-0 flex-1 break-words">
         <ClauseContent text={clause.text} spans={spans} onParam={onParam} onParamHover={onParamHover} selectedNodeSet={selectedNodeSet} />
       </span>
       {pending ? (
@@ -548,6 +628,9 @@ function ClauseInline({
       onMouseEnter={() => onHover(clause.id)}
       onMouseLeave={() => onHover(null)}
       onClick={(e) => {
+        // A drag-select inside the clause ends in a click; that's the manual
+        // span-binding gesture, not a request for the alternatives menu.
+        if (!window.getSelection()?.isCollapsed) return;
         const { clientX, clientY } = e;
         if (clickTimer.current) return;
         clickTimer.current = setTimeout(() => {
@@ -581,7 +664,9 @@ function ClauseInline({
           aria-label="inferred"
         />
       )}
-      <ClauseContent text={clause.text} spans={spans} onParam={onParam} onParamHover={onParamHover} selectedNodeSet={selectedNodeSet} />
+      <span data-clause-text>
+        <ClauseContent text={clause.text} spans={spans} onParam={onParam} onParamHover={onParamHover} selectedNodeSet={selectedNodeSet} />
+      </span>
       {pending ? (
         <button
           onClick={(e) => { e.stopPropagation(); onAccept?.(); }}
@@ -600,6 +685,74 @@ function ClauseInline({
         </button>
       )}{' '}
     </span>
+  );
+}
+
+/** Widget kinds offered when manually binding a selected text span. */
+const BIND_KINDS: { kind: ParamKind; label: string }[] = [
+  { kind: 'color', label: 'Color' },
+  { kind: 'length', label: 'Size' },
+  { kind: 'fontWeight', label: 'Weight' },
+  { kind: 'radius', label: 'Corners' },
+  { kind: 'shape', label: 'Shape' },
+  { kind: 'align', label: 'Align' },
+  { kind: 'shadow', label: 'Shadow' },
+  { kind: 'text', label: 'Value' },
+];
+
+/**
+ * The manual-binding menu: shown after selecting text inside a clause, it
+ * turns the selection into a persistent interactive parameter of the chosen
+ * widget kind (Malleable Prompting's "highlight any text span to bind it to
+ * a specific control type").
+ */
+function BindMenu({
+  label,
+  x,
+  y,
+  onPick,
+  onClose,
+}: {
+  label: string;
+  x: number;
+  y: number;
+  onPick: (kind: ParamKind) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [onClose]);
+  return (
+    <div
+      ref={ref}
+      style={{ left: Math.min(x, window.innerWidth - 200), top: Math.min(y + 8, window.innerHeight - 160) }}
+      className="fixed z-50 w-48 rounded-xl border border-slate-200 bg-white p-2 shadow-lg shadow-slate-300/40 ring-1 ring-black/5"
+      onMouseDown={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
+    >
+      <div className="mb-1.5 px-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+        Make <span className="normal-case text-slate-900">“{label.length > 18 ? `${label.slice(0, 18)}…` : label}”</span> editable
+      </div>
+      <div className="grid grid-cols-2 gap-1">
+        {BIND_KINDS.map(({ kind, label: kLabel }) => (
+          <button
+            key={kind}
+            onClick={() => onPick(kind)}
+            className="rounded-md border border-slate-200 px-1.5 py-1 text-left text-[11px] font-medium text-slate-700 transition-colors hover:border-slate-300 hover:bg-slate-50"
+          >
+            {kLabel}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -7,6 +7,7 @@ import type {
   ManipulationOp,
   NodeRole,
   NodeStyle,
+  ParamKind,
   ParamSpan,
   PathPoint,
   PromptRef,
@@ -15,7 +16,7 @@ import type {
   StructuredPrompt,
 } from '@/ir/types';
 import { setAlignment, setUtility } from '@/ir/tailwindEdit';
-import { COLOR_NAMES } from '@/ir/paramLexer';
+import { COLOR_NAMES, createManualSpan } from '@/ir/paramLexer';
 import { familyFromStack } from '@/lib/fonts';
 import { loadGoogleFont } from '@/lib/loadFont';
 import {
@@ -274,6 +275,14 @@ interface AppState {
     value: string,
     original?: { text: string; params?: ParamSpan[] },
   ) => void;
+
+  /**
+   * Manual span binding (Malleable Prompting): turn a user-selected text range
+   * of a clause into a persistent interactive parameter of the chosen kind.
+   * Overlapping model-emitted spans are replaced (the paper's "replace the
+   * auto-generated widget" gesture); overlapping lexer spans yield automatically.
+   */
+  bindClauseParam: (clauseId: string, start: number, end: number, kind: ParamKind) => void;
 
   // Deterministic editing. The edit* variants write the IR immediately AND
   // queue a debounced Call B proposal once the editing burst settles; the
@@ -998,6 +1007,27 @@ export const useAppStore = create<AppState>((set, get) => {
         },
         recentIds: span.nodeIds,
       }));
+    },
+
+    bindClauseParam: (clauseId, start, end, kind) => {
+      set((s) => {
+        const clause = s.prompt.clauses.find((c) => c.id === clauseId);
+        if (!clause || start >= end || end > clause.text.length) return {};
+        const owned = s.ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId);
+        const span = createManualSpan(clause, owned, start, end, kind);
+        // Replace any model-emitted spans the new range overlaps — rebinding a
+        // token to a different widget type is an explicit user gesture.
+        const kept = (clause.params ?? []).filter((p) => p.end <= start || p.start >= end);
+        return {
+          history: [...s.history, snapshot(s)].slice(-50),
+          prompt: {
+            clauses: s.prompt.clauses.map((c) =>
+              c.id === clauseId ? { ...c, params: [...kept, span] } : c,
+            ),
+          },
+          recentIds: span.nodeIds,
+        };
+      });
     },
 
     createShape: ({ role, x, y, w, h, parentId, points }) => {

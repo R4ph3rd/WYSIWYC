@@ -220,6 +220,75 @@ function normalizeAlign(text: string): string {
   return 'center';
 }
 
+// --- Manual span binding (Malleable Prompting: user-selected text → widget) --
+
+let manualSeq = 0;
+
+/**
+ * Build a ParamSpan for a USER-SELECTED text range bound to a chosen widget
+ * kind — the manual counterpart of `lexParams`. The lexer only reifies
+ * phrases it recognizes; this lets the user highlight any span of a clause
+ * ("compact", "12px", "navy") and turn it into a persistent, interactive
+ * control. Values are inferred from the selected text where possible and
+ * fall back to sensible seeds.
+ */
+export function createManualSpan(
+  clause: PromptClause,
+  ownedNodes: IRNode[],
+  start: number,
+  end: number,
+  kind: ParamKind,
+): ParamSpan {
+  const label = clause.text.slice(start, end);
+  const lc = label.toLowerCase().trim();
+  const fill = nodesWithFill(ownedNodes);
+  const texts = textNodes(ownedNodes);
+  const base = { id: `man_${++manualSeq}`, start, end };
+  switch (kind) {
+    case 'color': {
+      const baseWord = lc.split(/\s+/).pop() ?? lc;
+      const value = /^#|^rgb/.test(lc) ? label : (COLOR_NAMES[lc] ?? COLOR_NAMES[baseWord] ?? '#4f46e5');
+      const path = resolveColorPath(clause.text, fill, texts);
+      const targets = path === 'style.fontColor'
+        ? (texts.length ? texts : fill)
+        : path === 'style.stroke'
+          ? fill
+          : (fill.length ? fill : texts);
+      return { ...base, kind, nodeIds: targets.map((n) => n.id), path, value };
+    }
+    case 'fontFamily':
+      return { ...base, kind, nodeIds: texts.map((n) => n.id), path: 'style.fontFamily', value: label };
+    case 'fontWeight': {
+      const num = WEIGHT_WORDS[lc] ?? (Number.isFinite(Number(lc)) ? Number(lc) : 400);
+      return { ...base, kind, nodeIds: texts.map((n) => n.id), path: 'style.fontWeight', value: String(num) };
+    }
+    case 'radius':
+      return { ...base, kind, nodeIds: ownedNodes.map((n) => n.id), path: 'style.borderRadius', value: '', unit: 'px' };
+    case 'length': {
+      const m = lc.match(/(\d+(?:\.\d+)?)\s*(px|rem|pt|%)?/);
+      return { ...base, kind, nodeIds: texts.map((n) => n.id), path: 'style.fontSize', value: m?.[1] ?? '16', unit: m?.[2] ?? 'px' };
+    }
+    case 'shadow':
+      return { ...base, kind, nodeIds: fill.map((n) => n.id), path: 'style.shadow', value: '' };
+    case 'align':
+      return { ...base, kind, nodeIds: texts.map((n) => n.id), path: 'align', value: normalizeAlign(lc) };
+    case 'shape': {
+      const shaped = [...fill, ...ownedNodes.filter((n) => n.role === 'circle' || n.role === 'image' || n.role === 'badge')];
+      const targets = shaped.length ? shaped : ownedNodes;
+      return {
+        ...base,
+        kind,
+        nodeIds: targets.map((n) => n.id),
+        path: 'style.borderRadius',
+        value: SHAPE_WORDS[lc as keyof typeof SHAPE_WORDS] ?? '8',
+        options: Object.keys(SHAPE_WORDS),
+      };
+    }
+    default:
+      return { ...base, kind: 'text', nodeIds: [], path: 'content', value: label };
+  }
+}
+
 // --- Merge of model-emitted + lexer spans (lexed on read, memoized) --------
 
 const cache = new WeakMap<PromptClause, { sig: string; spans: ParamSpan[] }>();
