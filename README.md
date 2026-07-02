@@ -42,6 +42,15 @@ We between `tailwind` and `style` because tailwind is what the LLM authors freel
 Style words inside **prompt** clauses (a color, a size, a font, a weight, a shadow, a radius, …) are clickable: clicking one opens a small widget (color picker, slider, font selector, …) that edits the bound IR field **deterministically** (no LLM) and rewrites the word in the prose. Any token the system can't type precisely still opens a plain text input. 
 _This is a forward Prompt→IR edit, so it does not run the Call B back-channel._
 
+### Malleable spec (inspired by "From Words to Widgets", arXiv:2604.10925)
+The inline parameters were extended with three ideas adapted from the *Malleable Prompting* paper — Zhang et al., ["From Words to Widgets for Controllable LLM Generation"](https://arxiv.org/abs/2604.10925) — which reifies preference expressions in prompts into GUI widgets and links each widget to the output spans it influences:
+
+- **Manual span binding** (paper §4, Fig. 2C — "highlight any text span to bind it to a specific control type"): select any text range inside a spec clause and a **Make editable** menu offers widget kinds (Color / Size / Weight / Corners / Shape / Align / Shadow / free Value). Picking one creates a persistent interactive parameter on the clause — covering preference expressions neither the model nor the deterministic lexer recognized, and replacing an auto-generated widget when the selection overlaps one (`createManualSpan` in `src/ir/paramLexer.ts`, `bindClauseParam` in the store).
+- **Bidirectional attribution** (paper DG2 + the "reverse widget" from §7.3): hovering a param token in the spec outlines, in amber, exactly the canvas nodes it controls (finer-grained than the existing whole-clause trace); conversely, selecting a canvas element highlights every spec token bound to it. Because WYSIWYC's param spans already carry `nodeIds`, this attribution is fully deterministic — no Shapley/logit machinery needed, the IR *is* the attribution map.
+- **Configuration versions** (paper Fig. 4, linearized): every meaningful configuration change — a compose send, a spec-edit regeneration, a canvas sync, a param-widget adjustment burst — records a restorable spec+IR version. The rail above the spec shows them as chips; clicking one jumps the whole document back to that configuration (the jump itself is undoable). Iterations are organized around *configurations* rather than a linear chat history.
+
+Two of the paper's contributions were deliberately **not** adopted: the token-probability decoding algorithm (requires logit access to a locally deployed model — WYSIWYC calls hosted provider APIs from the browser) and continuous intensity sliders for subjective tone attributes (WYSIWYC's parameters map to concrete CSS dimensions, where discrete widgets are the right fit). The paper's "prompt enrichment" idea already exists here as the model's *inferred* clauses (`origin: "inferred"`, marked with an amber dot in the spec).
+
 
 
 ## App
