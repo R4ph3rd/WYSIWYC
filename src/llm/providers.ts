@@ -158,7 +158,7 @@ async function callAnthropic(opts: CallJSONOptions): Promise<unknown> {
       system: opts.system,
       messages: [{ role: 'user', content }],
       output_config: {
-        format: { type: 'json_schema', name: opts.schemaName, schema: opts.schema },
+        format: { type: 'json_schema', schema: opts.schema },
       },
     }),
   });
