@@ -9,6 +9,7 @@ import { RecipesRail } from './RecipesRail';
 import { AlternativesMenu } from './AlternativesMenu';
 import { ParamPopover } from './ParamPopover';
 import { DiffRibbon } from './DiffRibbon';
+import { VersionRail } from './VersionRail';
 
 /**
  * The prompt is a LIVING SPEC with two views the user can switch between:
@@ -219,6 +220,8 @@ export function PromptPane() {
           ))}
         </div>
       </div>
+
+      <VersionRail />
 
       {clauses.length > 0 && (
         <div className="flex items-center gap-1.5 border-b border-slate-100 px-3 py-1 text-[10px] text-slate-500">

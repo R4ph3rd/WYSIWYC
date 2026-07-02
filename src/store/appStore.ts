@@ -111,6 +111,21 @@ interface Snapshot {
   prompt: StructuredPrompt;
 }
 
+/**
+ * A restorable spec+IR snapshot (Malleable Prompting's version tracking,
+ * linearized): one entry per meaningful configuration change — a compose send,
+ * a spec edit regeneration, a canvas sync, or a param-widget adjustment burst.
+ * Unlike the undo stack, versions are user-visible and jump-to-able, so
+ * iterations are organized around configurations instead of chat turns.
+ */
+export interface SpecVersion {
+  id: string;
+  ts: number;
+  label: string;
+  ir: IR;
+  prompt: StructuredPrompt;
+}
+
 /** Resolved visual style read from the DOM for the Properties panel fallback. */
 export interface ComputedNodeStyle {
   fill?: string;
@@ -161,6 +176,8 @@ interface AppState {
   hoveredParamNodeIds: string[] | null;
   recentIds: string[];
   history: Snapshot[];
+  /** Restorable configuration versions (newest last, capped). */
+  versions: SpecVersion[];
   tool: Tool;
   /** Copied subtree(s) for paste (Cmd/Ctrl+C → V). Project-scoped, not persisted. */
   clipboard: IRNode[] | null;
@@ -210,6 +227,8 @@ interface AppState {
   hoverClause: (id: string | null) => void;
   /** Hover a spec param token: outline its bound nodes on the canvas. */
   hoverParam: (nodeIds: string[] | null) => void;
+  /** Jump the spec+IR back to a recorded configuration version. */
+  restoreVersion: (id: string) => void;
   setTool: (tool: Tool) => void;
 
   /**
@@ -315,6 +334,8 @@ let callATimer: ReturnType<typeof setTimeout> | null = null;
 // snapshot is pushed only when the active (clause, span) changes or after idle.
 let paramBurstKey: string | null = null;
 let paramBurstTimer: ReturnType<typeof setTimeout> | null = null;
+let versionSeq = 0;
+const MAX_VERSIONS = 24;
 
 function snapshot(s: AppState): Snapshot {
   return { ir: s.ir, prompt: s.prompt };
@@ -438,6 +459,16 @@ function humanParamValue(span: ParamSpan, value: string): string | null {
 }
 
 export const useAppStore = create<AppState>((set, get) => {
+  /** Record the CURRENT spec+IR as a named, restorable configuration version. */
+  function recordVersion(label: string): void {
+    set((s) => ({
+      versions: [
+        ...s.versions,
+        { id: `ver_${++versionSeq}`, ts: Date.now(), label, ir: s.ir, prompt: s.prompt },
+      ].slice(-MAX_VERSIONS),
+    }));
+  }
+
   async function runCallA(changedClauseIds: string[]): Promise<void> {
     const { ir, prompt } = get();
     if (prompt.clauses.length === 0) {
@@ -453,6 +484,7 @@ export const useAppStore = create<AppState>((set, get) => {
         recentIds: patchedIds(patch),
         generating: false,
       }));
+      recordVersion('Spec edit');
     } catch (err) {
       handleLLMError(set, err, 'generating');
     }
@@ -591,6 +623,7 @@ export const useAppStore = create<AppState>((set, get) => {
       hoveredParamNodeIds: null,
       recentIds: [],
       history: [],
+      versions: [],
       clipboard: null,
       shortcutsOpen: false,
       unknownShortcutAt: null,
@@ -615,6 +648,7 @@ export const useAppStore = create<AppState>((set, get) => {
     hoveredParamNodeIds: null,
     recentIds: [],
     history: [],
+    versions: [],
     tool: 'pointer',
     clipboard: null,
     shortcutsOpen: false,
@@ -731,6 +765,22 @@ export const useAppStore = create<AppState>((set, get) => {
 
     hoverClause: (hoveredClauseId) => set({ hoveredClauseId }),
     hoverParam: (nodeIds) => set({ hoveredParamNodeIds: nodeIds && nodeIds.length ? nodeIds : null }),
+
+    restoreVersion: (id) => {
+      const v = get().versions.find((entry) => entry.id === id);
+      if (!v) return;
+      set((s) => ({
+        history: [...s.history, snapshot(s)].slice(-50),
+        ir: v.ir,
+        prompt: v.prompt,
+        pendingProposal: null,
+        pendingAffectedIds: [],
+        pendingSync: null,
+        selectedNodeId: null,
+        selectedNodeIds: [],
+        recentIds: [],
+      }));
+    },
     setTool: (tool) => set({ tool }),
 
     instruct: (message, opts = {}) => {
@@ -771,6 +821,7 @@ export const useAppStore = create<AppState>((set, get) => {
             lastSent: opts.viaRecipe ? s.lastSent : text,
             generating: false,
           }));
+          recordVersion(text.length > 40 ? `${text.slice(0, 40).trim()}…` : text);
         } catch (err) {
           handleLLMError(set, err, 'generating');
         }
@@ -865,6 +916,7 @@ export const useAppStore = create<AppState>((set, get) => {
         recentIds: clauses.map((c) => c.id),
       }));
       setLastDecision(true);
+      recordVersion('Canvas sync');
     },
 
     discardProposal: () => {
@@ -995,7 +1047,11 @@ export const useAppStore = create<AppState>((set, get) => {
       const pushHistory = paramBurstKey !== key;
       paramBurstKey = key;
       if (paramBurstTimer) clearTimeout(paramBurstTimer);
-      paramBurstTimer = setTimeout(() => { paramBurstKey = null; }, 800);
+      paramBurstTimer = setTimeout(() => {
+        paramBurstKey = null;
+        // One version per adjustment burst (a slider drag = one version).
+        recordVersion(`Adjust ${span.kind}`);
+      }, 800);
 
       set((s) => ({
         history: pushHistory ? [...s.history, snapshot(s)].slice(-50) : s.history,
