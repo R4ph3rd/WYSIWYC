@@ -80,6 +80,7 @@ export function Canvas() {
   const composerFocused = useAppStore((s) => s.composerFocused);
   const composerValue = useAppStore((s) => s.composerValue);
   const hoveredClauseId = useAppStore((s) => s.hoveredClauseId);
+  const hoveredParamNodeIds = useAppStore((s) => s.hoveredParamNodeIds);
   const recentIds = useAppStore((s) => s.recentIds);
   const generating = useAppStore((s) => s.generating);
   const selectNode = useAppStore((s) => s.selectNode);
@@ -577,6 +578,7 @@ export function Canvas() {
             selectedIds={selectedNodeIds}
             scopeIds={composerFocused ? selectedNodeIds : []}
             hoveredClauseId={hoveredClauseId}
+            paramNodeIds={hoveredParamNodeIds}
             recentIds={recentIds}
             onSelect={
               drawing

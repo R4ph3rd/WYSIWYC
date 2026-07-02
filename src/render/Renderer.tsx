@@ -10,6 +10,8 @@ export interface RendererProps {
   /** Nodes a focused composer's prompt would be scoped to (dashed preview). */
   scopeIds?: string[];
   hoveredClauseId: string | null;
+  /** Nodes bound to the spec param token under the cursor (widget attribution). */
+  paramNodeIds?: string[] | null;
   recentIds?: string[];
   onSelect?: (id: string, additive?: boolean) => void;
   onReorder?: (draggedId: string, targetId: string) => void;
@@ -56,6 +58,7 @@ function overlayStyle(node: IRNode, opts: {
   selected: boolean;
   clauseHover: boolean;
   scopePreview: boolean;
+  paramHover: boolean;
 }): CSSProperties {
   const style: CSSProperties = {};
 
@@ -86,6 +89,11 @@ function overlayStyle(node: IRNode, opts: {
   // is the DirectGPT "these elements are about to be modified" feedback.
   if (opts.scopePreview) {
     style.outline = '2px dashed #8b5cf6';
+    style.outlineOffset = '2px';
+  } else if (opts.paramHover) {
+    // Param attribution: hovering a spec token traces exactly the nodes it
+    // controls (finer-grained than the whole-clause slate trace below).
+    style.outline = '2px solid #f59e0b';
     style.outlineOffset = '2px';
   } else if (opts.selected) {
     style.outline = '2px solid #0f172a';
@@ -154,6 +162,7 @@ function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
   const scopePreview = props.scopeIds?.includes(node.id) ?? false;
   const clauseHover =
     props.hoveredClauseId != null && node.provenance.promptClauseId === props.hoveredClauseId;
+  const paramHover = props.paramNodeIds?.includes(node.id) ?? false;
 
   const children: ReactNode = tree.children.length
     ? tree.children.map((c) => renderNode(c, props))
@@ -213,7 +222,7 @@ function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
                 : 'div';
 
   const combinedStyle: CSSProperties = {
-    ...overlayStyle(node, { selected, clauseHover, scopePreview }),
+    ...overlayStyle(node, { selected, clauseHover, scopePreview, paramHover }),
     ...structuredStyle(node),
   };
 

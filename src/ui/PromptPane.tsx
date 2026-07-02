@@ -65,6 +65,9 @@ export function PromptPane() {
   const selectedClauseId = useAppStore((s) =>
     selectedNodeId ? (s.ir.nodes.find((n) => n.id === selectedNodeId)?.provenance.promptClauseId ?? null) : null,
   );
+  const hoverParam = useAppStore((s) => s.hoverParam);
+  // For reverse attribution: which param tokens control the selected node(s).
+  const selectedNodeSet = useMemo(() => new Set(selectedNodeIds), [selectedNodeIds]);
 
   // While a Call B proposal is pending, preview the spec with the proposed
   // clauses merged in and flagged, so the change appears in place in the IR.
@@ -127,6 +130,8 @@ export function PromptPane() {
     flash: recentIds.includes(c.id),
     spans: pending ? [] : spansFor(c),
     onHover: hoverClause,
+    onParamHover: hoverParam,
+    selectedNodeSet,
     onAccept: pending ? () => acceptProposal() : undefined,
     onOpenMenu: (x: number, y: number) => setAltMenu({ clauseId: c.id, x, y, pending }),
     onEdit: () => setEditingId(c.id),
@@ -310,10 +315,14 @@ function ClauseContent({
   text,
   spans,
   onParam,
+  onParamHover,
+  selectedNodeSet,
 }: {
   text: string;
   spans: ParamSpan[];
   onParam: (span: ParamSpan, e: React.MouseEvent) => void;
+  onParamHover: (nodeIds: string[] | null) => void;
+  selectedNodeSet: Set<string>;
 }) {
   const ordered = [...spans].sort((a, b) => a.start - b.start);
   const out: React.ReactNode[] = [];
@@ -331,7 +340,16 @@ function ClauseContent({
   ordered.forEach((sp, k) => {
     if (sp.start > i) pushPlain(text.slice(i, sp.start), `t${k}`);
     else capped = true; // token at sentence start — don't capitalize a token
-    out.push(<ParamToken key={`p${k}`} span={sp} label={text.slice(sp.start, sp.end)} onParam={onParam} />);
+    out.push(
+      <ParamToken
+        key={`p${k}`}
+        span={sp}
+        label={text.slice(sp.start, sp.end)}
+        onParam={onParam}
+        onParamHover={onParamHover}
+        boundToSelection={selectedNodeSet.size > 0 && sp.nodeIds.some((id) => selectedNodeSet.has(id))}
+      />,
+    );
     i = sp.end;
   });
   pushPlain(text.slice(i), 'tail');
@@ -344,15 +362,24 @@ const PARAM_LABEL: Record<ParamSpan['kind'], string> = {
   radius: 'corners', opacity: 'opacity', align: 'alignment', enum: 'option', shape: 'shape', text: 'value',
 };
 
-/** One clickable parameter word inside a clause. */
+/**
+ * One clickable parameter word inside a clause. Hover traces the token's bound
+ * nodes on the canvas (widget → output attribution); `boundToSelection` marks
+ * tokens that control the currently selected canvas node (output → widget,
+ * the "reverse widget" direction).
+ */
 function ParamToken({
   span,
   label,
   onParam,
+  onParamHover,
+  boundToSelection,
 }: {
   span: ParamSpan;
   label: string;
   onParam: (span: ParamSpan, e: React.MouseEvent) => void;
+  onParamHover: (nodeIds: string[] | null) => void;
+  boundToSelection: boolean;
 }) {
   const swatch =
     span.kind === 'color'
@@ -364,7 +391,14 @@ function ParamToken({
       title={`Edit ${PARAM_LABEL[span.kind]}`}
       onClick={(e) => { e.stopPropagation(); onParam(span, e); }}
       onDoubleClick={(e) => e.stopPropagation()}
-      className="inline-block cursor-pointer whitespace-nowrap rounded-sm bg-slate-100 px-0.5 align-baseline font-semibold text-slate-900 underline decoration-dotted decoration-slate-400 underline-offset-2 hover:bg-slate-200"
+      onMouseEnter={() => onParamHover(span.nodeIds)}
+      onMouseLeave={() => onParamHover(null)}
+      className={cn(
+        'inline-block cursor-pointer whitespace-nowrap rounded-sm px-0.5 align-baseline font-semibold text-slate-900 underline decoration-dotted underline-offset-2',
+        boundToSelection
+          ? 'bg-amber-100 decoration-amber-500 ring-1 ring-amber-300 hover:bg-amber-200'
+          : 'bg-slate-100 decoration-slate-400 hover:bg-slate-200',
+      )}
     >
       {swatch && (
         <span
@@ -389,6 +423,8 @@ function ClauseItem({
   onEdit,
   onRemove,
   onParam,
+  onParamHover,
+  selectedNodeSet,
 }: {
   clause: PromptClause;
   selected: boolean;
@@ -401,6 +437,8 @@ function ClauseItem({
   onEdit: () => void;
   onRemove: () => void;
   onParam: (span: ParamSpan, e: React.MouseEvent) => void;
+  onParamHover: (nodeIds: string[] | null) => void;
+  selectedNodeSet: Set<string>;
 }) {
   const inferred = clause.origin === 'inferred';
   // Single click opens the alternatives menu; a double click goes straight to
@@ -447,7 +485,9 @@ function ClauseItem({
       />
       {/* IR items wrap freely so the whole sentence is visible; only the
           interactive param tokens inside stay on one line (see ParamToken). */}
-      <span className="min-w-0 flex-1 break-words"><ClauseContent text={clause.text} spans={spans} onParam={onParam} /></span>
+      <span className="min-w-0 flex-1 break-words">
+        <ClauseContent text={clause.text} spans={spans} onParam={onParam} onParamHover={onParamHover} selectedNodeSet={selectedNodeSet} />
+      </span>
       {pending ? (
         <button
           onClick={(e) => { e.stopPropagation(); onAccept?.(); }}
@@ -483,6 +523,8 @@ function ClauseInline({
   onEdit,
   onRemove,
   onParam,
+  onParamHover,
+  selectedNodeSet,
 }: {
   clause: PromptClause;
   selected: boolean;
@@ -494,6 +536,8 @@ function ClauseInline({
   onEdit: () => void;
   onRemove: () => void;
   onParam: (span: ParamSpan, e: React.MouseEvent) => void;
+  onParamHover: (nodeIds: string[] | null) => void;
+  selectedNodeSet: Set<string>;
   spans: ParamSpan[];
 }) {
   const inferred = clause.origin === 'inferred';
@@ -537,7 +581,7 @@ function ClauseInline({
           aria-label="inferred"
         />
       )}
-      <ClauseContent text={clause.text} spans={spans} onParam={onParam} />
+      <ClauseContent text={clause.text} spans={spans} onParam={onParam} onParamHover={onParamHover} selectedNodeSet={selectedNodeSet} />
       {pending ? (
         <button
           onClick={(e) => { e.stopPropagation(); onAccept?.(); }}

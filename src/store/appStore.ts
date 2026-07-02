@@ -152,6 +152,12 @@ interface AppState {
   /** The marker-interpolated text of the last successful compose send (for "Save as recipe"). */
   lastSent: string | null;
   hoveredClauseId: string | null;
+  /**
+   * Nodes bound to the parameter token currently hovered in the spec
+   * (Malleable Prompting attribution: widget → output). Canvas outlines them
+   * so the user sees exactly which elements a param controls before editing.
+   */
+  hoveredParamNodeIds: string[] | null;
   recentIds: string[];
   history: Snapshot[];
   tool: Tool;
@@ -201,6 +207,8 @@ interface AppState {
   /** Replace a clause's text with one of its model-proposed alternatives. */
   chooseAlternative: (clauseId: string, text: string) => void;
   hoverClause: (id: string | null) => void;
+  /** Hover a spec param token: outline its bound nodes on the canvas. */
+  hoverParam: (nodeIds: string[] | null) => void;
   setTool: (tool: Tool) => void;
 
   /**
@@ -571,6 +579,7 @@ export const useAppStore = create<AppState>((set, get) => {
       recipes: [],
       lastSent: null,
       hoveredClauseId: null,
+      hoveredParamNodeIds: null,
       recentIds: [],
       history: [],
       clipboard: null,
@@ -594,6 +603,7 @@ export const useAppStore = create<AppState>((set, get) => {
     recipes: [],
     lastSent: null,
     hoveredClauseId: null,
+    hoveredParamNodeIds: null,
     recentIds: [],
     history: [],
     tool: 'pointer',
@@ -711,6 +721,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     hoverClause: (hoveredClauseId) => set({ hoveredClauseId }),
+    hoverParam: (nodeIds) => set({ hoveredParamNodeIds: nodeIds && nodeIds.length ? nodeIds : null }),
     setTool: (tool) => set({ tool }),
 
     instruct: (message, opts = {}) => {
