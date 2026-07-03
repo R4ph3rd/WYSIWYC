@@ -313,7 +313,7 @@ export function AnalysisPage() {
       <header className="flex h-12 items-center gap-3 border-b border-slate-200 bg-white px-6">
         <span className="text-sm font-bold tracking-tight text-slate-900">WYSIWYC</span>
         <span className="text-[11px] text-slate-400">/ Analysis</span>
-        <a href="/" className="ml-auto text-[11px] text-indigo-600 hover:underline">← Back to editor</a>
+        <a href="/" className="ml-auto text-[11px] text-slate-500 hover:text-slate-800 hover:underline">← Back to editor</a>
       </header>
 
       <main className="mx-auto max-w-5xl space-y-6 px-6 py-8">
@@ -341,8 +341,8 @@ export function AnalysisPage() {
 
         {!dataset && (
           <div className="rounded-xl border border-dashed border-slate-300 bg-white py-16 text-center text-sm text-slate-400">
-            Upload a <code>wysiwyc-study-*.json</code> file to see graphs, or open the editor with{' '}
-            <code>?study=1</code> and export from there.
+            Upload a <code>wysiwyc-study-*.json</code> file to see graphs, or open{' '}
+            <code>/study</code> and export from there.
           </div>
         )}
 

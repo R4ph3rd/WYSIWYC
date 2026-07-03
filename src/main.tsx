@@ -4,8 +4,8 @@ import App from './App';
 import { AnalysisPage } from './ui/AnalysisPage';
 import './index.css';
 
-const params = new URLSearchParams(window.location.search);
-const Root = params.get('page') === 'analysis' ? AnalysisPage : App;
+const pathname = window.location.pathname;
+const Root = pathname.endsWith('/analysis') ? AnalysisPage : App;
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
