@@ -69,12 +69,14 @@ Browser-direct calls to four providers; no backend, keys stay in `localStorage`:
 
 | Provider | Default model | Structured output mode | Vision |
 |---|---|---|---|
-| Anthropic | `claude-opus-4-8` | `output_config.format` (json_schema) | ✓ |
+| Anthropic | `claude-opus-4-8` | schema-in-prompt + client-side parse (see note) | ✓ |
 | OpenAI | `gpt-4o` | `response_format` (json_schema, strict) | ✓ |
 | Mistral | `mistral-large-latest` | `response_format` (json_schema, strict) | — |
-| Groq | `llama-3.3-70b-versatile` | `response_format: {json_object}` + schema-in-prompt + client-side validation | — |
+| Groq | `llama-3.3-70b-versatile` | `response_format: {json_object}` + schema-in-prompt + client-side parse | — |
 
 Note that Groq models support only text in prompt requests.
+
+**On Anthropic and `output_config.format`:** Anthropic's grammar-constrained structured-output decoder caps a schema at 24 *optional* properties and 16 *union-typed* (nullable/`anyOf`) properties. The IR patch schema — a flat node list where each node carries a 13-field `style` block plus `layout`/`points`, referenced by both add and update ops — exceeds both caps no matter how the optionality is encoded, so `output_config.format` returns HTTP 400 on it. Anthropic is therefore driven the same way as Groq: the JSON Schema is appended to the system prompt as a hard output constraint and the response is parsed and null-stripped client-side. Claude follows a schema presented this way reliably. OpenAI and Mistral have no equivalent grammar caps, so they keep native `strict` json_schema mode; that mode requires every property to be listed in `required`, which the schemas satisfy by making optional fields nullable (`anyOf [T, null]`) and folding the emitted nulls back to absent keys on parse.
 Because the LLM authors arbitrary Tailwind classes **at runtime**, build-time JIT purging cannot know them. This PoC uses the **Tailwind Play CDN** (in-browser compiler, see `index.html`) so any class, including arbitrary values like `bg-[#4f46e5]` written by inline parameter edits. Compiles on the fly.
 
 

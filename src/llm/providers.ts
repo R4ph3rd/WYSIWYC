@@ -130,6 +130,24 @@ function stripNulls(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Append the JSON Schema to a system prompt as a hard output constraint. Used
+ * for providers where native grammar-constrained decoding is unavailable or
+ * refuses the schema — Groq (JSON mode only) and Anthropic (its structured-output
+ * grammar decoder caps optional/union parameters far below what this IR schema
+ * needs, so `output_config.format` 400s on any variant). Claude and Llama both
+ * honor a schema presented this way reliably; `parseJSON` + client-side use guard
+ * the rest.
+ */
+function schemaConditionedSystem(system: string, schema: unknown): string {
+  return `${system}
+
+You MUST output a single JSON object that conforms to this JSON Schema. Do not include any text outside the JSON object. Do not wrap it in markdown fences. For any field you have no value for, emit null (every property is listed as required, with null allowed).
+
+Schema:
+${JSON.stringify(schema)}`;
+}
+
 function parseJSON(text: string): unknown {
   // Strip fenced ```json blocks if a model added them despite instructions.
   const stripped = text
@@ -173,6 +191,10 @@ async function callAnthropic(opts: CallJSONOptions): Promise<CallJSONResult> {
     ? [...imageBlocks, { type: 'text', text: opts.user }]
     : opts.user;
 
+  // The IR schema exceeds Anthropic's structured-output grammar limits (both the
+  // 24 optional-parameter and 16 union-parameter caps), so native
+  // `output_config.format` 400s on any encoding of it. Condition the model with
+  // the schema in the system prompt instead; Claude follows it reliably.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data: any = await fetchJSON('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -185,11 +207,8 @@ async function callAnthropic(opts: CallJSONOptions): Promise<CallJSONResult> {
     body: JSON.stringify({
       model: opts.model,
       max_tokens: opts.maxTokens,
-      system: opts.system,
+      system: schemaConditionedSystem(opts.system, opts.schema),
       messages: [{ role: 'user', content }],
-      output_config: {
-        format: { type: 'json_schema', schema: opts.schema },
-      },
     }),
   });
   const text = (data.content ?? []).find((b: { type: string }) => b.type === 'text')?.text;
@@ -283,12 +302,7 @@ async function callGroq(opts: CallJSONOptions): Promise<CallJSONResult> {
   }
   // Groq supports JSON mode, not full json_schema for most models. Inject the
   // schema as a tail constraint and rely on the model to honour it.
-  const reinforcedSystem = `${opts.system}
-
-You MUST output a single JSON object that conforms to this JSON Schema. Do not include any text outside the JSON object. Do not wrap it in markdown fences.
-
-Schema:
-${JSON.stringify(opts.schema)}`;
+  const reinforcedSystem = schemaConditionedSystem(opts.system, opts.schema);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data: any = await fetchJSON('https://api.groq.com/openai/v1/chat/completions', {
