@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="200" viewBox="0 0 280 200">
+  <rect width="280" height="200" fill="#f8fafc"/>
+  <text x="140" y="28" font-family="sans-serif" font-size="11" font-weight="600" fill="#64748b" text-anchor="middle">Task 2 — Dashboard Card</text>
+  <!-- Stats cards -->
+  <rect x="16" y="40" width="78" height="64" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="26" y="60" font-family="sans-serif" font-size="8" fill="#94a3b8">Revenue</text>
+  <text x="26" y="78" font-family="sans-serif" font-size="14" font-weight="700" fill="#1e293b">$4.2k</text>
+  <text x="26" y="92" font-family="sans-serif" font-size="7" fill="#22c55e">↑ 12%</text>
+
+  <rect x="102" y="40" width="78" height="64" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="112" y="60" font-family="sans-serif" font-size="8" fill="#94a3b8">Users</text>
+  <text x="112" y="78" font-family="sans-serif" font-size="14" font-weight="700" fill="#1e293b">1,284</text>
+  <text x="112" y="92" font-family="sans-serif" font-size="7" fill="#22c55e">↑ 8%</text>
+
+  <rect x="188" y="40" width="78" height="64" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="198" y="60" font-family="sans-serif" font-size="8" fill="#94a3b8">Orders</text>
+  <text x="198" y="78" font-family="sans-serif" font-size="14" font-weight="700" fill="#1e293b">342</text>
+  <text x="198" y="92" font-family="sans-serif" font-size="7" fill="#ef4444">↓ 3%</text>
+
+  <!-- Chart placeholder -->
+  <rect x="16" y="116" width="248" height="68" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="28" y="132" font-family="sans-serif" font-size="9" font-weight="600" fill="#1e293b">Activity</text>
+  <polyline points="32,172 72,155 112,162 152,142 192,148 232,134 252,140" fill="none" stroke="#6366f1" stroke-width="2"/>
+</svg>
