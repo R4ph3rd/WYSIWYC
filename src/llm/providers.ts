@@ -148,6 +148,23 @@ Schema:
 ${JSON.stringify(schema)}`;
 }
 
+/** Console-log the raw text and token usage the provider returned (debugging aid). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function logApiResponse(provider: ProviderId, text: string | undefined, raw: any): void {
+  const usage = raw?.usage ?? {};
+  const stop = raw?.stop_reason ?? raw?.choices?.[0]?.finish_reason;
+  // eslint-disable-next-line no-console
+  console.groupCollapsed(
+    `[LLM ${provider}] response (${(text ?? '').length} chars, stop: ${stop ?? 'n/a'})`,
+  );
+  // eslint-disable-next-line no-console
+  console.log('usage:', usage);
+  // eslint-disable-next-line no-console
+  console.log(text ?? '(no text)');
+  // eslint-disable-next-line no-console
+  console.groupEnd();
+}
+
 function parseJSON(text: string): unknown {
   // Strip fenced ```json blocks if a model added them despite instructions.
   const stripped = text
@@ -157,7 +174,14 @@ function parseJSON(text: string): unknown {
   try {
     return stripNulls(JSON.parse(stripped));
   } catch (err) {
-    throw new LLMError(`Model returned non-JSON output: ${(err as Error).message}`);
+    // eslint-disable-next-line no-console
+    console.error('[LLM] failed to parse model output as JSON:', err, '\nraw output:\n', text);
+    // A truncated response (max_tokens hit) is the common cause here — surface it.
+    const looksTruncated = /unterminated|Unexpected end|end of (the )?JSON/i.test((err as Error).message);
+    const hint = looksTruncated
+      ? ' The response looks truncated (the model likely hit the output token limit). Try a shorter instruction or a smaller UI.'
+      : '';
+    throw new LLMError(`Model returned invalid JSON: ${(err as Error).message}.${hint}`);
   }
 }
 
@@ -170,6 +194,8 @@ async function fetchJSON(url: string, init: RequestInit): Promise<unknown> {
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    // eslint-disable-next-line no-console
+    console.error(`[LLM] API error HTTP ${res.status}:`, text);
     throw new LLMError(`HTTP ${res.status}: ${text.slice(0, 500)}`);
   }
   return res.json();
@@ -212,6 +238,7 @@ async function callAnthropic(opts: CallJSONOptions): Promise<CallJSONResult> {
     }),
   });
   const text = (data.content ?? []).find((b: { type: string }) => b.type === 'text')?.text;
+  logApiResponse('anthropic', text, data);
   if (!text) throw new LLMError('Anthropic returned no text block.');
   return {
     data: parseJSON(text),
@@ -244,13 +271,18 @@ async function callOpenAI(opts: CallJSONOptions): Promise<CallJSONResult> {
         { role: 'user', content: userContent },
       ],
       max_tokens: opts.maxTokens,
+      // Non-strict: strict json_schema requires every property to be listed in
+      // `required`, which would force the lean schema to emit every field on
+      // every node and bloat/truncate the output. Non-strict still guides gpt-4o
+      // reliably while letting optional fields be omitted.
       response_format: {
         type: 'json_schema',
-        json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },
+        json_schema: { name: opts.schemaName, schema: opts.schema, strict: false },
       },
     }),
   });
   const text = data.choices?.[0]?.message?.content;
+  logApiResponse('openai', text, data);
   if (!text) throw new LLMError('OpenAI returned no message content.');
   return {
     data: parseJSON(text),
@@ -281,11 +313,12 @@ async function callMistral(opts: CallJSONOptions): Promise<CallJSONResult> {
       max_tokens: opts.maxTokens,
       response_format: {
         type: 'json_schema',
-        json_schema: { name: opts.schemaName, schema: opts.schema, strict: true },
+        json_schema: { name: opts.schemaName, schema: opts.schema, strict: false },
       },
     }),
   });
   const text = data.choices?.[0]?.message?.content;
+  logApiResponse('mistral', text, data);
   if (!text) throw new LLMError('Mistral returned no message content.');
   return {
     data: parseJSON(text),
@@ -322,6 +355,7 @@ async function callGroq(opts: CallJSONOptions): Promise<CallJSONResult> {
     }),
   });
   const text = data.choices?.[0]?.message?.content;
+  logApiResponse('groq', text, data);
   if (!text) throw new LLMError('Groq returned no message content.');
   return {
     data: parseJSON(text),

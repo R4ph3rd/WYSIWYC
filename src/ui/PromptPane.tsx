@@ -575,7 +575,7 @@ function ClauseItem({
         <button
           onClick={(e) => { e.stopPropagation(); onAccept?.(); }}
           title="Accept this change"
-          className="mt-px shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 transition-colors group-hover:bg-slate-900 group-hover:text-white"
+          className="mt-px flex w-16 shrink-0 items-center justify-center rounded-full bg-amber-100 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 transition-colors group-hover:bg-amber-400 group-hover:text-amber-950"
         >
           <span className="group-hover:hidden">Proposed</span>
           <span className="hidden group-hover:inline">Accept</span>
@@ -674,7 +674,7 @@ function ClauseInline({
         <button
           onClick={(e) => { e.stopPropagation(); onAccept?.(); }}
           title="Accept this change"
-          className="ml-0.5 hidden rounded bg-slate-900 px-1 align-middle text-[9px] font-bold uppercase tracking-wide text-white no-underline group-hover:inline-block"
+          className="ml-0.5 hidden rounded bg-amber-400 px-1 align-middle text-[9px] font-bold uppercase tracking-wide text-amber-950 no-underline group-hover:inline-block"
         >
           Accept
         </button>

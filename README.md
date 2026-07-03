@@ -70,13 +70,15 @@ Browser-direct calls to four providers; no backend, keys stay in `localStorage`:
 | Provider | Default model | Structured output mode | Vision |
 |---|---|---|---|
 | Anthropic | `claude-opus-4-8` | schema-in-prompt + client-side parse (see note) | ✓ |
-| OpenAI | `gpt-4o` | `response_format` (json_schema, strict) | ✓ |
-| Mistral | `mistral-large-latest` | `response_format` (json_schema, strict) | — |
+| OpenAI | `gpt-4o` | `response_format` (json_schema, non-strict) | ✓ |
+| Mistral | `mistral-large-latest` | `response_format` (json_schema, non-strict) | — |
 | Groq | `llama-3.3-70b-versatile` | `response_format: {json_object}` + schema-in-prompt + client-side parse | — |
 
-Note that Groq models support only text in prompt requests.
+Note that Groq models support only text in prompt requests. Every raw provider response (text + token usage) is logged to the browser console under a collapsed `[LLM <provider>]` group, and API/parse errors are logged in full, so a failing call can always be inspected.
 
-**On Anthropic and `output_config.format`:** Anthropic's grammar-constrained structured-output decoder caps a schema at 24 *optional* properties and 16 *union-typed* (nullable/`anyOf`) properties. The IR patch schema — a flat node list where each node carries a 13-field `style` block plus `layout`/`points`, referenced by both add and update ops — exceeds both caps no matter how the optionality is encoded, so `output_config.format` returns HTTP 400 on it. Anthropic is therefore driven the same way as Groq: the JSON Schema is appended to the system prompt as a hard output constraint and the response is parsed and null-stripped client-side. Claude follows a schema presented this way reliably. OpenAI and Mistral have no equivalent grammar caps, so they keep native `strict` json_schema mode; that mode requires every property to be listed in `required`, which the schemas satisfy by making optional fields nullable (`anyOf [T, null]`) and folding the emitted nulls back to absent keys on parse.
+**On Anthropic and `output_config.format`:** Anthropic's grammar-constrained structured-output decoder caps a schema at 24 *optional* properties **and** 16 *union-typed* (nullable/`anyOf`) properties. The IR patch schema — a flat node list where each node carries a 13-field `style` block plus `layout`/`points`, referenced by both add and update ops — has ~51 genuinely-omittable fields, which cannot fit inside the combined 24+16 budget under any encoding, so `output_config.format` returns HTTP 400 on it (either "too many optional parameters" or, if you make them nullable to dodge that, "too many parameters with union types"). Anthropic is therefore driven the same way as Groq: the JSON Schema is appended to the system prompt as a hard output constraint and the response is parsed and null-stripped client-side. Claude follows a schema presented this way reliably.
+
+Because those providers see the schema as *guidance* rather than a compiled grammar, the schema is kept **lean** — optional fields are omitted from `required` instead of being forced present-and-nullable. This keeps generated JSON compact (each node emits only the fields it needs); a schema that instead forced all ~20 fields per node to be emitted as `null` bloated the output past `max_tokens` and truncated the JSON mid-string. OpenAI and Mistral consume the same lean schema via **non-strict** `json_schema` (strict mode would require every property in `required`, reintroducing the bloat); non-strict still guides those models reliably.
 Because the LLM authors arbitrary Tailwind classes **at runtime**, build-time JIT purging cannot know them. This PoC uses the **Tailwind Play CDN** (in-browser compiler, see `index.html`) so any class, including arbitrary values like `bg-[#4f46e5]` written by inline parameter edits. Compiles on the fly.
 
 

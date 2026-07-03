@@ -44,7 +44,7 @@ export function DiffRibbon({ onReview }: { onReview: () => void }) {
       </button>
       <button
         onClick={() => accept()}
-        className="rounded bg-slate-900 px-2 py-0.5 font-semibold text-white transition-colors hover:bg-slate-800"
+        className="rounded bg-amber-400 px-2 py-0.5 font-semibold text-amber-950 transition-colors hover:bg-amber-500"
       >
         Accept all
       </button>
