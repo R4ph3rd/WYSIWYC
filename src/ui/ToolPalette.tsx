@@ -1,5 +1,6 @@
 import { MousePointer2, Square, Circle, Minus, PenTool, Type } from 'lucide-react';
 import { useAppStore, type Tool } from '@/store/appStore';
+import { useStudyStore } from '@/store/studyStore';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './primitives/tooltip';
 
@@ -15,11 +16,13 @@ const TOOLS: { tool: Tool; icon: React.ReactNode; label: string; shortcut: strin
 export function ToolPalette() {
   const tool = useAppStore((s) => s.tool);
   const setTool = useAppStore((s) => s.setTool);
+  const chatOnly = useStudyStore((s) => s.condition === 'chat_only');
+  const visibleTools = chatOnly ? TOOLS.filter((t) => t.tool === 'pointer') : TOOLS;
 
   return (
     <TooltipProvider delayDuration={250}>
       <div className="flex items-center gap-0.5 rounded-xl border border-slate-200 bg-white/95 p-1 shadow-md backdrop-blur">
-        {TOOLS.map(({ tool: t, icon, label, shortcut }) => (
+        {visibleTools.map(({ tool: t, icon, label, shortcut }) => (
           <Tooltip key={t}>
             <TooltipTrigger asChild>
               <button

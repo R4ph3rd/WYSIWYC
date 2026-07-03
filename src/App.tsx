@@ -1,19 +1,24 @@
 import { useEffect, useState } from 'react';
-import { Undo2, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon } from 'lucide-react';
+import { Undo2, FilePlus2, AlertTriangle, X, Plug, Circle as CircleIcon, Layers as LayersIcon, Download, Square } from 'lucide-react';
 import { useAppStore, type Tool } from './store/appStore';
 import { useSettingsStore } from './store/settingsStore';
+import { useStudyStore } from './store/studyStore';
 import { familyFromStack } from './lib/fonts';
 import { loadGoogleFont } from './lib/loadFont';
-import { SAMPLES } from './ir/samples';
 import { PromptPane } from './ui/PromptPane';
 import { Canvas } from './ui/Canvas';
 import { LayersPanel } from './ui/LayersPanel';
 import { PropertiesPanel } from './ui/PropertiesPanel';
 import { ConnectDialog } from './ui/ConnectDialog';
+import { StudySetupModal } from './ui/StudySetupModal';
 import { Button } from './ui/primitives/button';
 
+function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
 export default function App() {
-  const loadSample = useAppStore((s) => s.loadSample);
   const newBlank = useAppStore((s) => s.newBlank);
   const undo = useAppStore((s) => s.undo);
   const canUndo = useAppStore((s) => s.history.length > 0);
@@ -23,6 +28,31 @@ export default function App() {
 
   const isConnected = useSettingsStore((s) => Boolean(s.keys[s.activeProvider]?.trim()));
   const activeLabel = useSettingsStore((s) => s.activeLabel());
+
+  const isStudyMode = useStudyStore((s) => s.isStudyMode);
+  const chatOnly = useStudyStore((s) => s.condition === 'chat_only');
+  const setStudyMode = useStudyStore((s) => s.setStudyMode);
+  const activeRun = useStudyStore((s) => s.activeRun);
+  const promptCount = useStudyStore((s) => s.promptCount);
+  const editCount = useStudyStore((s) => s.editCount);
+  const runStartedAt = useStudyStore((s) => s.runStartedAt);
+  const endRun = useStudyStore((s) => s.endRun);
+  const exportDataset = useStudyStore((s) => s.exportDataset);
+
+  // Activate study mode when the /study route is loaded.
+  useEffect(() => {
+    if (window.location.pathname.endsWith('/study')) setStudyMode(true);
+  }, [setStudyMode]);
+
+  // Elapsed timer for the active run.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!runStartedAt) { setElapsed(0); return; }
+    const tick = () => setElapsed(Date.now() - runStartedAt);
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [runStartedAt]);
 
   const [connectOpen, setConnectOpen] = useState(false);
   // Layers panel collapses to a narrow icon bar by default (false).
@@ -94,6 +124,9 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
+      {/* Study setup modal — shown whenever study mode is active but no run is in progress. */}
+      {isStudyMode && !activeRun && <StudySetupModal />}
+
       {/* Top bar */}
       <header className="flex h-12 items-center gap-3 border-b border-slate-200 bg-white px-4">
         <div className="flex items-baseline gap-2">
@@ -103,7 +136,6 @@ export default function App() {
 
         <div className="mx-2 h-5 w-px bg-slate-200" />
 
-        
         <div className="ml-auto flex items-center gap-1.5">
           <ConnectDialog open={connectOpen} onOpenChange={setConnectOpen}>
             <button
@@ -129,6 +161,26 @@ export default function App() {
           <Button size="sm" variant="ghost" onClick={undo} disabled={!canUndo}>
             <Undo2 className="h-3.5 w-3.5" /> Undo
           </Button>
+
+          {/* Study controls — visible only on the /study route. */}
+          {isStudyMode && (
+            <>
+              <div className="mx-1 h-5 w-px bg-slate-200" />
+              {activeRun && (
+                <>
+                  <span className="font-mono text-[11px] text-slate-400">
+                    {formatElapsed(elapsed)} · {promptCount}p · {editCount}e
+                  </span>
+                  <Button size="sm" variant="ghost" onClick={endRun}>
+                    <Square className="h-3.5 w-3.5" /> Done
+                  </Button>
+                </>
+              )}
+              <Button size="sm" variant="ghost" onClick={exportDataset}>
+                <Download className="h-3.5 w-3.5" /> Export logs
+              </Button>
+            </>
+          )}
         </div>
       </header>
 
@@ -175,9 +227,11 @@ export default function App() {
 
         <Canvas />
 
-        <div className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white">
-          <PropertiesPanel />
-        </div>
+        {!chatOnly && (
+          <div className="flex w-72 shrink-0 flex-col border-l border-slate-200 bg-white">
+            <PropertiesPanel />
+          </div>
+        )}
       </div>
     </div>
   );
