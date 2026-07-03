@@ -61,6 +61,16 @@ async function callConnected<T>(
 }
 
 /**
+ * Output-token ceiling for the two calls that can emit a whole scene graph
+ * (compose from scratch, or a full Call A regeneration). A rich page — a landing
+ * page, a dashboard — easily runs past 8k tokens of JSON and would otherwise be
+ * truncated mid-object ("end of data when property name was expected"). 16000
+ * stays within every provider's per-response cap (OpenAI gpt-4o tops out at
+ * 16384) while giving comfortable headroom.
+ */
+const MAX_SCENE_TOKENS = 16000;
+
+/**
  * Compose — freeform instruction → spec update + IR patch (one call). This is
  * what the Lovable-style composer drives: the user talks naturally, the spec
  * writes itself, and the same call patches the scene so provenance lines up.
@@ -79,7 +89,7 @@ export function composeFromInstruction(
     composeUser(ir, prompt, instruction, opts),
     COMPOSE_SCHEMA,
     'compose',
-    8000,
+    MAX_SCENE_TOKENS,
     images,
     'compose',
   );
@@ -96,7 +106,7 @@ export function generatePatch(
     callAUser(ir, prompt, changedClauseIds),
     IR_PATCH_SCHEMA,
     'ir_patch',
-    8000,
+    MAX_SCENE_TOKENS,
     undefined,
     'call_a',
   );
