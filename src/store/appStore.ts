@@ -215,6 +215,14 @@ interface AppState {
   selectNode: (id: string | null) => void;
   /** Shift-click: toggle a node in/out of the multi-selection. */
   toggleSelection: (id: string) => void;
+  /** Replace the whole selection (used by marquee/rubber-band selection). */
+  setSelection: (ids: string[]) => void;
+  /**
+   * Promote a flow (LLM-authored) node to an absolutely-positioned one so it can
+   * be freely moved and resized on the canvas, like a drawn shape. Reparents it
+   * to the root frame with the given stage-relative bounds.
+   */
+  promoteToAbsolute: (id: string, bounds: { x: number; y: number; w: number; h: number }) => void;
   setComposerFocused: (focused: boolean) => void;
   setComposerValue: (v: ComposerValue) => void;
   /** Ask a surface (the prompt composer or the canvas) to take focus. */
@@ -693,6 +701,36 @@ export const useAppStore = create<AppState>((set, get) => {
         return { selectedNodeIds, selectedNodeId: selectedNodeIds[selectedNodeIds.length - 1] ?? null };
       }),
 
+    setSelection: (ids) =>
+      set({ selectedNodeIds: ids, selectedNodeId: ids[ids.length - 1] ?? null }),
+
+    promoteToAbsolute: (id, bounds) =>
+      set((s) => {
+        const node = s.ir.nodes.find((n) => n.id === id);
+        const rootId = defaultParentId(s.ir);
+        if (!node || id === rootId) return {};
+        const order =
+          s.ir.nodes.filter((n) => n.parentId === rootId).reduce((m, n) => Math.max(m, n.order), -1) + 1;
+        return {
+          history: [...s.history, snapshot(s)].slice(-50),
+          ir: {
+            ...s.ir,
+            nodes: s.ir.nodes.map((n) =>
+              n.id === id
+                ? {
+                    ...n,
+                    parentId: rootId,
+                    order,
+                    layout: { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h },
+                    provenance: { ...n.provenance, source: 'user' },
+                  }
+                : n,
+            ),
+          },
+          recentIds: [id],
+        };
+      }),
+
     setComposerFocused: (composerFocused) => set({ composerFocused }),
     setComposerValue: (composerValue) => set({ composerValue }),
 
@@ -1016,7 +1054,16 @@ export const useAppStore = create<AppState>((set, get) => {
       // 1. Deterministic IR write, preserving provenance (NOT diverged: a forward
       //    param edit keeps the node described by — linked to — its clause).
       let ir = state.ir;
-      for (const nodeId of span.nodeIds) {
+      // A size/spacing slider the model left "prose only" (no bound nodes) still
+      // ought to move the UI: fall back to the nodes this clause describes so the
+      // change is visible on the canvas, not just in the sentence.
+      const targetIds =
+        span.nodeIds.length > 0
+          ? span.nodeIds
+          : span.kind === 'length' || span.kind === 'radius'
+            ? ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId).map((n) => n.id)
+            : [];
+      for (const nodeId of targetIds) {
         const before = ir.nodes.find((n) => n.id === nodeId);
         if (!before) continue;
         const prov = before.provenance;

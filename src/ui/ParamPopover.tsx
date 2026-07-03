@@ -28,7 +28,13 @@ export function ParamPopover({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: x, top: y });
+  // Track the value locally so the header readout updates live while dragging a
+  // slider (the incoming `span` is a snapshot and doesn't change mid-gesture).
+  const [live, setLive] = useState(span.value);
+  useEffect(() => setLive(span.value), [span.value]);
+  const handleChange = (v: string) => { setLive(v); onChange(v); };
   const commitClose = (v: string) => { onChange(v); onClose(); };
+  const readout = valueReadout(span.kind, live, span.unit);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -60,14 +66,30 @@ export function ParamPopover({
     >
       <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
         {LABELS[span.kind]}
-        {span.nodeIds.length === 0 && span.kind !== 'length' && span.kind !== 'radius' && (
+        {readout !== null && (
+          <span className="ml-auto normal-case tabular-nums text-[10px] font-semibold text-slate-700">{readout}</span>
+        )}
+        {readout === null && span.nodeIds.length === 0 && (
           <span className="ml-auto normal-case text-[9px] text-slate-300">prose only</span>
         )}
       </div>
-      <Widget span={span} onChange={onChange} onCommitClose={commitClose} />
+      <Widget span={span} onChange={handleChange} onCommitClose={commitClose} />
     </div>,
     document.body,
   );
+}
+
+/** The slider readout shown on the right of the header (null = not a slider). */
+function valueReadout(kind: ParamKind, value: string, unit?: string): string | null {
+  switch (kind) {
+    case 'length':
+    case 'radius':
+      return `${value}${unit ?? 'px'}`;
+    case 'opacity':
+      return `${Math.round((Number(value) || 0) * 100)}%`;
+    default:
+      return null;
+  }
 }
 
 const LABELS: Record<ParamKind, string> = {

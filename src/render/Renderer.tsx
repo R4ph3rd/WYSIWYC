@@ -39,8 +39,12 @@ function structuredStyle(node: IRNode): CSSProperties {
   } else if (sw === 0 && SHAPE_ROLES.includes(node.role)) {
     out.border = 'none';
   }
-  if (s.borderRadius !== undefined) {
-    out.borderRadius = node.role === 'circle' ? '50%' : s.borderRadius;
+  if (node.role === 'circle') {
+    // A circle is always fully rounded regardless of whether a borderRadius was
+    // authored — otherwise the div renders as a square.
+    out.borderRadius = '50%';
+  } else if (s.borderRadius !== undefined) {
+    out.borderRadius = s.borderRadius;
   }
   if (s.fontFamily) out.fontFamily = s.fontFamily;
   if (s.fontSize !== undefined) out.fontSize = s.fontSize;

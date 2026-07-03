@@ -12,18 +12,32 @@ import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
 import { useStudyStore } from '@/store/studyStore';
 
+type Bounds = { x: number; y: number; w: number; h: number };
+
 type DragState =
   | { mode: 'draw'; id: string; role: IRNode['role']; startX: number; startY: number; prevIR: IR }
-  | { mode: 'move'; id: string; startX: number; startY: number; origX: number; origY: number; moved: boolean; prevIR: IR }
+  | {
+      mode: 'move';
+      id: string;
+      startX: number;
+      startY: number;
+      origX: number;
+      origY: number;
+      moved: boolean;
+      prevIR: IR;
+      /** For a flow (LLM) node: promote it to absolute at these bounds on first move. */
+      promote?: Bounds;
+    }
   | {
       mode: 'resize';
       id: string;
       handle: 'nw' | 'ne' | 'sw' | 'se';
       startX: number;
       startY: number;
-      orig: { x: number; y: number; w: number; h: number };
+      orig: Bounds;
       prevIR: IR;
-    };
+    }
+  | { mode: 'marquee'; startX: number; startY: number; curX: number; curY: number };
 
 interface PenState {
   points: PathPoint[]; // stage coordinates
@@ -86,6 +100,8 @@ export function Canvas() {
   const generating = useAppStore((s) => s.generating);
   const selectNode = useAppStore((s) => s.selectNode);
   const toggleSelection = useAppStore((s) => s.toggleSelection);
+  const setSelection = useAppStore((s) => s.setSelection);
+  const promoteToAbsolute = useAppStore((s) => s.promoteToAbsolute);
   const addComposerNodeRef = useAppStore((s) => s.addComposerNodeRef);
   const addComposerLocationRef = useAppStore((s) => s.addComposerLocationRef);
   const setTool = useAppStore((s) => s.setTool);
@@ -127,6 +143,9 @@ export function Canvas() {
   // the browser fires afterwards (which would otherwise add a stray ref chip).
   const draggedRef = useRef(false);
   const [drag, setDrag] = useState<DragState | null>(null);
+  // Stage-relative bounds of a selected FLOW node, so resize handles can be shown
+  // for LLM-authored components before they are promoted to absolute positioning.
+  const [flowBounds, setFlowBounds] = useState<Bounds | null>(null);
   const [pen, setPen] = useState<PenState | null>(null);
   const [penCursor, setPenCursor] = useState<PathPoint | null>(null);
   // Inline canvas text editing (double-click a text node). Holds the node id
@@ -180,6 +199,20 @@ export function Canvas() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedNodeId, ir]);
 
+  // Measure a selected flow node's box so we can offer resize handles on it even
+  // though it has no stored layout yet (it gets promoted to absolute on resize).
+  useEffect(() => {
+    if (drag) return; // don't remeasure mid-gesture; re-runs once the drag clears
+    if (!selectedNodeId) { setFlowBounds(null); return; }
+    const node = nodeById(selectedNodeId);
+    if (!node || (node.layout?.x !== undefined && node.layout?.y !== undefined)) {
+      setFlowBounds(null);
+      return;
+    }
+    setFlowBounds(stageRelativeBounds(selectedNodeId));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedNodeId, ir, drag]);
+
   // Surface the "unbound shortcut" hint for a few seconds after it is flagged.
   const [hintVisible, setHintVisible] = useState(false);
   useEffect(() => {
@@ -222,6 +255,22 @@ export function Canvas() {
     if (!el) return null;
     const rect = el.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  /** A rendered node's box measured relative to the stage origin (drawn-shape space). */
+  function stageRelativeBounds(id: string): Bounds | null {
+    const stage = stageRef.current;
+    if (!stage) return null;
+    const el = stage.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(id)}"]`);
+    if (!el) return null;
+    const sr = stage.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.left - sr.left),
+      y: Math.round(r.top - sr.top),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+    };
   }
 
   /** The rendered node whose center is closest to a stage point (for here/there). */
@@ -312,13 +361,25 @@ export function Canvas() {
       return;
     }
 
-    // Pointer tool: start a move-drag when pressing an absolute-positioned
-    // node (drawn shapes). Flow nodes keep HTML5 drag-to-reorder.
-    // In chat_only mode, allow selection only — no dragging.
+    // Pointer tool. In chat_only mode, allow selection only — no dragging.
+    if (chatOnly) return;
+    // Shift is a selection modifier (multi-select) — never start a drag/marquee,
+    // so the trailing click toggles the node in/out of the selection.
+    if (e.shiftKey) return;
+
     const target = (e.target as HTMLElement).closest('[data-node-id]');
     const id = target?.getAttribute('data-node-id');
     const node = id ? nodeById(id) : undefined;
-    if (!chatOnly && node && node.layout?.x !== undefined && node.layout?.y !== undefined) {
+    // Pressing empty space (or the root frame itself) begins a rubber-band
+    // selection rather than a move.
+    const onEmpty = !node || (node.parentId === null && node.role === 'frame');
+    if (onEmpty) {
+      setDrag({ mode: 'marquee', startX: p.x, startY: p.y, curX: p.x, curY: p.y });
+      return;
+    }
+
+    if (node.layout?.x !== undefined && node.layout?.y !== undefined) {
+      // Already absolute (a drawn shape or a promoted component): move directly.
       e.preventDefault();
       const origX = node.layout.x;
       const origY = node.layout.y;
@@ -344,7 +405,27 @@ export function Canvas() {
         moved: false,
         prevIR: useAppStore.getState().ir,
       });
+      return;
     }
+
+    // A flow (LLM-authored) node: arm a move that promotes the node to absolute
+    // on the first real drag, so generated components can be repositioned too.
+    // A plain click (no drag) leaves the layout untouched and just selects.
+    const bounds = stageRelativeBounds(node.id);
+    if (!bounds) return;
+    e.preventDefault();
+    selectNode(node.id);
+    setDrag({
+      mode: 'move',
+      id: node.id,
+      startX: p.x,
+      startY: p.y,
+      origX: bounds.x,
+      origY: bounds.y,
+      moved: false,
+      prevIR: useAppStore.getState().ir,
+      promote: bounds,
+    });
   }
 
   function onStageMouseMove(e: React.MouseEvent) {
@@ -352,6 +433,11 @@ export function Canvas() {
     if (!p) return;
     if (pen) setPenCursor(p);
     if (!drag) return;
+
+    if (drag.mode === 'marquee') {
+      setDrag({ ...drag, curX: p.x, curY: p.y });
+      return;
+    }
 
     if (drag.mode === 'draw') {
       const x = Math.min(p.x, drag.startX);
@@ -362,7 +448,11 @@ export function Canvas() {
     } else if (drag.mode === 'move') {
       const dx = p.x - drag.startX;
       const dy = p.y - drag.startY;
-      if (!drag.moved && Math.hypot(dx, dy) > 3) setDrag({ ...drag, moved: true });
+      if (!drag.moved && Math.hypot(dx, dy) > 3) {
+        // First real movement: an LLM node becomes absolute here so it can float.
+        if (drag.promote) promoteToAbsolute(drag.id, drag.promote);
+        setDrag({ ...drag, moved: true });
+      }
       updateLayout(drag.id, { x: Math.round(drag.origX + dx), y: Math.round(drag.origY + dy) });
     } else {
       const dx = p.x - drag.startX;
@@ -383,6 +473,35 @@ export function Canvas() {
 
   function onStageMouseUp() {
     if (!drag) return;
+
+    if (drag.mode === 'marquee') {
+      const rx = Math.min(drag.startX, drag.curX);
+      const ry = Math.min(drag.startY, drag.curY);
+      const rw = Math.abs(drag.curX - drag.startX);
+      const rh = Math.abs(drag.curY - drag.startY);
+      setDrag(null);
+      // A negligible drag is really a click on empty space → let it deselect.
+      if (rw < 4 && rh < 4) return;
+      // Swallow the trailing click so it doesn't immediately clear the selection.
+      draggedRef.current = true;
+      const stage = stageRef.current;
+      if (!stage) return;
+      const sr = stage.getBoundingClientRect();
+      const ids: string[] = [];
+      stage.querySelectorAll<HTMLElement>('[data-node-id]').forEach((el) => {
+        const nid = el.dataset.nodeId;
+        if (!nid) return;
+        const n = nodeById(nid);
+        if (!n || (n.parentId === null && n.role === 'frame')) return; // skip the root frame
+        const r = el.getBoundingClientRect();
+        const cx = r.left - sr.left + r.width / 2;
+        const cy = r.top - sr.top + r.height / 2;
+        if (cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh) ids.push(nid);
+      });
+      setSelection(ids);
+      return;
+    }
+
     const node = nodeById(drag.id);
     // A move/resize that actually changed geometry should swallow the trailing
     // click so it doesn't get read as a "refer to this element" tap.
@@ -439,7 +558,22 @@ export function Canvas() {
     if (chatOnly) return;
     const node = selectedNodeId ? nodeById(selectedNodeId) : undefined;
     const p = relativePoint(e);
-    if (!node || !p || node.layout?.x === undefined) return;
+    if (!node || !p) return;
+    let orig: Bounds;
+    if (node.layout?.x !== undefined) {
+      orig = {
+        x: node.layout.x,
+        y: node.layout.y ?? 0,
+        w: node.layout.w ?? 80,
+        h: node.layout.h ?? 80,
+      };
+    } else if (flowBounds) {
+      // Resizing an LLM node promotes it to absolute at its current box first.
+      promoteToAbsolute(node.id, flowBounds);
+      orig = flowBounds;
+    } else {
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     setDrag({
@@ -448,12 +582,7 @@ export function Canvas() {
       handle,
       startX: p.x,
       startY: p.y,
-      orig: {
-        x: node.layout.x,
-        y: node.layout.y ?? 0,
-        w: node.layout.w ?? 80,
-        h: node.layout.h ?? 80,
-      },
+      orig,
       prevIR: useAppStore.getState().ir,
     });
   }
@@ -470,10 +599,13 @@ export function Canvas() {
   };
 
   const selectedNode = selectedNodeId ? ir.nodes.find((n) => n.id === selectedNodeId) : undefined;
-  const showHandles =
-    tool === 'pointer' &&
-    selectedNode?.layout?.x !== undefined &&
-    selectedNode?.layout?.y !== undefined;
+  const isAbsoluteSelection =
+    selectedNode?.layout?.x !== undefined && selectedNode?.layout?.y !== undefined;
+  // Handles show on absolute nodes (via their layout) and on flow nodes (via the
+  // measured box); grabbing a handle on a flow node promotes it to absolute.
+  const handleLayout: Bounds | { x?: number; y?: number; w?: number; h?: number } | null =
+    isAbsoluteSelection ? selectedNode!.layout! : !drag ? flowBounds : null;
+  const showHandles = tool === 'pointer' && !!selectedNode && !!handleLayout && !chatOnly;
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
@@ -544,6 +676,9 @@ export function Canvas() {
           }}
           onClick={(e) => {
             if (e.target !== e.currentTarget || drawing) return;
+            // A marquee/move drag ends in a click on empty space — swallow it so
+            // the just-made selection isn't immediately cleared.
+            if (draggedRef.current) { draggedRef.current = false; return; }
             // "here"/"there" + click on empty canvas → capture the point as a
             // location reference rather than clearing the selection.
             if (isComposing && wantsLocation) {
@@ -674,9 +809,22 @@ export function Canvas() {
             </svg>
           )}
 
-          {/* Resize handles for the selected drawn shape. */}
-          {showHandles && selectedNode?.layout && (
-            <SelectionHandles layout={selectedNode.layout} onStart={startResize} />
+          {/* Resize handles for the selected shape or promotable component. */}
+          {showHandles && handleLayout && (
+            <SelectionHandles layout={handleLayout} onStart={startResize} />
+          )}
+
+          {/* Rubber-band marquee rectangle. */}
+          {drag?.mode === 'marquee' && (
+            <div
+              className="pointer-events-none absolute z-20 rounded-sm border border-indigo-400 bg-indigo-400/10"
+              style={{
+                left: Math.min(drag.startX, drag.curX),
+                top: Math.min(drag.startY, drag.curY),
+                width: Math.abs(drag.curX - drag.startX),
+                height: Math.abs(drag.curY - drag.startY),
+              }}
+            />
           )}
 
           {isEmpty && <HeroComposer />}
