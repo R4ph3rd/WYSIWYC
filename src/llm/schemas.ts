@@ -1,12 +1,25 @@
 /**
- * JSON schemas for Anthropic structured outputs (`output_config.format`).
- * Constraints honored: every object sets `additionalProperties: false`; no
- * numeric/string range constraints; nullable fields use anyOf string|null; no
- * recursion (the IR is flat, which is exactly why structured output stays
- * reliable here).
+ * JSON schemas for structured outputs across all four providers.
+ *
+ * Hard constraint (Anthropic grammar decoder): a schema may contain at most 24
+ * *optional* properties (any property not listed in its object's `required`),
+ * or grammar compilation is refused with HTTP 400. OpenAI/Mistral strict mode
+ * add the mirror-image rule: every property MUST appear in `required`. We honor
+ * both at once by making **every** property required and expressing "optional"
+ * fields as nullable (`anyOf [T, null]`). The model emits `null` for anything it
+ * omits, and `stripNulls` in `providers.ts` folds those nulls back to absent
+ * keys so the rest of the app sees the exact shape it always has.
+ *
+ * Other constraints honored: every object sets `additionalProperties: false`;
+ * no numeric/string range constraints; no recursion (the IR is flat, which is
+ * exactly why structured output stays reliable here).
  */
 
-const nullableString = { anyOf: [{ type: 'string' }, { type: 'null' }] };
+/** Wrap a schema so `null` is an accepted value (the nullable idiom). */
+const nullable = (schema: object) => ({ anyOf: [schema, { type: 'null' }] });
+
+const nullableString = nullable({ type: 'string' });
+const nullableStringArray = nullable({ type: 'array', items: { type: 'string' } });
 
 const roleEnum = {
   type: 'string',
@@ -42,31 +55,47 @@ const styleSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    fill: { type: 'string' },
-    stroke: { type: 'string' },
-    strokeWidth: { type: 'number' },
-    borderRadius: { type: 'number' },
-    fontFamily: { type: 'string' },
-    fontSize: { type: 'number' },
-    fontWeight: { type: ['number', 'string'] },
-    fontColor: { type: 'string' },
-    italic: { type: 'boolean' },
-    underline: { type: 'boolean' },
-    textAlign: { type: 'string', enum: ['left', 'center', 'right'] },
-    shadow: { type: 'string' },
-    opacity: { type: 'number' },
+    fill: nullableString,
+    stroke: nullableString,
+    strokeWidth: nullable({ type: 'number' }),
+    borderRadius: nullable({ type: 'number' }),
+    fontFamily: nullableString,
+    fontSize: nullable({ type: 'number' }),
+    fontWeight: nullable({ type: ['number', 'string'] }),
+    fontColor: nullableString,
+    italic: nullable({ type: 'boolean' }),
+    underline: nullable({ type: 'boolean' }),
+    textAlign: nullable({ type: 'string', enum: ['left', 'center', 'right'] }),
+    shadow: nullableString,
+    opacity: nullable({ type: 'number' }),
   },
+  required: [
+    'fill',
+    'stroke',
+    'strokeWidth',
+    'borderRadius',
+    'fontFamily',
+    'fontSize',
+    'fontWeight',
+    'fontColor',
+    'italic',
+    'underline',
+    'textAlign',
+    'shadow',
+    'opacity',
+  ],
 };
 
 const layoutSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    x: { type: 'number' },
-    y: { type: 'number' },
-    w: { type: 'number' },
-    h: { type: 'number' },
+    x: nullable({ type: 'number' }),
+    y: nullable({ type: 'number' }),
+    w: nullable({ type: 'number' }),
+    h: nullable({ type: 'number' }),
   },
+  required: ['x', 'y', 'w', 'h'],
 };
 
 const provenanceSchema = {
@@ -87,30 +116,31 @@ const nodeSchema = {
     role: roleEnum,
     parentId: nullableString,
     order: { type: 'integer' },
-    content: { type: 'string' },
+    content: nullableString,
     tailwind: { type: 'string', description: 'Production-quality Tailwind className authored by you.' },
-    layout: layoutSchema,
-    style: styleSchema,
-    points: pointsSchema,
+    layout: nullable(layoutSchema),
+    style: nullable(styleSchema),
+    points: nullable(pointsSchema),
     provenance: provenanceSchema,
   },
-  required: ['id', 'role', 'parentId', 'order', 'tailwind', 'provenance'],
+  required: ['id', 'role', 'parentId', 'order', 'content', 'tailwind', 'layout', 'style', 'points', 'provenance'],
 };
 
 const partialNodeSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    role: roleEnum,
+    role: nullable(roleEnum),
     parentId: nullableString,
-    order: { type: 'integer' },
-    content: { type: 'string' },
-    tailwind: { type: 'string' },
-    layout: layoutSchema,
-    style: styleSchema,
-    points: pointsSchema,
-    provenance: provenanceSchema,
+    order: nullable({ type: 'integer' }),
+    content: nullableString,
+    tailwind: nullableString,
+    layout: nullable(layoutSchema),
+    style: nullable(styleSchema),
+    points: nullable(pointsSchema),
+    provenance: nullable(provenanceSchema),
   },
+  required: ['role', 'parentId', 'order', 'content', 'tailwind', 'layout', 'style', 'points', 'provenance'],
 };
 
 const patchOpsSchema = {
@@ -177,10 +207,10 @@ const paramSpanSchema = {
       description: 'IR field: "style.<key>", "layout.<key>", "tailwind:<prefix>", "align", or "content".',
     },
     value: { type: 'string', description: 'Current value (e.g. "#4f46e5", "600", "16", "Inter").' },
-    options: { type: 'array', items: { type: 'string' } },
-    unit: { type: 'string' },
+    options: nullableStringArray,
+    unit: nullableString,
   },
-  required: ['id', 'start', 'end', 'kind', 'nodeIds', 'path', 'value'],
+  required: ['id', 'start', 'end', 'kind', 'nodeIds', 'path', 'value', 'options', 'unit'],
 };
 
 const clauseSchema = {
@@ -195,18 +225,18 @@ const clauseSchema = {
       enum: ['explicit', 'inferred'],
       description: "'explicit' if the user stated it; 'inferred' if you guessed/filled it in.",
     },
-    alternatives: {
+    alternatives: nullable({
       type: 'array',
       items: { type: 'string' },
       description: 'Up to 3 plausible alternative values/phrasings the user might prefer.',
-    },
-    params: {
+    }),
+    params: nullable({
       type: 'array',
       items: paramSpanSchema,
       description: 'Optional addressable parameter spans binding a token in `text` to IR field(s).',
-    },
+    }),
   },
-  required: ['id', 'text', 'category', 'origin'],
+  required: ['id', 'text', 'category', 'origin', 'alternatives', 'params'],
 };
 
 export const PROMPT_UPDATE_SCHEMA = {

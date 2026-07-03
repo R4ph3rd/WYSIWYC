@@ -49,7 +49,10 @@ function normalizeNode(node: IRNode): IRNode {
     parentId: node.parentId ?? null,
     order: node.order ?? 0,
     tailwind: node.tailwind ?? '',
-    provenance: node.provenance ?? { promptClauseId: null, source: 'llm' },
+    provenance: {
+      promptClauseId: node.provenance?.promptClauseId ?? null,
+      source: node.provenance?.source ?? 'llm',
+    },
   };
 }
 

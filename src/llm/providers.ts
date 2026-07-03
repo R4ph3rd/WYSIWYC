@@ -100,6 +100,30 @@ function parseDataUrl(dataUrl: string): { mediaType: string; data: string } | nu
   return { mediaType: m[1], data: m[2] };
 }
 
+/**
+ * Fold `null` back to "absent". Our schemas mark every field `required` and make
+ * the optional ones nullable (so Anthropic's grammar decoder and OpenAI/Mistral
+ * strict mode both accept the schema); the model therefore emits `null` for
+ * anything it omits. Stripping those nulls deeply restores the exact optional-key
+ * shape the rest of the app already expects (`node.style?`, `clause.params?`, …).
+ * Nulls that are semantically meaningful (a root node's `parentId`, a clause-less
+ * `promptClauseId`) are re-materialized downstream by `normalizeNode`.
+ */
+function stripNulls(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.filter((v) => v !== null).map(stripNulls);
+  }
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (v === null) continue;
+      out[k] = stripNulls(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 function parseJSON(text: string): unknown {
   // Strip fenced ```json blocks if a model added them despite instructions.
   const stripped = text
@@ -107,7 +131,7 @@ function parseJSON(text: string): unknown {
     .replace(/\s*```\s*$/i, '')
     .trim();
   try {
-    return JSON.parse(stripped);
+    return stripNulls(JSON.parse(stripped));
   } catch (err) {
     throw new LLMError(`Model returned non-JSON output: ${(err as Error).message}`);
   }
