@@ -30,6 +30,8 @@ export interface LLMCallRecord {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  /** Portion of inputTokens served from a prompt cache (Anthropic/OpenAI). */
+  cachedInputTokens: number;
   ts: number;
 }
 

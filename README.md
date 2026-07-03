@@ -74,7 +74,14 @@ Browser-direct calls to four providers; no backend, keys stay in `localStorage`:
 | Mistral | `mistral-large-latest` | `response_format` (json_schema, non-strict) | — |
 | Groq | `llama-3.3-70b-versatile` | `response_format: {json_object}` + schema-in-prompt + client-side parse | — |
 
-Note that Groq models support only text in prompt requests. Every raw provider response (text + token usage) is logged to the browser console under a collapsed `[LLM <provider>]` group, and API/parse errors are logged in full, so a failing call can always be inspected.
+Note that Groq models support only text in prompt requests. Every raw provider response (text + token usage + cache hits) is logged to the browser console under a collapsed `[LLM <provider>]` group, and API/parse errors are logged in full, so a failing call can always be inspected.
+
+**Token optimization.** Every call re-sends the same large, static preamble (base system instructions + the JSON schema, ~2–3k tokens) that only changes between *call types*, not between edits — so it's cached:
+- **Anthropic prompt caching** — the schema-conditioned system block carries a `cache_control: {type: "ephemeral"}` breakpoint. Repeated edits of the same type within the 5-minute window read that prefix back at ~10% of the input cost. (Anthropic's grammar decoder caps the *minimum* cacheable prefix at 4096 tokens on Opus-tier models, so on the smallest calls caching is best-effort — it silently no-ops below the threshold rather than erroring.)
+- **OpenAI automatic caching** — OpenAI caches identical prompt prefixes ≥1024 tokens with no configuration; keeping the static system first maximizes those hits.
+- **Compact serialization** — the IR + spec re-sent on every request are minified (`JSON.stringify` with no indentation) instead of pretty-printed, trimming a meaningful slice of input tokens on every call across all four providers.
+
+Cache-read tokens are surfaced in the console log and captured per call in the study dataset (`cachedInputTokens`) so the savings are measurable.
 
 **On Anthropic and `output_config.format`:** Anthropic's grammar-constrained structured-output decoder caps a schema at 24 *optional* properties **and** 16 *union-typed* (nullable/`anyOf`) properties. The IR patch schema — a flat node list where each node carries a 13-field `style` block plus `layout`/`points`, referenced by both add and update ops — has ~51 genuinely-omittable fields, which cannot fit inside the combined 24+16 budget under any encoding, so `output_config.format` returns HTTP 400 on it (either "too many optional parameters" or, if you make them nullable to dodge that, "too many parameters with union types"). Anthropic is therefore driven the same way as Groq: the JSON Schema is appended to the system prompt as a hard output constraint and the response is parsed and null-stripped client-side. Claude follows a schema presented this way reliably.
 

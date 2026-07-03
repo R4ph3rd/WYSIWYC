@@ -95,8 +95,11 @@ export class LLMError extends Error {}
 
 export interface CallJSONResult {
   data: unknown;
+  /** Total input tokens processed (including any served from cache). */
   inputTokens: number;
   outputTokens: number;
+  /** Portion of `inputTokens` served cheaply from a prompt cache (0 if none). */
+  cachedInputTokens: number;
 }
 
 /** Split a `data:<mime>;base64,<data>` URL into its parts (for Anthropic blocks). */
@@ -153,9 +156,11 @@ ${JSON.stringify(schema)}`;
 function logApiResponse(provider: ProviderId, text: string | undefined, raw: any): void {
   const usage = raw?.usage ?? {};
   const stop = raw?.stop_reason ?? raw?.choices?.[0]?.finish_reason;
+  const cached =
+    usage.cache_read_input_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? 0;
   // eslint-disable-next-line no-console
   console.groupCollapsed(
-    `[LLM ${provider}] response (${(text ?? '').length} chars, stop: ${stop ?? 'n/a'})`,
+    `[LLM ${provider}] response (${(text ?? '').length} chars, stop: ${stop ?? 'n/a'}, cached in: ${cached})`,
   );
   // eslint-disable-next-line no-console
   console.log('usage:', usage);
@@ -233,17 +238,33 @@ async function callAnthropic(opts: CallJSONOptions): Promise<CallJSONResult> {
     body: JSON.stringify({
       model: opts.model,
       max_tokens: opts.maxTokens,
-      system: schemaConditionedSystem(opts.system, opts.schema),
+      // Prompt caching: the system block (base instructions + the full JSON
+      // schema) is static across every call of a given type, so mark it with a
+      // cache breakpoint. Repeated edits within the 5-minute window read it back
+      // at ~10% of the input cost instead of re-billing 2-3k tokens each time.
+      system: [
+        {
+          type: 'text',
+          text: schemaConditionedSystem(opts.system, opts.schema),
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
       messages: [{ role: 'user', content }],
     }),
   });
   const text = (data.content ?? []).find((b: { type: string }) => b.type === 'text')?.text;
   logApiResponse('anthropic', text, data);
   if (!text) throw new LLMError('Anthropic returned no text block.');
+  const u = data.usage ?? {};
+  const cacheRead = u.cache_read_input_tokens ?? 0;
+  const cacheCreate = u.cache_creation_input_tokens ?? 0;
   return {
     data: parseJSON(text),
-    inputTokens: data.usage?.input_tokens ?? 0,
-    outputTokens: data.usage?.output_tokens ?? 0,
+    // input_tokens excludes cache reads/writes on Anthropic — add them back for a
+    // true total, and report the cache-read portion separately.
+    inputTokens: (u.input_tokens ?? 0) + cacheRead + cacheCreate,
+    outputTokens: u.output_tokens ?? 0,
+    cachedInputTokens: cacheRead,
   };
 }
 
@@ -286,8 +307,11 @@ async function callOpenAI(opts: CallJSONOptions): Promise<CallJSONResult> {
   if (!text) throw new LLMError('OpenAI returned no message content.');
   return {
     data: parseJSON(text),
+    // OpenAI caches prompt prefixes >=1024 tokens automatically (no config); the
+    // cached portion is reported under prompt_tokens_details.cached_tokens.
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
+    cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
   };
 }
 
@@ -324,6 +348,7 @@ async function callMistral(opts: CallJSONOptions): Promise<CallJSONResult> {
     data: parseJSON(text),
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
+    cachedInputTokens: 0,
   };
 }
 
@@ -361,6 +386,7 @@ async function callGroq(opts: CallJSONOptions): Promise<CallJSONResult> {
     data: parseJSON(text),
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
+    cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
   };
 }
 

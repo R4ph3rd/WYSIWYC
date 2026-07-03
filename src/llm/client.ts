@@ -40,7 +40,7 @@ async function callConnected<T>(
   const active = useSettingsStore.getState().active();
   if (!active) throw new NotConnectedError();
   try {
-    const { data, inputTokens, outputTokens } = await callJSON(active.provider, {
+    const { data, inputTokens, outputTokens, cachedInputTokens } = await callJSON(active.provider, {
       apiKey: active.apiKey,
       model: active.model,
       system,
@@ -51,7 +51,7 @@ async function callConnected<T>(
       images,
     });
     const study = useStudyStore.getState();
-    study.logLLMCall({ callType, provider: active.provider, model: active.model, inputTokens, outputTokens, ts: Date.now() });
+    study.logLLMCall({ callType, provider: active.provider, model: active.model, inputTokens, outputTokens, cachedInputTokens, ts: Date.now() });
     if (callType !== 'call_b') study.logEvent('generation');
     return data as T;
   } catch (err) {

@@ -11,6 +11,13 @@ export interface ComposeOptions {
   refs?: PromptRef[];
 }
 
+/**
+ * Compact JSON for the large state blocks (IR + spec) we re-send on every call.
+ * Models read minified JSON perfectly well, and dropping the 2-space indentation
+ * saves a meaningful slice of input tokens on every request.
+ */
+const compact = (value: unknown): string => JSON.stringify(value);
+
 /** Shared design-quality bar for everything the model authors. */
 const DESIGN_BAR = `Author production-quality Tailwind in each node's "tailwind" field: a consistent 4/8px spacing scale, one primary color, neutral grays, rounded-lg/xl, subtle shadows. Aim for Linear / Vercel / v0-grade polish — a real designed UI, not a wireframe. Use gradients, ring-1, shadow-* and proper type scale where appropriate.`;
 
@@ -65,12 +72,12 @@ export function composeUser(
   const lines = [
     `Current living spec:`,
     '```json',
-    JSON.stringify(prompt, null, 2),
+    compact(prompt),
     '```',
     '',
     `Current scene graph (IR):`,
     '```json',
-    JSON.stringify(ir, null, 2),
+    compact(ir),
     '```',
     '',
     `The user says: "${instruction}"`,
@@ -147,12 +154,12 @@ export function callAUser(ir: IR, prompt: StructuredPrompt, changedClauseIds: st
   return [
     `Current scene graph (IR):`,
     '```json',
-    JSON.stringify(ir, null, 2),
+    compact(ir),
     '```',
     '',
     `Full structured prompt:`,
     '```json',
-    JSON.stringify(prompt, null, 2),
+    compact(prompt),
     '```',
     '',
     changedClauseIds.length
@@ -236,19 +243,19 @@ export function callBUser(
   return [
     `Previous prompt clauses:`,
     '```json',
-    JSON.stringify(prevPrompt, null, 2),
+    compact(prevPrompt),
     '```',
     '',
     `Raw manipulation: ${describeManipulation(op)}`,
     '',
     `Previous IR (excerpt of relevant nodes is fine to reason over):`,
     '```json',
-    JSON.stringify(prevIR.nodes.filter((n) => relevant(op, n.id)), null, 2),
+    compact(prevIR.nodes.filter((n) => relevant(op, n.id))),
     '```',
     '',
     `New IR (same nodes after the manipulation):`,
     '```json',
-    JSON.stringify(nextIR.nodes.filter((n) => relevant(op, n.id)), null, 2),
+    compact(nextIR.nodes.filter((n) => relevant(op, n.id))),
     '```',
     '',
     `Produce the prompt update proposal.`,
