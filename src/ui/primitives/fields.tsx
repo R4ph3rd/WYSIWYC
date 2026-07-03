@@ -133,43 +133,39 @@ export function NumberField({
   );
 }
 
-/** A range slider + compact number box with an optional unit. */
+/**
+ * A range slider. Keeps a local draft so the handle tracks the drag immediately
+ * even when the committed value round-trips through the store (the popover holds
+ * a snapshot of the span, so relying on the incoming `value` prop alone would
+ * snap the handle back mid-drag). `unit` is accepted for API symmetry.
+ */
 export function Slider({
-  value, onChange, min = 0, max = 100, step = 1, unit,
+  value, onChange, min = 0, max = 100, step = 1,
 }: {
   value: number; onChange: (v: number) => void;
   min?: number; max?: number; step?: number; unit?: string;
 }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const set = (n: number) => { setDraft(n); onChange(n); };
   return (
-    <div className="flex items-center gap-2">
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={Math.min(Math.max(value, min), max)}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="wysiwyc-range flex-1 cursor-pointer"
-      />
-      <div className="flex items-center rounded border border-slate-200 px-1.5 py-1">
-        <input
-          type="number"
-          value={value}
-          min={min}
-          max={max}
-          step={step}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className="w-9 bg-transparent text-right text-[11px] tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-        />
-        {unit && <span className="text-[9px] text-slate-500">{unit}</span>}
-      </div>
-    </div>
+    <input
+      type="range"
+      min={min}
+      max={max}
+      step={step}
+      value={Math.min(Math.max(draft, min), max)}
+      onChange={(e) => set(Number(e.target.value))}
+      className="wysiwyc-range w-full cursor-pointer"
+    />
   );
 }
 
 /** Opacity slider with a live percentage readout (0–100%). */
 export function OpacityField({ value, onChange }: { value: number | undefined; onChange: (v: number) => void }) {
-  const pct = Math.round((value ?? 1) * 100);
+  const [pct, setPct] = useState(Math.round((value ?? 1) * 100));
+  useEffect(() => setPct(Math.round((value ?? 1) * 100)), [value]);
+  const set = (p: number) => { setPct(p); onChange(p / 100); };
   return (
     <div className="flex items-center gap-2">
       <input
@@ -177,7 +173,7 @@ export function OpacityField({ value, onChange }: { value: number | undefined; o
         min={0}
         max={100}
         value={pct}
-        onChange={(e) => onChange(Number(e.target.value) / 100)}
+        onChange={(e) => set(Number(e.target.value))}
         className="wysiwyc-range flex-1 cursor-pointer"
       />
       <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-slate-500">{pct}%</span>

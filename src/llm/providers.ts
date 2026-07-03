@@ -170,12 +170,48 @@ function logApiResponse(provider: ProviderId, text: string | undefined, raw: any
   console.groupEnd();
 }
 
+/**
+ * Extract the first balanced JSON object/array from a string, ignoring any prose
+ * or extra objects the model may emit around it. Brace-matches while respecting
+ * string literals, so a `{ ... }` containing braces or a trailing second object
+ * (the "unexpected non-whitespace character after JSON data" case) parses cleanly.
+ */
+function extractJSON(s: string): string {
+  const start = s.search(/[{[]/);
+  if (start < 0) return s;
+  const open = s[start];
+  const close = open === '{' ? '}' : ']';
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') {
+      inStr = true;
+    } else if (c === open) {
+      depth++;
+    } else if (c === close) {
+      depth--;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return s.slice(start);
+}
+
 function parseJSON(text: string): unknown {
-  // Strip fenced ```json blocks if a model added them despite instructions.
-  const stripped = text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/i, '')
-    .trim();
+  // Strip fenced ```json blocks if a model added them despite instructions, then
+  // isolate the first JSON value so leading/trailing prose or a stray second
+  // object doesn't break the parse.
+  const stripped = extractJSON(
+    text
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/i, '')
+      .trim(),
+  );
   try {
     return stripNulls(JSON.parse(stripped));
   } catch (err) {

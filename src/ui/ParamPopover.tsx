@@ -60,7 +60,7 @@ export function ParamPopover({
     >
       <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
         {LABELS[span.kind]}
-        {span.nodeIds.length === 0 && (
+        {span.nodeIds.length === 0 && span.kind !== 'length' && span.kind !== 'radius' && (
           <span className="ml-auto normal-case text-[9px] text-slate-300">prose only</span>
         )}
       </div>

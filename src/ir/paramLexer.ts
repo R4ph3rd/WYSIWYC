@@ -293,6 +293,26 @@ export function createManualSpan(
 
 const cache = new WeakMap<PromptClause, { sig: string; spans: ParamSpan[] }>();
 
+/** Characters that count as part of a token when snapping to word edges. */
+const WORD_CHAR = /[A-Za-z0-9#%.-]/;
+
+/**
+ * The model often emits param offsets that slice through the middle of a word
+ * ("typef|ace|", "s|hadow eleva|tion"). Snap [start, end) outward to whole-word
+ * boundaries so the highlighted token covers the entire word(s), trimming any
+ * leading/trailing punctuation or whitespace first. Interior spaces already
+ * inside the span are preserved, so a bound phrase stays intact.
+ */
+function snapToWords(text: string, start: number, end: number): [number, number] {
+  let s = Math.max(0, Math.min(start, text.length));
+  let e = Math.max(s, Math.min(end, text.length));
+  while (s < e && !WORD_CHAR.test(text[s])) s++;
+  while (e > s && !WORD_CHAR.test(text[e - 1])) e--;
+  while (s > 0 && WORD_CHAR.test(text[s - 1])) s--;
+  while (e < text.length && WORD_CHAR.test(text[e])) e++;
+  return [s, e];
+}
+
 /**
  * Merged parameter spans for a clause: model-emitted `clause.params` win on
  * overlap; lexer spans fill the gaps. Memoized per clause object + owned-node
@@ -306,7 +326,10 @@ export function paramsForClause(clause: PromptClause, ownedNodes: IRNode[]): Par
   const hit = cache.get(clause);
   if (hit && hit.sig === sig) return hit.spans;
 
-  const model = clause.params ?? [];
+  const model = (clause.params ?? []).map((p) => {
+    const [s, e] = snapToWords(clause.text, p.start, p.end);
+    return s === p.start && e === p.end ? p : { ...p, start: s, end: e };
+  });
   const occupied = (s: number, e: number) => model.some((p) => s < p.end && e > p.start);
   const lex = lexParams(clause, ownedNodes).filter((p) => !occupied(p.start, p.end));
   const spans = [...model, ...lex].sort((a, b) => a.start - b.start);
