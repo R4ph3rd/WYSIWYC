@@ -16,7 +16,7 @@ import {
   composeUser,
   type ComposeOptions,
 } from './prompts';
-import { callJSON, LLMError } from './providers';
+import { callJSON, LLMError, type ProviderId } from './providers';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useStudyStore } from '@/store/studyStore';
 import type { LLMCallRecord } from '@/store/studyStore';
@@ -33,12 +33,13 @@ async function callConnected<T>(
   user: string,
   schema: unknown,
   schemaName: string,
-  maxTokens: number,
+  maxTokens: number | Record<ProviderId, number>,
   images?: string[],
   callType: LLMCallRecord['callType'] = 'compose',
 ): Promise<T> {
   const active = useSettingsStore.getState().active();
   if (!active) throw new NotConnectedError();
+  const resolvedMaxTokens = typeof maxTokens === 'number' ? maxTokens : maxTokens[active.provider];
   try {
     const { data, inputTokens, outputTokens, cachedInputTokens } = await callJSON(active.provider, {
       apiKey: active.apiKey,
@@ -47,7 +48,7 @@ async function callConnected<T>(
       user,
       schema,
       schemaName,
-      maxTokens,
+      maxTokens: resolvedMaxTokens,
       images,
     });
     const study = useStudyStore.getState();
@@ -63,12 +64,19 @@ async function callConnected<T>(
 /**
  * Output-token ceiling for the two calls that can emit a whole scene graph
  * (compose from scratch, or a full Call A regeneration). A rich page — a landing
- * page, a dashboard — easily runs past 8k tokens of JSON and would otherwise be
- * truncated mid-object ("end of data when property name was expected"). 16000
- * stays within every provider's per-response cap (OpenAI gpt-4o tops out at
- * 16384) while giving comfortable headroom.
+ * page, a dashboard — easily runs past 16k tokens of JSON (dozens of nodes, each
+ * ~15-20 lines) and would otherwise be truncated mid-object ("end of data when
+ * property name was expected"). This is per-provider rather than one shared
+ * number: OpenAI's gpt-4o tops out at 16384 output tokens, but Anthropic's
+ * models allow a much higher ceiling, so pinning every provider to OpenAI's
+ * limit was needlessly truncating Anthropic generations.
  */
-const MAX_SCENE_TOKENS = 16000;
+const MAX_SCENE_TOKENS: Record<ProviderId, number> = {
+  anthropic: 32000,
+  openai: 16000,
+  mistral: 16000,
+  groq: 16000,
+};
 
 /**
  * Compose — freeform instruction → spec update + IR patch (one call). This is
