@@ -12,6 +12,9 @@ type Box = { x: number; y: number; w: number; h: number };
  *  - a popover of the top-3 candidate components on click, and
  *  - once a component is chosen, a hovering button group to leave the host empty
  *    or complete it with neutral placeholder content.
+ * Choosing a component accepts the proposal: the bubble and popover go away and
+ * the variation can still be changed from the spec pane (clause sparkle icon /
+ * alternatives menu), which rebuilds the wireframe in the current fill mode.
  * Everything is positioned in stage coordinates so it scrolls with the canvas.
  */
 export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLDivElement | null> }) {
@@ -57,7 +60,9 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
       {active.map((inf) => {
         const box = boxes[inf.nodeId];
         if (!box) return null;
-        const open = openId === inf.nodeId;
+        // Accepted (a component was chosen): no more "change option" bubble here.
+        const suggesting = inf.status === 'suggested';
+        const open = suggesting && openId === inf.nodeId;
         const POP_W = 224;
         const POP_H = 44 + inf.candidates.length * 44;
         const popLeft = box.x + box.w + 8 + POP_W > stageW ? Math.max(4, box.x - POP_W - 8) : box.x + box.w + 8;
@@ -65,19 +70,21 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
         return (
           <Fragment key={inf.nodeId}>
             {/* Suggestions bubble, pinned to the top-right corner of the shape. */}
-            <button
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpenId(open ? null : inf.nodeId);
-              }}
-              title={inf.chosen ? `Component: ${inf.chosen} — change` : 'Suggested components — click to choose'}
-              className="absolute z-30 flex h-5 items-center gap-0.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 text-amber-700 shadow-sm transition-colors hover:bg-amber-100"
-              style={{ left: Math.max(2, box.x + box.w - 20), top: Math.max(2, box.y - 10) }}
-            >
-              <Sparkles className="h-3 w-3" />
-              <span className="text-[9px] font-bold tabular-nums">{inf.candidates.length}</span>
-            </button>
+            {suggesting && (
+              <button
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenId(open ? null : inf.nodeId);
+                }}
+                title="Suggested components — click to choose"
+                className="absolute z-30 flex h-5 items-center gap-0.5 rounded-full border border-amber-300 bg-amber-50 px-1.5 text-amber-700 shadow-sm transition-colors hover:bg-amber-100"
+                style={{ left: Math.max(2, box.x + box.w - 20), top: Math.max(2, box.y - 10) }}
+              >
+                <Sparkles className="h-3 w-3" />
+                <span className="text-[9px] font-bold tabular-nums">{inf.candidates.length}</span>
+              </button>
+            )}
 
             {/* Candidate popover. */}
             {open && (
@@ -120,19 +127,19 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
             )}
 
             {/* Hovering wireframe controls, shown once a component is chosen. */}
-            {inf.status === 'chosen' && !open && (
+            {inf.status === 'chosen' && (
               <div
                 onMouseDown={(e) => e.stopPropagation()}
                 className="absolute z-30 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 p-0.5 shadow-md backdrop-blur"
                 style={{ left: box.x, top: box.y + box.h + 4 }}
               >
                 {inf.fill === 'empty' ? (
-                  <WireBtn icon={<LayoutTemplate className="h-3 w-3" />} label="Add wireframe" onClick={() => chooseComponent(inf.nodeId, inf.chosen!)} />
+                  <WireBtn icon={<LayoutTemplate className="h-3 w-3" />} label="Add wireframe" onClick={() => chooseComponent(inf.nodeId, inf.chosen!, 'wireframe')} />
                 ) : (
                   <WireBtn icon={<Eraser className="h-3 w-3" />} label="Leave empty" onClick={() => revertWireframe(inf.nodeId)} />
                 )}
                 {inf.fill === 'placeholder' ? (
-                  <WireBtn icon={<LayoutTemplate className="h-3 w-3" />} label="Back to wireframe" onClick={() => chooseComponent(inf.nodeId, inf.chosen!)} />
+                  <WireBtn icon={<LayoutTemplate className="h-3 w-3" />} label="Back to wireframe" onClick={() => chooseComponent(inf.nodeId, inf.chosen!, 'wireframe')} />
                 ) : (
                   inf.fill === 'wireframe' && (
                     <WireBtn icon={<ImageIcon className="h-3 w-3" />} label="Fill placeholders" onClick={() => fillWireframePlaceholders(inf.nodeId)} />

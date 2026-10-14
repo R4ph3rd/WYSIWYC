@@ -18,6 +18,7 @@ import type {
   PromptUpdateProposal,
   Recipe,
   StructuredPrompt,
+  WireframeFill,
 } from '@/ir/types';
 import { setAlignment, setUtility } from '@/ir/tailwindEdit';
 import { COLOR_NAMES, createManualSpan } from '@/ir/paramLexer';
@@ -43,7 +44,7 @@ import {
 } from '@/ir/manipulate';
 import { SAMPLES, emptyIR, emptyPrompt } from '@/ir/samples';
 import { inferComponentCandidates } from '@/ir/componentInfer';
-import { wireframeChildren, fillPlaceholders } from '@/ir/wireframe';
+import { wireframeChildren, fillPlaceholders, wireframeBackdrop } from '@/ir/wireframe';
 import { buildDemoPlan as buildDemoPlanPure } from '@/annot/resolve';
 import {
   composeFromInstruction,
@@ -370,8 +371,12 @@ interface AppState {
   // --- Component inference (draw a shape → semantic component + wireframe) ---
   /** Run component inference on a freshly drawn shape and add its inferred clause. */
   inferDrawnShape: (nodeId: string, prevIR: IR) => void;
-  /** Pick one of the candidate components: writes the clause and fills a grey wireframe. */
-  chooseComponent: (nodeId: string, label: string) => void;
+  /**
+   * Pick one of the candidate components: writes the clause and rebuilds the
+   * host's generated children. Switching variations keeps the current fill mode
+   * (wireframe / placeholders / empty) unless `fill` is given explicitly.
+   */
+  chooseComponent: (nodeId: string, label: string, fill?: WireframeFill) => void;
   /** Strip the generated wireframe children, leaving the host empty. */
   revertWireframe: (nodeId: string) => void;
   /** Convert the grey wireframe into neutral placeholder content/images. */
@@ -864,6 +869,18 @@ export const useAppStore = create<AppState>((set, get) => {
       }),
 
     chooseAlternative: (clauseId, text) => {
+      // A clause that describes a live component inference: picking one of the
+      // other candidates is a deterministic component swap (wireframe rebuild),
+      // not a re-realization through Call A.
+      const s0 = get();
+      const inf = Object.values(s0.inferences).find(
+        (i) => i.clauseId === clauseId && i.status !== 'dismissed' && s0.ir.nodes.some((n) => n.id === i.nodeId),
+      );
+      const cand = inf?.candidates.find((c) => c.label.trim().toLowerCase() === text.trim().toLowerCase());
+      if (inf && cand) {
+        get().chooseComponent(inf.nodeId, cand.label);
+        return;
+      }
       set((s) => ({
         prompt: {
           clauses: s.prompt.clauses.map((c) =>
@@ -1307,27 +1324,45 @@ export const useAppStore = create<AppState>((set, get) => {
       }));
     },
 
-    chooseComponent: (nodeId, label) => {
+    chooseComponent: (nodeId, label, fillArg) => {
       set((st) => {
         const inf = st.inferences[nodeId];
         const host = st.ir.nodes.find((n) => n.id === nodeId);
         if (!inf || !host) return {};
-        const children = wireframeChildren(host, label, st.ir.nodes.map((n) => n.id));
-        // Replace any previously-generated children of the host with the new wireframe.
-        const others = st.ir.nodes.filter((n) => n.parentId !== nodeId);
+        // First pick → grey wireframe; switching variation → keep the user's fill
+        // mode. An atomic component (no inner parts) reads as 'empty' without the
+        // user asking for it, so that doesn't carry over to the next variation.
+        const ids = st.ir.nodes.map((n) => n.id);
+        const forcedEmpty =
+          inf.fill === 'empty' && !!inf.chosen && wireframeChildren(host, inf.chosen, ids).length === 0;
+        const want: WireframeFill =
+          fillArg ?? (inf.status === 'chosen' && !forcedEmpty ? inf.fill : 'wireframe');
+        let children =
+          want === 'empty' ? [] : wireframeChildren(host, label, ids, wireframeBackdrop(st.ir, host));
+        if (want === 'placeholder' && children.length)
+          children = fillPlaceholders(children, label, host, wireframeBackdrop(st.ir, host));
+        // Replace any previously-generated children of the host with the new ones.
+        const removed = new Set(st.ir.nodes.filter((n) => n.parentId === nodeId).map((n) => n.id));
+        const others = st.ir.nodes.filter((n) => !removed.has(n.id));
+        // Keep the AlternativesMenu offering the other variations.
+        const alternatives = inf.candidates.map((c) => c.label).filter((l) => l !== label);
+        const selectionGone =
+          st.selectedNodeIds.some((id) => removed.has(id)) ||
+          (st.selectedNodeId != null && removed.has(st.selectedNodeId));
         return {
           history: [...st.history, snapshot(st)].slice(-50),
           ir: { ...st.ir, nodes: [...others, ...children] },
           prompt: {
             clauses: st.prompt.clauses.map((c) =>
-              c.id === inf.clauseId ? { ...c, text: label, origin: 'inferred' as const } : c,
+              c.id === inf.clauseId ? { ...c, text: label, origin: 'inferred' as const, alternatives } : c,
             ),
           },
           inferences: {
             ...st.inferences,
-            [nodeId]: { ...inf, chosen: label, status: 'chosen', fill: children.length ? 'wireframe' : 'empty' },
+            [nodeId]: { ...inf, chosen: label, status: 'chosen', fill: children.length ? want : 'empty' },
           },
-          recentIds: children.map((c) => c.id),
+          ...(selectionGone ? { selectedNodeId: nodeId, selectedNodeIds: [nodeId] } : {}),
+          recentIds: children.length ? children.map((c) => c.id) : [nodeId],
         };
       });
     },
@@ -1350,7 +1385,11 @@ export const useAppStore = create<AppState>((set, get) => {
         if (!inf || !inf.chosen) return {};
         const children = st.ir.nodes.filter((n) => n.parentId === nodeId);
         if (children.length === 0) return {};
-        const byId = new Map(fillPlaceholders(children, inf.chosen).map((n) => [n.id, n]));
+        const host = st.ir.nodes.find((n) => n.id === nodeId);
+        const backdrop = host ? wireframeBackdrop(st.ir, host) : undefined;
+        const byId = new Map(
+          fillPlaceholders(children, inf.chosen, host, backdrop).map((n) => [n.id, n]),
+        );
         return {
           history: [...st.history, snapshot(st)].slice(-50),
           ir: { ...st.ir, nodes: st.ir.nodes.map((n) => byId.get(n.id) ?? n) },

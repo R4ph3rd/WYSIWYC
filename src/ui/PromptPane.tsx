@@ -795,7 +795,8 @@ function ClauseEditor({
 /**
  * A spark icon on an inferred-component clause. Clicking it reveals the other
  * candidate UI components (part A of prompt-by-demonstration); picking one
- * rewrites the clause and rebuilds the wireframe on the canvas.
+ * rewrites the clause and rebuilds the wireframe on the canvas. Once a component
+ * is chosen this is the place to change it (the canvas bubble is gone).
  */
 function ClauseInferenceIcon({ clauseId }: { clauseId: string }) {
   const inferences = useAppStore((s) => s.inferences);
@@ -828,7 +829,7 @@ function ClauseInferenceIcon({ clauseId }: { clauseId: string }) {
     <span ref={ref} className="relative mt-[2px] shrink-0">
       <button
         onClick={(e) => { e.stopPropagation(); selectNode(inf.nodeId); setOpen((v) => !v); }}
-        title="Suggested components — click to choose"
+        title={inf.chosen ? `Component: ${inf.chosen} — click to change` : 'Suggested components — click to choose'}
         className="flex h-4 w-4 items-center justify-center rounded text-amber-500 transition-colors hover:bg-amber-100"
       >
         <Sparkles className="h-3 w-3" />
