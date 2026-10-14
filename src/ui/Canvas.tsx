@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Sparkles, Keyboard, X } from 'lucide-react';
-import { useAppStore, toolToRole, type ComputedNodeStyle } from '@/store/appStore';
+import { Loader2, Sparkles, Keyboard, X, Send } from 'lucide-react';
+import { useAppStore, toolToRole, isAnnotTool, type ComputedNodeStyle } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
-import type { ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
+import type { Annotation, ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
 import { SAMPLES } from '@/ir/samples';
 import { composerIsEmpty, composerRefs, emptyComposer, removeRef, serializeComposer } from '@/lib/composer';
 import { cn } from '@/lib/utils';
@@ -11,6 +11,8 @@ import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
 import { InferenceOverlay } from './InferenceOverlay';
+import { AnnotationLayer } from './AnnotationLayer';
+import { ModificationPlan } from './ModificationPlan';
 import { useStudyStore } from '@/store/studyStore';
 
 type Bounds = { x: number; y: number; w: number; h: number };
@@ -139,6 +141,10 @@ export function Canvas() {
   const createShape = useAppStore((s) => s.createShape);
   const updateLayout = useAppStore((s) => s.updateLayout);
   const inferDrawnShape = useAppStore((s) => s.inferDrawnShape);
+  const annotations = useAppStore((s) => s.annotations);
+  const addAnnotation = useAppStore((s) => s.addAnnotation);
+  const buildDemoPlan = useAppStore((s) => s.buildDemoPlan);
+  const demoPlan = useAppStore((s) => s.demoPlan);
 
   const stageRef = useRef<HTMLDivElement>(null);
   // Set when a move/resize drag actually moved, to swallow the synthetic click
@@ -149,6 +155,12 @@ export function Canvas() {
   // for LLM-authored components before they are promoted to absolute positioning.
   const [flowBounds, setFlowBounds] = useState<Bounds | null>(null);
   const [pen, setPen] = useState<PenState | null>(null);
+  // In-progress annotation drag (prompt-by-demonstration drawings).
+  const [annotDraft, setAnnotDraft] = useState<
+    | { kind: 'box' | 'arrow'; startX: number; startY: number; curX: number; curY: number }
+    | { kind: 'scribble'; points: PathPoint[] }
+    | null
+  >(null);
   const [penCursor, setPenCursor] = useState<PathPoint | null>(null);
   // Inline canvas text editing (double-click a text node). Holds the node id
   // plus its measured box (relative to the stage) for the overlay textarea.
@@ -225,7 +237,8 @@ export function Canvas() {
   }, [unknownShortcutAt]);
 
   const role = toolToRole(tool);
-  const drawing = Boolean(role) || tool === 'path';
+  const annotating = isAnnotTool(tool);
+  const drawing = Boolean(role) || tool === 'path' || annotating;
   // The Lovable-style hero greets an empty project — but steps aside the
   // moment a drawing tool is picked, so starting by hand is always possible.
   const isEmpty = ir.nodes.length === 0 && prompt.clauses.length === 0 && !drawing;
@@ -273,6 +286,31 @@ export function Canvas() {
       w: Math.round(r.width),
       h: Math.round(r.height),
     };
+  }
+
+  /** Stage-relative boxes for every rendered node (for annotation target resolution). */
+  function allNodeBoxes(): Record<string, { x: number; y: number; w: number; h: number }> {
+    const stage = stageRef.current;
+    const out: Record<string, { x: number; y: number; w: number; h: number }> = {};
+    if (!stage) return out;
+    const sr = stage.getBoundingClientRect();
+    stage.querySelectorAll<HTMLElement>('[data-node-id]').forEach((el) => {
+      const id = el.dataset.nodeId;
+      if (!id) return;
+      const r = el.getBoundingClientRect();
+      out[id] = {
+        x: Math.round(r.left - sr.left),
+        y: Math.round(r.top - sr.top),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+      };
+    });
+    return out;
+  }
+
+  /** A locally-unique annotation id. */
+  function newAnnotId(): string {
+    return `annot_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   }
 
   /** The rendered node whose center is closest to a stage point (for here/there). */
@@ -338,6 +376,9 @@ export function Canvas() {
   function onStageMouseDown(e: React.MouseEvent) {
     const p = relativePoint(e);
     if (!p) return;
+    // While the modification plan is open the canvas is modal: clicks only
+    // (de)select target elements for the plan (handled in ModificationPlan).
+    if (demoPlan) return;
     // In chat_only mode the canvas is a read-only preview; only allow selection.
     if (chatOnly && tool !== 'pointer') return;
     // Every fresh press starts a clean gesture; a real move will re-arm this.
@@ -360,6 +401,21 @@ export function Canvas() {
       const defaultSize = role === 'text' ? { w: 120, h: 28 } : { w: 2, h: 2 };
       const id = createShape({ role, x: p.x, y: p.y, ...defaultSize });
       setDrag({ mode: 'draw', id, role, startX: p.x, startY: p.y, prevIR });
+      return;
+    }
+
+    // Annotation tools (prompt by demonstration): produce annotations, not nodes.
+    if (isAnnotTool(tool)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (tool === 'comment') {
+        addAnnotation({ id: newAnnotId(), kind: 'comment', anchor: p, text: '', createdAt: Date.now() });
+        draggedRef.current = true;
+        setTool('pointer');
+        return;
+      }
+      if (tool === 'scribble') setAnnotDraft({ kind: 'scribble', points: [p] });
+      else setAnnotDraft({ kind: tool as 'box' | 'arrow', startX: p.x, startY: p.y, curX: p.x, curY: p.y });
       return;
     }
 
@@ -434,6 +490,11 @@ export function Canvas() {
     const p = relativePoint(e);
     if (!p) return;
     if (pen) setPenCursor(p);
+    if (annotDraft) {
+      if (annotDraft.kind === 'scribble') setAnnotDraft({ kind: 'scribble', points: [...annotDraft.points, p] });
+      else setAnnotDraft({ ...annotDraft, curX: p.x, curY: p.y });
+      return;
+    }
     if (!drag) return;
 
     if (drag.mode === 'marquee') {
@@ -474,6 +535,34 @@ export function Canvas() {
   }
 
   function onStageMouseUp() {
+    if (annotDraft) {
+      const d = annotDraft;
+      setAnnotDraft(null);
+      setTool('pointer');
+      draggedRef.current = true;
+      if (d.kind === 'scribble') {
+        if (d.points.length >= 2) addAnnotation({ id: newAnnotId(), kind: 'scribble', points: d.points, createdAt: Date.now() });
+      } else {
+        const dx = Math.abs(d.curX - d.startX);
+        const dy = Math.abs(d.curY - d.startY);
+        if (dx >= 4 || dy >= 4) {
+          if (d.kind === 'arrow') {
+            addAnnotation({
+              id: newAnnotId(), kind: 'arrow',
+              points: [{ x: d.startX, y: d.startY }, { x: d.curX, y: d.curY }],
+              createdAt: Date.now(),
+            });
+          } else {
+            addAnnotation({
+              id: newAnnotId(), kind: 'box',
+              rect: { x: Math.min(d.startX, d.curX), y: Math.min(d.startY, d.curY), w: dx, h: dy },
+              createdAt: Date.now(),
+            });
+          }
+        }
+      }
+      return;
+    }
     if (!drag) return;
 
     if (drag.mode === 'marquee') {
@@ -643,6 +732,20 @@ export function Canvas() {
         </div>
       </div>
 
+      {/* Send-from-annotations button, floating above the toolbar. */}
+      {!chatOnly && annotations.length > 0 && !demoPlan && (
+        <button
+          onClick={() => buildDemoPlan(allNodeBoxes())}
+          className="absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-lg transition-colors hover:bg-indigo-500"
+        >
+          <Send className="h-3.5 w-3.5" />
+          Apply {annotations.length} annotation{annotations.length === 1 ? '' : 's'}
+        </button>
+      )}
+
+      {/* Guardrail: reviewable modification plan built from the annotations. */}
+      <ModificationPlan stageRef={stageRef} />
+
       {/* Unbound-shortcut hint: click to open the full shortcut sheet. */}
       {hintVisible && !shortcutsOpen && (
         <button
@@ -683,7 +786,7 @@ export function Canvas() {
             cursor: drawing ? 'crosshair' : 'default',
           }}
           onClick={(e) => {
-            if (e.target !== e.currentTarget || drawing) return;
+            if (e.target !== e.currentTarget || drawing || demoPlan) return;
             // A marquee/move drag ends in a click on empty space — swallow it so
             // the just-made selection isn't immediately cleared.
             if (draggedRef.current) { draggedRef.current = false; return; }
@@ -730,7 +833,7 @@ export function Canvas() {
             paramNodeIds={hoveredParamNodeIds}
             recentIds={recentIds}
             onSelect={
-              drawing
+              drawing || demoPlan
                 ? undefined
                 : (id, additive) => {
                     // Ignore the synthetic click that follows a reposition drag.
@@ -754,6 +857,36 @@ export function Canvas() {
 
           {/* Component-inference bubbles + wireframe controls for drawn shapes. */}
           <InferenceOverlay stageRef={stageRef} />
+
+          {/* Prompt-by-demonstration annotations (comments + drawings). */}
+          <AnnotationLayer stageRef={stageRef} />
+
+          {/* In-progress annotation draft preview. */}
+          {annotDraft && (
+            <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+              {annotDraft.kind === 'box' && (
+                <rect
+                  x={Math.min(annotDraft.startX, annotDraft.curX)}
+                  y={Math.min(annotDraft.startY, annotDraft.curY)}
+                  width={Math.abs(annotDraft.curX - annotDraft.startX)}
+                  height={Math.abs(annotDraft.curY - annotDraft.startY)}
+                  fill="#6366f1" fillOpacity={0.06} stroke="#6366f1" strokeWidth={2} strokeDasharray="6 4" rx={6}
+                />
+              )}
+              {annotDraft.kind === 'arrow' && (
+                <line
+                  x1={annotDraft.startX} y1={annotDraft.startY} x2={annotDraft.curX} y2={annotDraft.curY}
+                  stroke="#6366f1" strokeWidth={2.5} strokeLinecap="round"
+                />
+              )}
+              {annotDraft.kind === 'scribble' && (
+                <polyline
+                  points={annotDraft.points.map((p) => `${p.x},${p.y}`).join(' ')}
+                  fill="none" stroke="#6366f1" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"
+                />
+              )}
+            </svg>
+          )}
 
           {/* Labeled borders on elements referred to by the prompt + here/there pins. */}
           <PromptTargetOverlay
@@ -886,6 +1019,12 @@ function ShortcutsSheet({ open, onClose }: { open: boolean; onClose: () => void 
       items: [
         ['V', 'Select'], ['R', 'Rectangle'], ['O', 'Circle'],
         ['L', 'Line'], ['P', 'Pen'], ['T', 'Text'],
+      ],
+    },
+    {
+      title: 'Markup',
+      items: [
+        ['C', 'Comment'], ['A', 'Arrow'], ['B', 'Surround'], ['S', 'Scribble'],
       ],
     },
     {

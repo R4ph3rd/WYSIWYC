@@ -79,6 +79,7 @@ export default function App() {
   useEffect(() => {
     const TOOL_KEYS: Record<string, Tool> = {
       v: 'pointer', r: 'rectangle', o: 'circle', l: 'line', p: 'path', t: 'text',
+      c: 'comment', a: 'arrow', b: 'box', s: 'scribble',
     };
     // Modifier combos the browser owns — never hijack or flag these.
     const RESERVED = new Set([
