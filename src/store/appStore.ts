@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import type {
+  Annotation,
+  ComponentInference,
   ComposerValue,
+  DemoPlanItem,
   IR,
   IRNode,
   IRPatch,
@@ -10,6 +13,7 @@ import type {
   ParamKind,
   ParamSpan,
   PathPoint,
+  PromptClause,
   PromptRef,
   PromptUpdateProposal,
   Recipe,
@@ -38,6 +42,9 @@ import {
   updateNodeStyle,
 } from '@/ir/manipulate';
 import { SAMPLES, emptyIR, emptyPrompt } from '@/ir/samples';
+import { inferComponentCandidates } from '@/ir/componentInfer';
+import { wireframeChildren, fillPlaceholders } from '@/ir/wireframe';
+import { buildDemoPlan as buildDemoPlanPure } from '@/annot/resolve';
 import {
   composeFromInstruction,
   generatePatch,
@@ -52,7 +59,7 @@ import {
   type GestureProvenance,
 } from '@/lib/log';
 import { useStudyStore } from '@/store/studyStore';
-import { nextRecipeId } from '@/ir/ids';
+import { nextClauseId, nextRecipeId } from '@/ir/ids';
 
 /** Options for a compose send (DirectGPT scope + reference chips + recipe). */
 export interface InstructOptions {
@@ -93,9 +100,24 @@ function deriveRecipeLabel(instruction: string): string {
   return label ? label[0].toUpperCase() + label.slice(1) : 'Saved command';
 }
 
-/** Tool palette modes (deterministic drawing). */
-export type Tool = 'pointer' | 'rectangle' | 'circle' | 'line' | 'path' | 'text';
+/** Tool palette modes (deterministic drawing + annotation). */
+export type Tool =
+  | 'pointer'
+  | 'rectangle'
+  | 'circle'
+  | 'line'
+  | 'path'
+  | 'text'
+  | 'comment'
+  | 'arrow'
+  | 'box'
+  | 'scribble';
 export const DRAWING_TOOLS: Tool[] = ['rectangle', 'circle', 'line', 'path', 'text'];
+/** Annotation ("prompt by demonstration") tools — produce annotations, not IR nodes. */
+export const ANNOT_TOOLS: Tool[] = ['comment', 'arrow', 'box', 'scribble'];
+export function isAnnotTool(t: Tool): boolean {
+  return (ANNOT_TOOLS as string[]).includes(t);
+}
 export function toolToRole(tool: Tool): NodeRole | null {
   switch (tool) {
     case 'rectangle': return 'rectangle';
@@ -209,6 +231,16 @@ interface AppState {
   proposing: boolean; // Call B in flight
   error: string | null;
   needsConnect: boolean;
+
+  // --- Prompt-by-demonstration ---
+  /** Component guesses for drawn shapes, keyed by node id. */
+  inferences: Record<string, ComponentInference>;
+  /** Canvas annotations (comments + draft drawings) awaiting a demo send. */
+  annotations: Annotation[];
+  /** The reviewable modification plan built from annotations (guardrail), or null. */
+  demoPlan: DemoPlanItem[] | null;
+  /** True while a demo plan is being built or applied. */
+  demoBusy: boolean;
 
   loadSample: (id: string) => void;
   newBlank: () => void;
@@ -329,6 +361,31 @@ interface AppState {
   editLayout: (id: string, patch: Partial<{ x: number; y: number; w: number; h: number }>) => void;
   editContent: (id: string, content: string) => void;
   toggleHidden: (id: string) => void;
+
+  // --- Component inference (draw a shape → semantic component + wireframe) ---
+  /** Run component inference on a freshly drawn shape and add its inferred clause. */
+  inferDrawnShape: (nodeId: string, prevIR: IR) => void;
+  /** Pick one of the candidate components: writes the clause and fills a grey wireframe. */
+  chooseComponent: (nodeId: string, label: string) => void;
+  /** Strip the generated wireframe children, leaving the host empty. */
+  revertWireframe: (nodeId: string) => void;
+  /** Convert the grey wireframe into neutral placeholder content/images. */
+  fillWireframePlaceholders: (nodeId: string) => void;
+  /** Hide the suggestion (icon + canvas bubble) without changing the scene. */
+  dismissInference: (nodeId: string) => void;
+
+  // --- Annotations / prompt-by-demonstration ---
+  addAnnotation: (a: Annotation) => void;
+  updateAnnotation: (id: string, patch: Partial<Annotation>) => void;
+  removeAnnotation: (id: string) => void;
+  clearAnnotations: () => void;
+  /** Build the reviewable plan from the current annotations (boxes = DOM-measured node rects). */
+  buildDemoPlan: (boxes: Record<string, { x: number; y: number; w: number; h: number }>) => void;
+  updateDemoPlanItem: (id: string, patch: Partial<DemoPlanItem>) => void;
+  removeDemoPlanItem: (id: string) => void;
+  cancelDemoPlan: () => void;
+  /** Apply the confirmed plan: synthesize an instruction and run compose, then clear. */
+  confirmDemoPlan: () => void;
 
   undo: () => void;
   dismissError: () => void;
@@ -638,6 +695,10 @@ export const useAppStore = create<AppState>((set, get) => {
       shortcutsOpen: false,
       unknownShortcutAt: null,
       pendingSync: null,
+      inferences: {},
+      annotations: [],
+      demoPlan: null,
+      demoBusy: false,
       error: null,
     };
   }
@@ -671,6 +732,11 @@ export const useAppStore = create<AppState>((set, get) => {
     proposing: false,
     error: null,
     needsConnect: false,
+
+    inferences: {},
+    annotations: [],
+    demoPlan: null,
+    demoBusy: false,
 
     loadSample: (id) => {
       const sample = SAMPLES.find((s) => s.id === id);
@@ -1181,6 +1247,161 @@ export const useAppStore = create<AppState>((set, get) => {
 
     toggleHidden: (id) =>
       set((s) => ({ ir: toggleHidden(s.ir, id), recentIds: [id] })),
+
+    // --- Component inference (draw a shape → semantic component + wireframe) ---
+
+    inferDrawnShape: (nodeId, _prevIR) => {
+      const s = get();
+      const node = s.ir.nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const candidates = inferComponentCandidates(node, s.ir);
+      if (candidates.length === 0) return;
+      const clauseId = nextClauseId(s.prompt.clauses.map((c) => c.id));
+      const top = candidates[0];
+      const clause: PromptClause = {
+        id: clauseId,
+        text: top.label,
+        category: 'component',
+        origin: 'inferred',
+        alternatives: candidates.slice(1).map((c) => c.label),
+      };
+      set((st) => ({
+        history: [...st.history, snapshot(st)].slice(-50),
+        prompt: { clauses: [...st.prompt.clauses, clause] },
+        ir: {
+          ...st.ir,
+          nodes: st.ir.nodes.map((n) =>
+            n.id === nodeId
+              ? { ...n, provenance: { ...n.provenance, promptClauseId: clauseId } }
+              : n,
+          ),
+        },
+        inferences: {
+          ...st.inferences,
+          [nodeId]: { nodeId, clauseId, candidates, status: 'suggested', fill: 'empty' },
+        },
+        selectedNodeId: nodeId,
+        selectedNodeIds: [nodeId],
+        recentIds: [nodeId],
+      }));
+    },
+
+    chooseComponent: (nodeId, label) => {
+      const s = get();
+      const inf = s.inferences[nodeId];
+      const host = s.ir.nodes.find((n) => n.id === nodeId);
+      if (!inf || !host) return;
+      const children = wireframeChildren(host, label, s.ir.nodes.map((n) => n.id));
+      // Replace any previously-generated children of the host with the new wireframe.
+      const others = s.ir.nodes.filter((n) => n.parentId !== nodeId);
+      set((st) => ({
+        history: [...st.history, snapshot(st)].slice(-50),
+        ir: { ...st.ir, nodes: [...others, ...children] },
+        prompt: {
+          clauses: st.prompt.clauses.map((c) =>
+            c.id === inf.clauseId ? { ...c, text: label, origin: 'inferred' as const } : c,
+          ),
+        },
+        inferences: {
+          ...st.inferences,
+          [nodeId]: { ...inf, chosen: label, status: 'chosen', fill: children.length ? 'wireframe' : 'empty' },
+        },
+        recentIds: children.map((c) => c.id),
+      }));
+    },
+
+    revertWireframe: (nodeId) => {
+      const s = get();
+      const inf = s.inferences[nodeId];
+      if (!inf) return;
+      set((st) => ({
+        history: [...st.history, snapshot(st)].slice(-50),
+        ir: { ...st.ir, nodes: st.ir.nodes.filter((n) => n.parentId !== nodeId) },
+        inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'empty' } },
+      }));
+    },
+
+    fillWireframePlaceholders: (nodeId) => {
+      const s = get();
+      const inf = s.inferences[nodeId];
+      if (!inf || !inf.chosen) return;
+      const children = s.ir.nodes.filter((n) => n.parentId === nodeId);
+      if (children.length === 0) return;
+      const byId = new Map(fillPlaceholders(children, inf.chosen).map((n) => [n.id, n]));
+      set((st) => ({
+        history: [...st.history, snapshot(st)].slice(-50),
+        ir: { ...st.ir, nodes: st.ir.nodes.map((n) => byId.get(n.id) ?? n) },
+        inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'placeholder' } },
+        recentIds: [...byId.keys()],
+      }));
+    },
+
+    dismissInference: (nodeId) =>
+      set((st) => {
+        const inf = st.inferences[nodeId];
+        if (!inf) return {};
+        return { inferences: { ...st.inferences, [nodeId]: { ...inf, status: 'dismissed' } } };
+      }),
+
+    // --- Annotations / prompt-by-demonstration ---
+
+    addAnnotation: (a) => set((st) => ({ annotations: [...st.annotations, a] })),
+    updateAnnotation: (id, patch) =>
+      set((st) => ({ annotations: st.annotations.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
+    removeAnnotation: (id) =>
+      set((st) => ({ annotations: st.annotations.filter((a) => a.id !== id) })),
+    clearAnnotations: () => set({ annotations: [], demoPlan: null }),
+
+    buildDemoPlan: (boxes) => {
+      const s = get();
+      const labelOf = (id: string) => {
+        const n = s.ir.nodes.find((x) => x.id === id);
+        if (!n) return id;
+        const txt = n.content?.trim();
+        return txt ? `${n.role} "${txt.slice(0, 24)}"` : n.role;
+      };
+      let seq = 0;
+      const plan = buildDemoPlanPure(s.annotations, boxes, labelOf, () => `plan_${++seq}`);
+      set({ demoPlan: plan });
+    },
+
+    updateDemoPlanItem: (id, patch) =>
+      set((st) => ({
+        demoPlan: st.demoPlan ? st.demoPlan.map((p) => (p.id === id ? { ...p, ...patch } : p)) : st.demoPlan,
+      })),
+    removeDemoPlanItem: (id) =>
+      set((st) => ({ demoPlan: st.demoPlan ? st.demoPlan.filter((p) => p.id !== id) : st.demoPlan })),
+    cancelDemoPlan: () => set({ demoPlan: null }),
+
+    confirmDemoPlan: () => {
+      const plan = get().demoPlan;
+      if (!plan || plan.length === 0) {
+        set({ demoPlan: null });
+        return;
+      }
+      const lines = plan.map((p) => {
+        const tgt = p.targetNodeIds.length
+          ? ` (apply to ${p.targetNodeIds.join(', ')})`
+          : '';
+        return `- ${p.instruction}${tgt}`;
+      });
+      const message = `Apply these changes I marked up on the canvas:\n${lines.join('\n')}`;
+      const scopeNodeIds = Array.from(new Set(plan.flatMap((p) => p.targetNodeIds)));
+      let refSeq = 0;
+      const refs: PromptRef[] = plan.flatMap((p) =>
+        (p.images ?? []).map((dataUrl) => ({
+          kind: 'image' as const,
+          refId: `ref_${++refSeq}`,
+          label: 'comment image',
+          dataUrl,
+        })),
+      );
+      set({ annotations: [], demoPlan: null, demoBusy: false });
+      get().instruct(message, {
+        scopeNodeIds: scopeNodeIds.length ? scopeNodeIds : undefined,
+        refs: refs.length ? refs : undefined,
+      });
+    },
 
     undo: () =>
       set((s) => {
