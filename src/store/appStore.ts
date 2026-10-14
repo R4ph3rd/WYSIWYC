@@ -67,6 +67,8 @@ export interface InstructOptions {
   refs?: PromptRef[];
   /** True when this send was triggered by re-applying a Recipe. */
   viaRecipe?: boolean;
+  /** Called once the compose settles (true = applied, false = failed). */
+  onSettled?: (ok: boolean) => void;
 }
 
 /** Derive the gesture-provenance signals present in a compose send (study log). */
@@ -132,6 +134,8 @@ export function toolToRole(tool: Tool): NodeRole | null {
 interface Snapshot {
   ir: IR;
   prompt: StructuredPrompt;
+  /** Component inferences travel with the scene so undo/restore stay consistent. */
+  inferences: Record<string, ComponentInference>;
 }
 
 /**
@@ -147,6 +151,7 @@ export interface SpecVersion {
   label: string;
   ir: IR;
   prompt: StructuredPrompt;
+  inferences: Record<string, ComponentInference>;
 }
 
 /** Resolved visual style read from the DOM for the Properties panel fallback. */
@@ -404,7 +409,7 @@ let versionSeq = 0;
 const MAX_VERSIONS = 24;
 
 function snapshot(s: AppState): Snapshot {
-  return { ir: s.ir, prompt: s.prompt };
+  return { ir: s.ir, prompt: s.prompt, inferences: s.inferences };
 }
 
 function patchedIds(patch: IRPatch): string[] {
@@ -530,7 +535,7 @@ export const useAppStore = create<AppState>((set, get) => {
     set((s) => ({
       versions: [
         ...s.versions,
-        { id: `ver_${++versionSeq}`, ts: Date.now(), label, ir: s.ir, prompt: s.prompt },
+        { id: `ver_${++versionSeq}`, ts: Date.now(), label, ir: s.ir, prompt: s.prompt, inferences: s.inferences },
       ].slice(-MAX_VERSIONS),
     }));
   }
@@ -879,6 +884,7 @@ export const useAppStore = create<AppState>((set, get) => {
         history: [...s.history, snapshot(s)].slice(-50),
         ir: v.ir,
         prompt: v.prompt,
+        inferences: v.inferences ?? {},
         pendingProposal: null,
         pendingAffectedIds: [],
         pendingSync: null,
@@ -928,8 +934,10 @@ export const useAppStore = create<AppState>((set, get) => {
             generating: false,
           }));
           recordVersion(text.length > 40 ? `${text.slice(0, 40).trim()}…` : text);
+          opts.onSettled?.(true);
         } catch (err) {
           handleLLMError(set, err, 'generating');
+          opts.onSettled?.(false);
         }
       })();
     },
@@ -991,16 +999,28 @@ export const useAppStore = create<AppState>((set, get) => {
     manipulate: (op) => {
       const prevIR = get().ir;
       const { ir: nextIR, affectedIds } = applyManipulation(prevIR, op);
-      set((s) => ({
-        history: [...s.history, snapshot(s)].slice(-50),
-        ir: nextIR,
-        recentIds: affectedIds,
-        selectedNodeId: op.kind === 'delete' ? null : s.selectedNodeId,
-        selectedNodeIds:
-          op.kind === 'delete'
-            ? s.selectedNodeIds.filter((id) => !affectedIds.includes(id))
-            : s.selectedNodeIds,
-      }));
+      set((s) => {
+        // Drop inferences whose host node was deleted (keep the map bounded).
+        let inferences = s.inferences;
+        if (op.kind === 'delete') {
+          const live = new Set(nextIR.nodes.map((n) => n.id));
+          const pruned = Object.fromEntries(
+            Object.entries(s.inferences).filter(([nodeId]) => live.has(nodeId)),
+          );
+          if (Object.keys(pruned).length !== Object.keys(s.inferences).length) inferences = pruned;
+        }
+        return {
+          history: [...s.history, snapshot(s)].slice(-50),
+          ir: nextIR,
+          inferences,
+          recentIds: affectedIds,
+          selectedNodeId: op.kind === 'delete' ? null : s.selectedNodeId,
+          selectedNodeIds:
+            op.kind === 'delete'
+              ? s.selectedNodeIds.filter((id) => !affectedIds.includes(id))
+              : s.selectedNodeIds,
+        };
+      });
       useStudyStore.getState().logEvent('manipulation', { kind: op.kind });
       maybePropose(op, prevIR);
     },
@@ -1266,7 +1286,8 @@ export const useAppStore = create<AppState>((set, get) => {
         alternatives: candidates.slice(1).map((c) => c.label),
       };
       set((st) => ({
-        history: [...st.history, snapshot(st)].slice(-50),
+        // No history push here: createShape already snapshotted the pre-draw
+        // state on mousedown, so the shape + its inferred clause undo as one step.
         prompt: { clauses: [...st.prompt.clauses, clause] },
         ir: {
           ...st.ir,
@@ -1287,53 +1308,56 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     chooseComponent: (nodeId, label) => {
-      const s = get();
-      const inf = s.inferences[nodeId];
-      const host = s.ir.nodes.find((n) => n.id === nodeId);
-      if (!inf || !host) return;
-      const children = wireframeChildren(host, label, s.ir.nodes.map((n) => n.id));
-      // Replace any previously-generated children of the host with the new wireframe.
-      const others = s.ir.nodes.filter((n) => n.parentId !== nodeId);
-      set((st) => ({
-        history: [...st.history, snapshot(st)].slice(-50),
-        ir: { ...st.ir, nodes: [...others, ...children] },
-        prompt: {
-          clauses: st.prompt.clauses.map((c) =>
-            c.id === inf.clauseId ? { ...c, text: label, origin: 'inferred' as const } : c,
-          ),
-        },
-        inferences: {
-          ...st.inferences,
-          [nodeId]: { ...inf, chosen: label, status: 'chosen', fill: children.length ? 'wireframe' : 'empty' },
-        },
-        recentIds: children.map((c) => c.id),
-      }));
+      set((st) => {
+        const inf = st.inferences[nodeId];
+        const host = st.ir.nodes.find((n) => n.id === nodeId);
+        if (!inf || !host) return {};
+        const children = wireframeChildren(host, label, st.ir.nodes.map((n) => n.id));
+        // Replace any previously-generated children of the host with the new wireframe.
+        const others = st.ir.nodes.filter((n) => n.parentId !== nodeId);
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          ir: { ...st.ir, nodes: [...others, ...children] },
+          prompt: {
+            clauses: st.prompt.clauses.map((c) =>
+              c.id === inf.clauseId ? { ...c, text: label, origin: 'inferred' as const } : c,
+            ),
+          },
+          inferences: {
+            ...st.inferences,
+            [nodeId]: { ...inf, chosen: label, status: 'chosen', fill: children.length ? 'wireframe' : 'empty' },
+          },
+          recentIds: children.map((c) => c.id),
+        };
+      });
     },
 
     revertWireframe: (nodeId) => {
-      const s = get();
-      const inf = s.inferences[nodeId];
-      if (!inf) return;
-      set((st) => ({
-        history: [...st.history, snapshot(st)].slice(-50),
-        ir: { ...st.ir, nodes: st.ir.nodes.filter((n) => n.parentId !== nodeId) },
-        inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'empty' } },
-      }));
+      set((st) => {
+        const inf = st.inferences[nodeId];
+        if (!inf) return {};
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          ir: { ...st.ir, nodes: st.ir.nodes.filter((n) => n.parentId !== nodeId) },
+          inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'empty' } },
+        };
+      });
     },
 
     fillWireframePlaceholders: (nodeId) => {
-      const s = get();
-      const inf = s.inferences[nodeId];
-      if (!inf || !inf.chosen) return;
-      const children = s.ir.nodes.filter((n) => n.parentId === nodeId);
-      if (children.length === 0) return;
-      const byId = new Map(fillPlaceholders(children, inf.chosen).map((n) => [n.id, n]));
-      set((st) => ({
-        history: [...st.history, snapshot(st)].slice(-50),
-        ir: { ...st.ir, nodes: st.ir.nodes.map((n) => byId.get(n.id) ?? n) },
-        inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'placeholder' } },
-        recentIds: [...byId.keys()],
-      }));
+      set((st) => {
+        const inf = st.inferences[nodeId];
+        if (!inf || !inf.chosen) return {};
+        const children = st.ir.nodes.filter((n) => n.parentId === nodeId);
+        if (children.length === 0) return {};
+        const byId = new Map(fillPlaceholders(children, inf.chosen).map((n) => [n.id, n]));
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          ir: { ...st.ir, nodes: st.ir.nodes.map((n) => byId.get(n.id) ?? n) },
+          inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'placeholder' } },
+          recentIds: [...byId.keys()],
+        };
+      });
     },
 
     dismissInference: (nodeId) =>
@@ -1374,14 +1398,21 @@ export const useAppStore = create<AppState>((set, get) => {
     cancelDemoPlan: () => set({ demoPlan: null }),
 
     confirmDemoPlan: () => {
-      const plan = get().demoPlan;
+      const s = get();
+      const plan = s.demoPlan;
       if (!plan || plan.length === 0) {
         set({ demoPlan: null });
         return;
       }
+      const labelOf = (id: string) => {
+        const n = s.ir.nodes.find((x) => x.id === id);
+        if (!n) return id;
+        const t = n.content?.trim();
+        return t ? `the ${n.role} "${t.slice(0, 24)}"` : `the ${n.role}`;
+      };
       const lines = plan.map((p) => {
         const tgt = p.targetNodeIds.length
-          ? ` (apply to ${p.targetNodeIds.join(', ')})`
+          ? ` (${p.targetNodeIds.map(labelOf).join(', ')})`
           : '';
         return `- ${p.instruction}${tgt}`;
       });
@@ -1396,10 +1427,15 @@ export const useAppStore = create<AppState>((set, get) => {
           dataUrl,
         })),
       );
-      set({ annotations: [], demoPlan: null, demoBusy: false });
+      // Close the plan and mark busy, but KEEP the annotations until the compose
+      // actually succeeds, so markup (and dropped images) isn't lost if the call
+      // fails (not connected, rate-limited, network). demoBusy hides the re-send
+      // button so the same annotations can't be dispatched twice concurrently.
+      set({ demoPlan: null, demoBusy: true });
       get().instruct(message, {
         scopeNodeIds: scopeNodeIds.length ? scopeNodeIds : undefined,
         refs: refs.length ? refs : undefined,
+        onSettled: (ok) => set(ok ? { annotations: [], demoBusy: false } : { demoBusy: false }),
       });
     },
 
@@ -1412,6 +1448,7 @@ export const useAppStore = create<AppState>((set, get) => {
         return {
           ir: prev.ir,
           prompt: prev.prompt,
+          inferences: prev.inferences,
           history: s.history.slice(0, -1),
           pendingProposal: null,
           pendingAffectedIds: [],

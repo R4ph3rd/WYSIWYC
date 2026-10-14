@@ -31,6 +31,8 @@ export function AnnotationLayer({ stageRef }: { stageRef: React.RefObject<HTMLDi
 
   const drawings = annotations.filter((a) => a.kind !== 'comment');
   const comments = annotations.filter((a) => a.kind === 'comment');
+  const stageW = stageRef.current?.clientWidth ?? 960;
+  const stageH = stageRef.current?.clientHeight ?? 640;
 
   return (
     <>
@@ -68,6 +70,8 @@ export function AnnotationLayer({ stageRef }: { stageRef: React.RefObject<HTMLDi
           key={a.id}
           a={a}
           open={openId === a.id}
+          stageW={stageW}
+          stageH={stageH}
           onOpen={() => setOpenId(a.id)}
           onClose={() => setOpenId((id) => (id === a.id ? null : id))}
           onChange={(patch) => updateAnnotation(a.id, patch)}
@@ -123,10 +127,12 @@ function shapeBounds(a: Annotation): { x: number; y: number; w: number; h: numbe
 }
 
 function CommentBubble({
-  a, open, onOpen, onClose, onChange, onRemove,
+  a, open, stageW, stageH, onOpen, onClose, onChange, onRemove,
 }: {
   a: Annotation;
   open: boolean;
+  stageW: number;
+  stageH: number;
   onOpen: () => void;
   onClose: () => void;
   onChange: (patch: Partial<Annotation>) => void;
@@ -188,6 +194,11 @@ function CommentBubble({
     );
   }
 
+  const CARD_W = 224;
+  const CARD_H = (a.images?.length ?? 0) > 0 ? 220 : 150;
+  const cardLeft = Math.max(4, Math.min(anchor.x, stageW - CARD_W - 8));
+  const cardTop = Math.max(4, Math.min(anchor.y - 8, stageH - CARD_H - 8));
+
   return (
     <div
       ref={cardRef}
@@ -197,10 +208,10 @@ function CommentBubble({
       onDragLeave={() => setDragOver(false)}
       onDrop={(e) => { e.preventDefault(); setDragOver(false); addImages(e.dataTransfer.files); }}
       className={
-        'absolute z-40 w-56 rounded-xl rounded-bl-none border bg-white p-2 shadow-xl ring-1 ring-black/5 ' +
+        'absolute z-40 w-56 rounded-xl border bg-white p-2 shadow-xl ring-1 ring-black/5 ' +
         (dragOver ? 'border-indigo-400' : 'border-indigo-200')
       }
-      style={{ left: anchor.x, top: anchor.y - 8 }}
+      style={{ left: cardLeft, top: cardTop }}
     >
       <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-indigo-500">
         <MessageSquare className="h-3 w-3" /> Note

@@ -145,6 +145,7 @@ export function Canvas() {
   const addAnnotation = useAppStore((s) => s.addAnnotation);
   const buildDemoPlan = useAppStore((s) => s.buildDemoPlan);
   const demoPlan = useAppStore((s) => s.demoPlan);
+  const demoBusy = useAppStore((s) => s.demoBusy);
 
   const stageRef = useRef<HTMLDivElement>(null);
   // Set when a move/resize drag actually moved, to swallow the synthetic click
@@ -733,7 +734,7 @@ export function Canvas() {
       </div>
 
       {/* Send-from-annotations button, floating above the toolbar. */}
-      {!chatOnly && annotations.length > 0 && !demoPlan && (
+      {!chatOnly && annotations.length > 0 && !demoPlan && !demoBusy && (
         <button
           onClick={() => buildDemoPlan(allNodeBoxes())}
           className="absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-lg transition-colors hover:bg-indigo-500"

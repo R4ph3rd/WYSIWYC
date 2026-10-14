@@ -50,6 +50,7 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
   }, []);
 
   const stageW = stageRef.current?.clientWidth ?? 960;
+  const stageH = stageRef.current?.clientHeight ?? 640;
 
   return (
     <>
@@ -58,7 +59,9 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
         if (!box) return null;
         const open = openId === inf.nodeId;
         const POP_W = 224;
+        const POP_H = 44 + inf.candidates.length * 44;
         const popLeft = box.x + box.w + 8 + POP_W > stageW ? Math.max(4, box.x - POP_W - 8) : box.x + box.w + 8;
+        const popTop = Math.max(4, Math.min(box.y, stageH - POP_H - 8));
         return (
           <Fragment key={inf.nodeId}>
             {/* Suggestions bubble, pinned to the top-right corner of the shape. */}
@@ -81,7 +84,7 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
               <div
                 onMouseDown={(e) => e.stopPropagation()}
                 className="absolute z-40 w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg ring-1 ring-black/5"
-                style={{ left: popLeft, top: box.y }}
+                style={{ left: popLeft, top: popTop }}
               >
                 <div className="flex items-center gap-1 px-1.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                   <Sparkles className="h-3 w-3 text-amber-500" />
