@@ -51,6 +51,20 @@ The inline parameters were extended with three ideas adapted from the *Malleable
 
 Two of the paper's contributions were deliberately **not** adopted: the token-probability decoding algorithm (requires logit access to a locally deployed model — WYSIWYC calls hosted provider APIs from the browser) and continuous intensity sliders for subjective tone attributes (WYSIWYC's parameters map to concrete CSS dimensions, where discrete widgets are the right fit). The paper's "prompt enrichment" idea already exists here as the model's *inferred* clauses (`origin: "inferred"`, marked with an amber dot in the spec).
 
+### Prompt by demonstration
+Three cooperating capabilities let you steer the model by sketching and marking up the canvas instead of typing full instructions.
+
+**1. Draw a shape → infer a component (not a shape spec).** Drawing a rectangle or circle no longer produces a technical clause like "a 220×320 rectangle". A geometry heuristic (`src/ir/componentInfer.ts`) guesses the *UI component* it most likely represents — a tall card-shaped rectangle → **Item card**, a wide shape at the top → **Header bar**, a small circle → **Avatar** — and records the **top-3** candidates. The inferred clause reads semantically ("Item card"), carries the amber *inferred* dot, and gets:
+- a **sparkle bubble** pinned to the shape on the canvas, and a matching **sparkle icon on the clause** in the spec pane; both open the top-3 candidate picker.
+- on choosing a candidate, the host fills with a **grey wireframe** of that component's parts (image / title / description / button, …) via `src/ir/wireframe.ts`.
+- a **hovering button group** on the shape to *leave it empty* (revert the wireframe) or *fill with placeholders* — neutral placeholder text/images that follow the overall (monochrome) design.
+
+**2. Comment & draw on the canvas to prompt the model.** A second palette group adds markup tools — **Comment (C)**, **Arrow (A)**, **Surround (B)**, **Scribble (S)** — that create *annotations*, not IR nodes (`src/ui/AnnotationLayer.tsx`). Arrows, surrounding boxes and scribbles are rough drafting marks; text comments live in pinned bubbles that expand to an overlay editor on hover (and collapse back to a bubble on mouse-out), accept **drag-and-dropped images** for extra context, and are deletable. Once at least one annotation exists, a floating **"Apply N annotations"** button appears above the toolbar.
+
+**3. Guardrails: review the plan before applying.** Sending the annotations doesn't blindly mutate the scene. `src/annot/resolve.ts` resolves, by geometry, which element(s) each annotation targets and synthesizes a plain-English instruction, each with a confidence. The **ModificationPlan** overlay (`src/ui/ModificationPlan.tsx`) then pins the guessed targets on the canvas and, for every change, lets you: **re-pick the target** elements by clicking them, **edit the instruction text**, or drop the change — low-confidence guesses are flagged with a *verify targets* warning. Confirming routes the confirmed targets + wording (and any comment images) through the existing compose pipeline, so provenance and the spec stay in sync.
+
+The deterministic cores (inference, wireframe templates, target resolution) are pure, dependency-free modules and are unit-tested; the LLM is only involved when the confirmed plan is applied through compose.
+
 
 
 ## App
@@ -59,7 +73,7 @@ Two of the paper's contributions were deliberately **not** adopted: the token-pr
 - **Connect** button (provider + key) in Top bar
 - **Left panel**: the **Spec** panel (the living prompt, with the Structured/Prose toggle and the inline composer at the bottom). A toggleable
   **Layers** tree can sit beside it.
-- in **Canvas**: a floating tool palette sits at the **bottom** (Pointer / Rectangle / Circle / Line / Pen / Text // V R O L P T). A **sync-mode toggle** sits in the top-left corner (to toggle auto/manual calls to LLM providers). **Auto** runs the Call B back-channel immediately after each edit;
+- in **Canvas**: a floating tool palette sits at the **bottom** — drawing tools (Pointer / Rectangle / Circle / Line / Pen / Text // V R O L P T) and a markup group for prompt-by-demonstration (Comment / Arrow / Surround / Scribble // C A B S). A **sync-mode toggle** sits in the top-left corner (to toggle auto/manual calls to LLM providers). **Auto** runs the Call B back-channel immediately after each edit;
 **Manual** holds the edits (the IR still updates live) and shows an *Update spec* button to run the back-channel on demand.
 - **Right panel**: nodes properties (transforms, fill/stroke with opacity, drop/inner **shadow**, searchable Google-Fonts family picker, weight, alignment).
   
