@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MessageSquare, Trash2, X, ImagePlus } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { Annotation } from '@/ir/types';
+import { scribbleStrokes } from '@/annot/resolve';
 
 /**
  * Annotation layer (prompt-by-demonstration, part B). Renders the rough markup
@@ -103,12 +104,20 @@ function AnnotationShape({ a }: { a: Annotation }) {
       />
     );
   }
-  if (a.kind === 'scribble' && a.points && a.points.length >= 2) {
+  if (a.kind === 'scribble') {
+    // One polyline per stroke, so separate strokes are never joined up.
+    const strokes = scribbleStrokes(a).filter((s) => s.length >= 2);
+    if (strokes.length === 0) return null;
     return (
-      <polyline
-        points={a.points.map((p) => `${p.x},${p.y}`).join(' ')}
-        fill="none" stroke={INK} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"
-      />
+      <g data-annotation-id={a.id} data-stroke-count={strokes.length}>
+        {strokes.map((s, i) => (
+          <polyline
+            key={i}
+            points={s.map((p) => `${p.x},${p.y}`).join(' ')}
+            fill="none" stroke={INK} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"
+          />
+        ))}
+      </g>
     );
   }
   return null;
@@ -116,9 +125,10 @@ function AnnotationShape({ a }: { a: Annotation }) {
 
 function shapeBounds(a: Annotation): { x: number; y: number; w: number; h: number } | null {
   if (a.rect) return a.rect;
-  if (a.points && a.points.length) {
-    const xs = a.points.map((p) => p.x);
-    const ys = a.points.map((p) => p.y);
+  const pts = a.kind === 'scribble' ? scribbleStrokes(a).flat() : a.points ?? [];
+  if (pts.length) {
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
     const x = Math.min(...xs);
     const y = Math.min(...ys);
     return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };

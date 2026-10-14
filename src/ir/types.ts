@@ -359,8 +359,16 @@ export type AnnotationKind = 'comment' | 'arrow' | 'box' | 'scribble';
 export interface Annotation {
   id: string;
   kind: AnnotationKind;
-  /** Freehand/arrow anchors in stage coordinates (arrow = [from, …, to]). */
+  /**
+   * Arrow anchors in stage coordinates ([from, …, to]). Legacy single-stroke
+   * scribbles also stored their path here; new scribbles use `strokes`.
+   */
   points?: PathPoint[];
+  /**
+   * Scribble strokes in stage coordinates: every stroke drawn in one scribble
+   * session, merged into this one annotation (rendered as separate polylines).
+   */
+  strokes?: PathPoint[][];
   /** Bounding rect in stage coords (box / surround). */
   rect?: { x: number; y: number; w: number; h: number };
   /** Comment anchor point in stage coords. */

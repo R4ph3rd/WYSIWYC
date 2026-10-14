@@ -14,6 +14,7 @@ import { InferenceOverlay } from './InferenceOverlay';
 import { AnnotationLayer } from './AnnotationLayer';
 import { ModificationPlan } from './ModificationPlan';
 import { useStudyStore } from '@/store/studyStore';
+import { scribbleStrokes } from '@/annot/resolve';
 
 type Bounds = { x: number; y: number; w: number; h: number };
 
@@ -107,7 +108,6 @@ export function Canvas() {
   const promoteToAbsolute = useAppStore((s) => s.promoteToAbsolute);
   const addComposerNodeRef = useAppStore((s) => s.addComposerNodeRef);
   const addComposerLocationRef = useAppStore((s) => s.addComposerLocationRef);
-  const setTool = useAppStore((s) => s.setTool);
   const requestFocus = useAppStore((s) => s.requestFocus);
   const focusRequest = useAppStore((s) => s.focusRequest);
   const editContent = useAppStore((s) => s.editContent);
@@ -143,6 +143,7 @@ export function Canvas() {
   const inferDrawnShape = useAppStore((s) => s.inferDrawnShape);
   const annotations = useAppStore((s) => s.annotations);
   const addAnnotation = useAppStore((s) => s.addAnnotation);
+  const updateAnnotation = useAppStore((s) => s.updateAnnotation);
   const buildDemoPlan = useAppStore((s) => s.buildDemoPlan);
   const demoPlan = useAppStore((s) => s.demoPlan);
   const demoBusy = useAppStore((s) => s.demoBusy);
@@ -171,6 +172,16 @@ export function Canvas() {
   // Mirror for event listeners (keydown) that outlive a render's closure.
   const penRef = useRef<PenState | null>(null);
   penRef.current = pen;
+  // The scribble annotation the current scribble session appends strokes to.
+  // Every stroke drawn while the scribble tool stays active merges into it;
+  // picking any other tool closes the session.
+  const scribbleIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    scribbleIdRef.current = null;
+    // Leaving the pen mid-path keeps what was drawn so far (as Enter would).
+    if (tool !== 'path' && penRef.current) commitPen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool]);
 
   // Canvas hand-off: a double-click mid-draft pulls focus back to the canvas
   // (blurring the composer). Element/location clicks request 'composer' focus,
@@ -340,7 +351,7 @@ export function Canvas() {
     const current = penRef.current;
     setPen(null);
     setPenCursor(null);
-    setTool('pointer');
+    // The pen stays active: the next click starts a fresh path.
     if (cancel || !current || current.points.length < 2) return;
     // Drop duplicate anchors left by the double-click that commits.
     const pts = current.points.filter(
@@ -361,16 +372,30 @@ export function Canvas() {
     proposeManipulation({ kind: 'draw', id, role: 'path', layout: { x, y, w, h } }, current.prevIR);
   }
 
+  // Tools stay active after each gesture. Enter commits an in-progress pen
+  // path; Escape cancels it, and with nothing in progress Escape drops back to
+  // the pointer (App's global handler only deselects while on the pointer).
   useEffect(() => {
-    if (!pen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') commitPen(false);
-      if (e.key === 'Escape') commitPen(true);
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+      // A dialog/popover that consumed Escape (Radix preventDefaults it) wins.
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (penRef.current) {
+        if (e.key === 'Enter') commitPen(false);
+        if (e.key === 'Escape') commitPen(true);
+        return;
+      }
+      if (e.key !== 'Escape') return;
+      const st = useAppStore.getState();
+      if (st.shortcutsOpen || st.tool === 'pointer') return;
+      setAnnotDraft(null);
+      st.setTool('pointer');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pen !== null]);
+  }, []);
 
   // --- Stage mouse handling -------------------------------------------------
 
@@ -398,6 +423,16 @@ export function Canvas() {
     if (role) {
       e.preventDefault();
       e.stopPropagation();
+      // The text tool edits an existing text-bearing node in place instead of
+      // stacking a new one on top of it (so it can stay active between texts).
+      if (role === 'text') {
+        const hitId = (e.target as HTMLElement).closest('[data-node-id]')?.getAttribute('data-node-id');
+        const hit = hitId ? nodeById(hitId) : undefined;
+        if (hit && TEXT_EDIT_ROLES.includes(hit.role)) {
+          startTextEdit(hit.id);
+          return;
+        }
+      }
       const prevIR = useAppStore.getState().ir;
       const defaultSize = role === 'text' ? { w: 120, h: 28 } : { w: 2, h: 2 };
       const id = createShape({ role, x: p.x, y: p.y, ...defaultSize });
@@ -412,7 +447,6 @@ export function Canvas() {
       if (tool === 'comment') {
         addAnnotation({ id: newAnnotId(), kind: 'comment', anchor: p, text: '', createdAt: Date.now() });
         draggedRef.current = true;
-        setTool('pointer');
         return;
       }
       if (tool === 'scribble') setAnnotDraft({ kind: 'scribble', points: [p] });
@@ -539,10 +573,21 @@ export function Canvas() {
     if (annotDraft) {
       const d = annotDraft;
       setAnnotDraft(null);
-      setTool('pointer');
       draggedRef.current = true;
       if (d.kind === 'scribble') {
-        if (d.points.length >= 2) addAnnotation({ id: newAnnotId(), kind: 'scribble', points: d.points, createdAt: Date.now() });
+        if (d.points.length < 2) return;
+        // Merge into the session's scribble while it still exists (it may
+        // have been removed or applied meanwhile); otherwise open a new one.
+        const current = scribbleIdRef.current
+          ? useAppStore.getState().annotations.find((a) => a.id === scribbleIdRef.current)
+          : undefined;
+        if (current) {
+          updateAnnotation(current.id, { strokes: [...scribbleStrokes(current), d.points], points: undefined });
+        } else {
+          const id = newAnnotId();
+          scribbleIdRef.current = id;
+          addAnnotation({ id, kind: 'scribble', strokes: [d.points], createdAt: Date.now() });
+        }
       } else {
         const dx = Math.abs(d.curX - d.startX);
         const dy = Math.abs(d.curY - d.startY);
@@ -603,7 +648,7 @@ export function Canvas() {
     setDrag(null);
 
     if (drag.mode === 'draw') {
-      setTool('pointer');
+      // The draw tool stays active; each gesture creates its own node.
       if (!node) return;
       let layout = node.layout ?? {};
       // A click without a drag: give the shape a sensible default footprint.
@@ -1045,7 +1090,7 @@ function ShortcutsSheet({ open, onClose }: { open: boolean; onClose: () => void 
         ['Double-click', 'Edit text'],
         ['Shift-click', 'Add to selection'],
         ['Drag corner', 'Resize'],
-        ['Esc', 'Deselect'],
+        ['Esc', 'Deselect / exit tool'],
         ['?', 'This sheet'],
       ],
     },

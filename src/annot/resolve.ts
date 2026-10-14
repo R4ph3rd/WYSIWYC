@@ -124,6 +124,16 @@ function normalizeRect(r: NodeBox): NodeBox {
   };
 }
 
+/**
+ * A scribble's strokes: `strokes` when present, else the legacy single-stroke
+ * `points` path (annotations saved before scribbles were merged). Empty
+ * strokes are dropped.
+ */
+export function scribbleStrokes(a: Annotation): Point[][] {
+  const strokes = a.strokes && a.strokes.length > 0 ? a.strokes : a.points ? [a.points] : [];
+  return strokes.filter((s) => s.length > 0);
+}
+
 /** Bounding box of a non-empty point list. */
 function boundsOf(points: Point[]): NodeBox {
   let minX = Infinity;
@@ -248,12 +258,15 @@ function resolveBox(a: Annotation, boxes: Record<string, NodeBox>): ResolvedTarg
 }
 
 function resolveScribble(a: Annotation, boxes: Record<string, NodeBox>): ResolvedTargets {
-  const pts = a.points ?? [];
-  if (pts.length === 0) return result([], NONE);
+  // A merged scribble is several separate strokes: its extent spans all of
+  // them, and a node counts as touched when ANY stroke passes near it (never
+  // via the gap between one stroke's end and the next one's start).
+  const strokes = scribbleStrokes(a);
+  if (strokes.length === 0) return result([], NONE);
 
-  const area = inflate(boundsOf(pts), SCRIBBLE_NEAR_PX);
+  const area = inflate(boundsOf(strokes.flat()), SCRIBBLE_NEAR_PX);
   const overlapping = validEntries(boxes).filter(([, b]) => boxesIntersect(area, b));
-  const near = overlapping.filter(([, b]) => pathNearBox(pts, b, SCRIBBLE_NEAR_PX));
+  const near = overlapping.filter(([, b]) => strokes.some((pts) => pathNearBox(pts, b, SCRIBBLE_NEAR_PX)));
 
   const bySpecificity = (hits: Array<[string, NodeBox]>): string[] =>
     hits.sort((p, q) => boxArea(p[1]) - boxArea(q[1])).map(([id]) => id);
