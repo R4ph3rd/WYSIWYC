@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, RefreshCw } from 'lucide-react';
+import { X, RefreshCw, Sparkles, Check } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import { CLAUSE_CATEGORIES, type ClauseCategory, type IRNode, type ParamKind, type ParamSpan, type PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
@@ -566,6 +566,7 @@ function ClauseItem({
           pending ? 'bg-amber-500' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
         )}
       />
+      <ClauseInferenceIcon clauseId={clause.id} />
       {/* IR items wrap freely so the whole sentence is visible; only the
           interactive param tokens inside stay on one line (see ParamToken). */}
       <span data-clause-text className="min-w-0 flex-1 break-words">
@@ -788,5 +789,79 @@ function ClauseEditor({
       rows={2}
       className="my-0.5 w-full resize-none rounded-md border border-slate-200 bg-slate-50/40 px-1.5 py-1 text-xs leading-snug text-slate-800 outline-none focus:ring-2 focus:ring-slate-100"
     />
+  );
+}
+
+/**
+ * A spark icon on an inferred-component clause. Clicking it reveals the other
+ * candidate UI components (part A of prompt-by-demonstration); picking one
+ * rewrites the clause and rebuilds the wireframe on the canvas.
+ */
+function ClauseInferenceIcon({ clauseId }: { clauseId: string }) {
+  const inferences = useAppStore((s) => s.inferences);
+  const chooseComponent = useAppStore((s) => s.chooseComponent);
+  const selectNode = useAppStore((s) => s.selectNode);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  const inf = Object.values(inferences).find(
+    (i) => i.clauseId === clauseId && i.status !== 'dismissed',
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  if (!inf) return null;
+
+  return (
+    <span ref={ref} className="relative mt-[2px] shrink-0">
+      <button
+        onClick={(e) => { e.stopPropagation(); selectNode(inf.nodeId); setOpen((v) => !v); }}
+        title="Suggested components — click to choose"
+        className="flex h-4 w-4 items-center justify-center rounded text-amber-500 transition-colors hover:bg-amber-100"
+      >
+        <Sparkles className="h-3 w-3" />
+      </button>
+      {open && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute left-0 top-5 z-50 w-52 rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-lg ring-1 ring-black/5"
+        >
+          <div className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            Looks like…
+          </div>
+          {inf.candidates.map((c) => {
+            const chosen = inf.chosen === c.label;
+            return (
+              <button
+                key={c.label}
+                onClick={(e) => { e.stopPropagation(); chooseComponent(inf.nodeId, c.label); setOpen(false); }}
+                className={
+                  'flex w-full items-start gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors ' +
+                  (chosen ? 'bg-amber-50' : 'hover:bg-slate-50')
+                }
+              >
+                <span className="mt-0.5 h-3 w-3 shrink-0 text-amber-500">{chosen && <Check className="h-3 w-3" />}</span>
+                <span className="min-w-0">
+                  <span className="block text-[12px] font-semibold text-slate-800">{c.label}</span>
+                  <span className="block truncate text-[10px] text-slate-500">{c.description}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </span>
   );
 }

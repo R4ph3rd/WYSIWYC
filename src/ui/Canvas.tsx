@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
+import { InferenceOverlay } from './InferenceOverlay';
 import { useStudyStore } from '@/store/studyStore';
 
 type Bounds = { x: number; y: number; w: number; h: number };
@@ -137,6 +138,7 @@ export function Canvas() {
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
   const createShape = useAppStore((s) => s.createShape);
   const updateLayout = useAppStore((s) => s.updateLayout);
+  const inferDrawnShape = useAppStore((s) => s.inferDrawnShape);
 
   const stageRef = useRef<HTMLDivElement>(null);
   // Set when a move/resize drag actually moved, to swallow the synthetic click
@@ -520,10 +522,16 @@ export function Canvas() {
         updateLayout(drag.id, clickSize);
         layout = { ...layout, ...clickSize };
       }
-      proposeManipulation(
-        { kind: 'draw', id: drag.id, role: drag.role, layout },
-        drag.prevIR,
-      );
+      // Box-like shapes infer a UI component (semantic) instead of a technical
+      // shape clause; other primitives keep the plain Call B back-channel.
+      if (drag.role === 'rectangle' || drag.role === 'circle') {
+        inferDrawnShape(drag.id, drag.prevIR);
+      } else {
+        proposeManipulation(
+          { kind: 'draw', id: drag.id, role: drag.role, layout },
+          drag.prevIR,
+        );
+      }
     } else if (drag.mode === 'move') {
       if (!node || !drag.moved) return;
       proposeManipulation(
@@ -743,6 +751,9 @@ export function Canvas() {
             }
             onReorder={drawing ? undefined : onReorder}
           />
+
+          {/* Component-inference bubbles + wireframe controls for drawn shapes. */}
+          <InferenceOverlay stageRef={stageRef} />
 
           {/* Labeled borders on elements referred to by the prompt + here/there pins. */}
           <PromptTargetOverlay
