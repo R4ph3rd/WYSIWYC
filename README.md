@@ -10,16 +10,10 @@ WYSIWYC is a prompt ⇄ UI editor (React + TypeScript + Vite + Zustand). You des
 > - **Inline widgets inside the prose, with zero tokens.** Style words in a clause become controls: colour pickers, gradient stops (from / via / to), positions (left / centre / right), icons with a picker, fonts, sizes, weights, radii, shadows. Each pin is scoped to the nodes its phrase refers to ("positive changes are **green**" recolours only the positive figures). It writes the IR directly, with no LLM call. Retyping only those words in a clause also skips the model.
 > - **Prompting by demonstration.** You can comment, draw arrows, box things or scribble directly on the canvas. A cross or a scratch-out deletes, an arrow moves, a double arrow swaps. These recognised gestures become exact, undoable edits without a model call. Everything else goes through a reviewable plan, where you confirm targets and wording before anything is sent.
 > - **From low-fi sketch to component.** If you draw a rough rectangle or circle, WYSIWYC infers the three most likely components (card, header bar, avatar…) and suggests one as a pending clause. Pick a candidate to get a contrast-aware grey wireframe. Then you can fill it with placeholder content that takes its colours, font and radius from the surrounding design and is laid out so parts never overlap.
-> - **Provenance and brushing & linking.** Hover a clause to outline the nodes it owns. Hover a parameter word to outline exactly the nodes it controls. Select a node to highlight the spec words bound to it.
-> - **Deterministic direct manipulation.** Moving, resizing, recolouring, reordering and duplicating are pure IR operations with undo. Drag-and-drop is layout-aware. A drop line shows the slot, and the moved component takes on its new siblings' sizing (flex share, fraction, grid column) while the old container rebalances.
 > - **Token-efficient by design.** The LLM sends patches instead of regenerating everything. Many edits never reach a model at all: pins, gestures, arrow moves, wireframes and component swaps. Static system and schema prefixes are cached (Anthropic `cache_control`, OpenAI automatic caching), and the IR is sent as minified JSON.
 > - **Configuration history, not chat history.** A version rail records restorable spec+IR snapshots. Recipes turn an accepted instruction into a one-click command for the current selection.
-> - **Bring your own model, no backend.** The browser calls Anthropic, OpenAI, Mistral or Groq directly. Keys stay in `localStorage`.
-> - **Study kit included.** A `/study` route logs every prompt, LLM call, token count and canvas edit, and has a *chat-only* baseline condition. An `/analysis` page plots the dataset.
 
 ## Demo
-
-There are no screenshots in the repo yet. To see the main features in about a minute:
 
 1. Run `npm run dev`, click **Connect** and paste a key.
 2. On the empty canvas, pick one of the samples under **Try:**. Each has its own design system: **Login screen** (Medora health sign-in), **Pricing card** (Tally invoicing, Stripe-like), **Dashboard header** (Northwind, dark) and **Analytics dashboard** (Northwind, light).
@@ -43,8 +37,6 @@ Open the app and click **Connect** in the top bar. Choose a provider tab, paste 
 |---|---|---|---|---|
 | Anthropic | `claude-opus-4-8` | Sonnet 4.6, Haiku 4.5 | schema in system prompt + client-side parse | yes |
 | OpenAI | `gpt-4o` | GPT-4o mini, GPT-4 Turbo | `response_format` json_schema (non-strict) | yes |
-| Mistral | `mistral-large-latest` | Mistral Small, Codestral | `response_format` json_schema (non-strict) | no |
-| Groq | `llama-3.3-70b-versatile` | Llama 3.1 70B, Mixtral 8x7B | JSON mode + schema in prompt + client-side parse | no |
 
 Each raw response (text, token usage, cache hits) is logged to the browser console under a collapsed `[LLM <provider>]` group.
 
@@ -143,9 +135,7 @@ public/tasks study reference targets
 
 - This is a research prototype. The output is a mockup, not exportable production code, and document state is not saved across reloads. Only the study dataset and connection settings persist.
 - Keys live in browser `localStorage`, and calls go directly from the browser. Use personal or limited keys.
-- Mistral and Groq don't receive images, so comment images and image chips are ignored there.
 - Inference, gesture recognition and target resolution are geometric heuristics. They can guess wrong, so low-confidence targets are flagged for you to verify in the plan.
 - Call B is lossy by nature. It proposes wording, and that wording is only as good as the model.
 - Anthropic prompt caching is best-effort. Prefixes below the model's minimum cacheable length are not cached.
-- Tailwind compiles at runtime through the Play CDN, which is fine for a prototype but not for production.
 - The deterministic modules are pure and written to be unit-testable, but the repo does not ship a test suite yet.
