@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, RefreshCw, Sparkles, Check } from 'lucide-react';
+import { X, RefreshCw, Sparkles, Check, CheckCheck } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import { CLAUSE_CATEGORIES, type ClauseCategory, type IRNode, type ParamKind, type ParamSpan, type PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
@@ -78,6 +78,8 @@ export function PromptPane() {
   const chooseAlternative = useAppStore((s) => s.chooseAlternative);
   const acceptProposal = useAppStore((s) => s.acceptProposal);
   const discardProposal = useAppStore((s) => s.discardProposal);
+  const acceptClauses = useAppStore((s) => s.acceptClauses);
+  const dismissClauses = useAppStore((s) => s.dismissClauses);
   const setClauseParam = useAppStore((s) => s.setClauseParam);
   const selectNode = useAppStore((s) => s.selectNode);
   const irNodes = useAppStore((s) => s.ir.nodes);
@@ -114,6 +116,9 @@ export function PromptPane() {
     }
     return m;
   }, [irNodes]);
+  // Clauses the app added on its own (inferred from a drawn shape) that still
+  // await the user's accept/dismiss.
+  const suggestedIds = clauses.filter((c) => c.status === 'pending').map((c) => c.id);
   const spansFor = (c: PromptClause): ParamSpan[] => paramsForClause(c, ownedByClause.get(c.id) ?? []);
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -192,6 +197,9 @@ export function PromptPane() {
     onParamHover: hoverParam,
     selectedNodeSet,
     onAccept: pending ? () => acceptProposal() : undefined,
+    suggested: !pending && c.status === 'pending',
+    onAcceptSuggested: () => acceptClauses([c.id]),
+    onDismissSuggested: () => dismissClauses([c.id]),
     onOpenMenu: (x: number, y: number) => setAltMenu({ clauseId: c.id, x, y, pending }),
     onEdit: () => setEditingId(c.id),
     onRemove: pending ? () => discardProposal() : () => removeClause(c.id),
@@ -239,6 +247,28 @@ export function PromptPane() {
         onClick={(e) => { if (e.target === e.currentTarget) selectNode(null); }}
         onMouseUp={onSpecMouseUp}
       >
+        {suggestedIds.length > 1 && (
+          <div
+            role="group"
+            aria-label="Suggested clauses"
+            className="mb-3 flex items-center gap-1.5 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600"
+          >
+            <Sparkles className="h-3 w-3 shrink-0 text-amber-500" />
+            <span className="min-w-0 flex-1">{suggestedIds.length} suggested clauses to review</span>
+            <button
+              onClick={() => dismissClauses(suggestedIds)}
+              className="rounded-md px-1.5 py-0.5 font-medium text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+            >
+              Dismiss all
+            </button>
+            <button
+              onClick={() => acceptClauses(suggestedIds)}
+              className="flex items-center gap-1 rounded-md bg-slate-900 px-1.5 py-0.5 font-semibold text-white transition-colors hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-1"
+            >
+              <CheckCheck className="h-3 w-3" /> Accept all
+            </button>
+          </div>
+        )}
         {displayClauses.length === 0 ? (
           <p className="px-1 py-6 text-center text-xs text-slate-500">
             Nothing here yet — describe what you want below, or pick an example.
@@ -499,6 +529,9 @@ function ClauseItem({
   spans,
   onHover,
   onAccept,
+  suggested,
+  onAcceptSuggested,
+  onDismissSuggested,
   onOpenMenu,
   onEdit,
   onRemove,
@@ -513,6 +546,9 @@ function ClauseItem({
   spans: ParamSpan[];
   onHover: (id: string | null) => void;
   onAccept?: () => void;
+  suggested?: boolean;
+  onAcceptSuggested?: () => void;
+  onDismissSuggested?: () => void;
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -549,11 +585,13 @@ function ClauseItem({
         }
         onEdit();
       }}
-      title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
+      title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : suggested ? 'Suggested from your drawing — accept to add it to the spec, or dismiss' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
         'group flex items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] transition-colors',
         pending
           ? 'cursor-pointer border-dashed border-amber-300 bg-amber-50/60 text-amber-900'
+          : suggested
+            ? 'cursor-pointer border-dashed border-slate-300 bg-slate-50 italic text-slate-500'
           : selected
             ? 'cursor-pointer border-slate-200 bg-slate-100 text-slate-900'
             : 'cursor-pointer border-transparent text-slate-600 hover:bg-slate-50',
@@ -563,7 +601,7 @@ function ClauseItem({
       <span
         className={cn(
           'mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full',
-          pending ? 'bg-amber-500' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
+          pending ? 'bg-amber-500' : suggested ? 'border border-dashed border-slate-400 bg-white' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
         )}
       />
       <ClauseInferenceIcon clauseId={clause.id} />
@@ -581,6 +619,8 @@ function ClauseItem({
           <span className="group-hover:hidden">Proposed</span>
           <span className="hidden group-hover:inline">Accept</span>
         </button>
+      ) : suggested ? (
+        <SuggestedActions onAccept={onAcceptSuggested} onDismiss={onDismissSuggested} />
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(); }}
@@ -603,6 +643,9 @@ function ClauseInline({
   spans,
   onHover,
   onAccept,
+  suggested,
+  onAcceptSuggested,
+  onDismissSuggested,
   onOpenMenu,
   onEdit,
   onRemove,
@@ -616,6 +659,9 @@ function ClauseInline({
   pending?: boolean;
   onHover: (id: string | null) => void;
   onAccept?: () => void;
+  suggested?: boolean;
+  onAcceptSuggested?: () => void;
+  onDismissSuggested?: () => void;
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -649,12 +695,14 @@ function ClauseInline({
         }
         onEdit();
       }}
-      title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
+      title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : suggested ? 'Suggested from your drawing — accept to add it to the spec, or dismiss' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
         'group -mx-0.5 cursor-pointer rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
         CATEGORY_META[clause.category].underline,
         pending
           ? 'bg-amber-50 text-amber-900 decoration-dashed'
+          : suggested
+            ? 'bg-slate-100 italic text-slate-500 decoration-dashed'
           : selected ? 'bg-slate-100 text-slate-900' : 'hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
@@ -662,7 +710,10 @@ function ClauseInline({
       {pending && (
         <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" aria-label="proposed" />
       )}
-      {!pending && inferred && (
+      {suggested && (
+        <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full border border-dashed border-slate-400 bg-white align-middle" aria-label="suggested" />
+      )}
+      {!pending && !suggested && inferred && (
         <span
           className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle ring-2 ring-amber-100"
           aria-label="inferred"
@@ -679,6 +730,8 @@ function ClauseInline({
         >
           Accept
         </button>
+      ) : suggested ? (
+        <SuggestedActions inline onAccept={onAcceptSuggested} onDismiss={onDismissSuggested} />
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(); }}
@@ -688,6 +741,52 @@ function ClauseInline({
           <X className="inline h-3 w-3 text-slate-300 hover:text-rose-500" />
         </button>
       )}{' '}
+    </span>
+  );
+}
+
+/**
+ * Accept / dismiss controls for a suggested (pending) clause. Always visible
+ * (not hover-only) so the review step is obvious and reachable by keyboard.
+ */
+function SuggestedActions({
+  onAccept,
+  onDismiss,
+  inline,
+}: {
+  onAccept?: () => void;
+  onDismiss?: () => void;
+  inline?: boolean;
+}) {
+  const stop = (fn?: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    fn?.();
+  };
+  return (
+    <span
+      onDoubleClick={(e) => e.stopPropagation()}
+      className={cn('not-italic no-underline', inline ? 'ml-1 inline-flex gap-0.5 align-middle' : 'flex shrink-0 items-center gap-0.5')}
+    >
+      {!inline && (
+        <span className="mr-1 text-[9px] font-semibold uppercase tracking-wide text-slate-400">Suggested</span>
+      )}
+      <button
+        onClick={stop(onAccept)}
+        title="Accept — add this clause to the spec"
+        aria-label="Accept suggested clause"
+        className="flex items-center gap-0.5 rounded-md border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold not-italic text-slate-700 shadow-sm transition-colors hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+      >
+        <Check className="h-3 w-3" />
+        {!inline && 'Accept'}
+      </button>
+      <button
+        onClick={stop(onDismiss)}
+        title="Dismiss — remove this suggestion (the shape stays)"
+        aria-label="Dismiss suggested clause"
+        className="grid h-[22px] w-[22px] place-items-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+      >
+        <X className="h-3 w-3" />
+      </button>
     </span>
   );
 }
