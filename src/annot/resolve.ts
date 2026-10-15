@@ -25,7 +25,8 @@
  *  - Distances to a node are measured to its nearest edge (0 when inside).
  */
 
-import type { Annotation, DemoPlanItem, ProposalConfidence } from '../ir/types';
+import type { Annotation, DemoIntent, DemoPlanItem, IRNode, ProposalConfidence } from '../ir/types';
+import { classifyGesture, type Gesture } from './gesture';
 
 /** A node's box in stage (canvas) coordinates, as measured from the DOM by the caller. */
 export interface NodeBox { x: number; y: number; w: number; h: number }
@@ -350,6 +351,242 @@ export function resolveTargets(a: Annotation, boxes: Record<string, NodeBox>): {
 }
 
 // ---------------------------------------------------------------------------
+// Scribble intent (gesture → delete / move / swap / fill)
+// ---------------------------------------------------------------------------
+
+/** The IR facts intent resolution needs about each node. */
+export type IntentNode = Pick<IRNode, 'id' | 'parentId' | 'order' | 'role' | 'layout'>;
+
+/** A recognised scribble gesture and what it resolves to on the scene. */
+export interface ScribbleIntent {
+  gesture: Gesture;
+  /** Null when the gesture is unclear or its targets could not be found. */
+  intent: DemoIntent | null;
+}
+
+/** Roles that can hold children (an arrow ending inside one moves INTO it). */
+const CONTAINER_ROLES = new Set<IRNode['role']>(['frame', 'container']);
+/** A cross/hatch "covers" a node when it spans at least this share of the node's area. */
+const COVER_SHARE = 0.5;
+/** An arrow end within this distance of a node edge still picks it up. */
+const GESTURE_END_PX = 12;
+/** A plain line whose ends both lie within this of one node strikes it out. */
+const STRIKE_END_PX = 16;
+
+function overlapArea(a: NodeBox, b: NodeBox): number {
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  return w > 0 && h > 0 ? w * h : 0;
+}
+
+/** Ids of `id` and every descendant. */
+function subtreeIds(nodes: IntentNode[], id: string): Set<string> {
+  const out = new Set([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const n of nodes) {
+      if (n.parentId && out.has(n.parentId) && !out.has(n.id)) { out.add(n.id); grew = true; }
+    }
+  }
+  return out;
+}
+
+function isAbsolute(n: IntentNode): boolean {
+  return n.layout?.x !== undefined || n.layout?.y !== undefined;
+}
+
+/**
+ * Recognise what a scribble means (see annot/gesture.ts) and resolve it
+ * against the scene: which node(s) a cross-out deletes, where an arrow moves
+ * its tail element, which two elements a double arrow swaps. Pure: the caller
+ * supplies measured boxes and the IR nodes.
+ */
+export function resolveScribbleIntent(
+  a: Annotation,
+  boxes: Record<string, NodeBox>,
+  nodes: IntentNode[],
+): ScribbleIntent {
+  const gesture = classifyGesture(scribbleStrokes(a));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  // Only nodes that are both in the IR and measured; the root frame is never
+  // deleted, moved or swapped by a gesture.
+  const entries = validEntries(boxes).filter(([id]) => byId.has(id));
+  const editable = entries.filter(([id]) => byId.get(id)!.parentId !== null);
+  const none: ScribbleIntent = { gesture, intent: null };
+
+  /** The smallest editable node at (or within `pad` px of) a point. */
+  const nodeAt = (p: Point, pad = GESTURE_END_PX, exclude?: Set<string>): string | null => {
+    const hit = nearestNodeToPoint(p, Object.fromEntries(editable.filter(([id]) => !exclude?.has(id))));
+    return hit && hit.distance <= pad ? hit.id : null;
+  };
+
+  const deleteUnder = (center: Point): ScribbleIntent => {
+    const g = gesture.bounds;
+    const covered = editable.filter(([, b]) => overlapArea(b, g) >= COVER_SHARE * boxArea(b));
+    // Keep the outermost covered nodes: crossing out a card deletes the card,
+    // not each of its children.
+    const outer = covered.filter(([id, b]) =>
+      !covered.some(([other, ob]) => other !== id && boxContains(ob, b) && !boxContains(b, ob)),
+    );
+    let ids = outer.sort((p, q) => p[1].y - q[1].y || p[1].x - q[1].x).map(([id]) => id).slice(0, MAX_TARGETS);
+    if (ids.length === 0) {
+      const at = nodeAt(center, 0);
+      ids = at ? [at] : [];
+    }
+    return ids.length ? { gesture, intent: { kind: 'delete', ids } } : none;
+  };
+
+  switch (gesture.kind) {
+    case 'cross':
+      return deleteUnder(gesture.center ?? boxCenter(gesture.bounds));
+    case 'hatch':
+      return deleteUnder(boxCenter(gesture.bounds));
+    case 'double-arrow': {
+      const one = gesture.from && nodeAt(gesture.from);
+      const two = gesture.to && nodeAt(gesture.to);
+      if (!one || !two || one === two) return none;
+      if (subtreeIds(nodes, one).has(two) || subtreeIds(nodes, two).has(one)) return none;
+      return { gesture, intent: { kind: 'swap', ids: [one, two] } };
+    }
+    case 'arrow': {
+      const from = gesture.from!;
+      const to = gesture.to!;
+      if (gesture.headless) {
+        // A bare line drawn across one element is a strike-through.
+        const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+        const struck = nodeAt(mid, 0);
+        const box = struck ? boxes[struck] : null;
+        if (struck && box && distanceToBox(from, box) <= STRIKE_END_PX && distanceToBox(to, box) <= STRIKE_END_PX) {
+          return { gesture, intent: { kind: 'delete', ids: [struck] } };
+        }
+      }
+      const moved = nodeAt(from);
+      if (!moved) return none;
+      return resolveMove(gesture, moved, to, boxes, nodes, entries, byId);
+    }
+    case 'fill': {
+      const { ids } = resolveScribble(a, boxes);
+      return ids.length ? { gesture, intent: { kind: 'fill', ids } } : none;
+    }
+    default:
+      return none;
+  }
+}
+
+/** Where an arrow drop point lands: inside a container, or before/after a sibling. */
+function resolveMove(
+  gesture: Gesture,
+  movedId: string,
+  to: Point,
+  boxes: Record<string, NodeBox>,
+  nodes: IntentNode[],
+  entries: Array<[string, NodeBox]>,
+  byId: Map<string, IntentNode>,
+): ScribbleIntent {
+  const none: ScribbleIntent = { gesture, intent: null };
+  const moved = byId.get(movedId)!;
+  const movedBox = boxes[movedId];
+  const banned = subtreeIds(nodes, movedId);
+  const at = entries
+    .filter(([id, b]) => !banned.has(id) && pointInBox(to, b))
+    .sort((p, q) => boxArea(p[1]) - boxArea(q[1]));
+  if (at.length === 0) return none;
+
+  const container = at.find(([id]) => CONTAINER_ROLES.has(byId.get(id)!.role));
+  const leaf = at.find(([id]) => !CONTAINER_ROLES.has(byId.get(id)!.role) && byId.get(id)!.parentId !== null);
+
+  /** Siblings under `parentId` (in order, without the moved node) and whether they flow in a row. */
+  const siblings = (parentId: string) => {
+    const kids = nodes
+      .filter((n) => n.parentId === parentId && n.id !== movedId)
+      .sort((p, q) => p.order - q.order);
+    const centers = kids.map((k) => boxes[k.id]).filter(Boolean).map(boxCenter);
+    const spanX = centers.length ? Math.max(...centers.map((c) => c.x)) - Math.min(...centers.map((c) => c.x)) : 0;
+    const spanY = centers.length ? Math.max(...centers.map((c) => c.y)) - Math.min(...centers.map((c) => c.y)) : 0;
+    return { kids, row: spanX > spanY };
+  };
+  const isBefore = (b: NodeBox, row: boolean) => (row ? boxCenter(b).x < to.x : boxCenter(b).y < to.y);
+
+  let toParentId: string;
+  let toIndex: number;
+  let nextToId: string | undefined;
+  let placement: 'before' | 'after' | 'inside';
+  if (leaf && (!container || boxContains(container[1], leaf[1]))) {
+    // Dropped on an element: take its place in its parent, before or after it.
+    const target = byId.get(leaf[0])!;
+    toParentId = target.parentId!;
+    const { kids, row } = siblings(toParentId);
+    const after = isBefore(leaf[1], row);
+    toIndex = kids.findIndex((k) => k.id === target.id) + (after ? 1 : 0);
+    nextToId = target.id;
+    placement = after ? 'after' : 'before';
+  } else if (container) {
+    // Dropped inside a container: insert among its children at the drop point.
+    toParentId = container[0];
+    const { kids, row } = siblings(toParentId);
+    toIndex = kids.filter((k) => boxes[k.id] && isBefore(boxes[k.id], row)).length;
+    placement = 'inside';
+  } else {
+    return none;
+  }
+
+  let layout: { x: number; y: number } | undefined;
+  if (isAbsolute(moved) && movedBox) {
+    // Absolutely positioned: keep it absolute, centred on the drop point and
+    // expressed relative to the (new) parent's box.
+    const parentBox = boxes[toParentId] ?? { x: 0, y: 0, w: 0, h: 0 };
+    layout = {
+      x: Math.round(to.x - parentBox.x - movedBox.w / 2),
+      y: Math.round(to.y - parentBox.y - movedBox.h / 2),
+    };
+  }
+  const intent: DemoIntent = { kind: 'move', id: movedId, toParentId, toIndex, placement };
+  if (nextToId) intent.nextToId = nextToId;
+  if (layout) intent.layout = layout;
+  return { gesture, intent };
+}
+
+/**
+ * A short chip label for an intent ("Delete", "Move into container", "Swap"),
+ * shown on the canvas and in the plan so the user sees what will happen.
+ */
+export function intentLabel(intent: DemoIntent | null, labelOf: (id: string) => string): string {
+  if (!intent) return 'Edit';
+  switch (intent.kind) {
+    case 'delete':
+      return intent.ids.length > 1 ? `Delete ${intent.ids.length}` : 'Delete';
+    case 'move':
+      return intent.placement === 'inside'
+        ? `Move into ${truncate(labelOf(intent.toParentId), 24)}`
+        : `Move ${intent.placement} ${truncate(labelOf(intent.nextToId ?? intent.toParentId), 24)}`;
+    case 'swap':
+      return 'Swap';
+    case 'fill':
+      return 'Fill';
+  }
+}
+
+/** The plain-English instruction for an intent (plan row text and model fallback). */
+function intentInstruction(intent: DemoIntent, labelOf: (id: string) => string): string {
+  const the = (id: string) => `the ${labelOf(id)}`;
+  switch (intent.kind) {
+    case 'delete':
+      return compose(`Delete the crossed-out element${intent.ids.length > 1 ? 's' : ''}.`, [targetSuffix(intent.ids.map(labelOf))]);
+    case 'move': {
+      const where = intent.placement === 'inside'
+        ? `into ${the(intent.toParentId)}`
+        : `${intent.placement} ${the(intent.nextToId ?? intent.toParentId)}`;
+      return `Move ${the(intent.id)} ${where}.`;
+    }
+    case 'swap':
+      return `Swap the positions of ${the(intent.ids[0])} and ${the(intent.ids[1])}.`;
+    case 'fill':
+      return compose('Fill the shaded element(s) with a solid background colour.', [targetSuffix(intent.ids.map(labelOf))]);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Instruction synthesis
 // ---------------------------------------------------------------------------
 
@@ -402,10 +639,9 @@ export function synthesizeInstruction(a: Annotation, targetLabels: string[]): st
       return text || compose('Revise this element.', targets);
     case 'arrow': {
       if (text) return compose(text, targets);
-      const base = labels.length >= 2
-        ? 'Move this element to where the arrow points.'
-        : 'Point this toward the indicated spot.';
-      return compose(base, targets);
+      // Labels are [head, tail]: the element at the tail is the one that moves.
+      if (labels.length >= 2) return `Move the ${labels[1]} to where the arrow points, next to the ${labels[0]}.`;
+      return compose('Point this toward the indicated spot.', targets);
     }
     case 'box':
       return text
@@ -421,6 +657,19 @@ export function synthesizeInstruction(a: Annotation, targetLabels: string[]): st
 // ---------------------------------------------------------------------------
 // Plan building
 // ---------------------------------------------------------------------------
+
+/** The nodes a plan row pins for an intent, most important first. */
+export function intentTargets(intent: DemoIntent): string[] {
+  switch (intent.kind) {
+    case 'delete':
+    case 'fill':
+      return intent.ids;
+    case 'move':
+      return [intent.id, intent.nextToId ?? intent.toParentId];
+    case 'swap':
+      return [...intent.ids];
+  }
+}
 
 const SOURCE_LABEL: Record<Annotation['kind'], string> = {
   comment: 'Note',
@@ -441,9 +690,26 @@ export function buildDemoPlan(
   boxes: Record<string, NodeBox>,
   labelOf: (nodeId: string) => string,
   nextId: () => string,
+  nodes: IntentNode[] = [],
 ): DemoPlanItem[] {
   const plan: DemoPlanItem[] = [];
   for (const a of annotations) {
+    // A recognised scribble gesture becomes a precise, deterministic step.
+    const recognised = a.kind === 'scribble' && !a.text?.trim() && nodes.length > 0
+      ? resolveScribbleIntent(a, boxes, nodes).intent
+      : null;
+    if (recognised) {
+      plan.push({
+        id: nextId(),
+        annotationId: a.id,
+        source: SOURCE_LABEL[a.kind],
+        targetNodeIds: intentTargets(recognised),
+        instruction: intentInstruction(recognised, labelOf),
+        confidence: 'high',
+        intent: recognised,
+      });
+      continue;
+    }
     const { ids, confidence } = resolveTargets(a, boxes);
     if (a.kind === 'comment' && (a.text ?? '').trim().length === 0 && ids.length === 0) continue;
 

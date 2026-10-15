@@ -574,6 +574,20 @@ export function currentSide(ir: IR | { nodes: readonly IRNode[] }, childId: stri
 const SPREAD = /^justify-(?:between|around|evenly|end)$/;
 
 /**
+ * A growing group (flex-1) packs its own items to one side with justify-start
+ * / justify-end. When the group changes ends, its packing must follow, or an
+ * "actions" group moved to the left would still hug the right edge.
+ */
+function alignGrowingGroup(tailwind: string, index: number, count: number): string {
+  const cls = classList(tailwind);
+  if (count < 2 || !(cls.includes('flex-1') || cls.includes('grow')) || index !== 0 && index !== count - 1) return tailwind;
+  const has = (u: string) => cls.includes(u);
+  if (index === 0 && has('justify-end')) return cls.map((u) => (u === 'justify-end' ? 'justify-start' : u)).join(' ');
+  if (index === count - 1 && has('justify-start')) return cls.map((u) => (u === 'justify-start' ? 'justify-end' : u)).join(' ');
+  return tailwind;
+}
+
+/**
  * Move a child to a side of its layout container. Flow layouts reorder the
  * siblings (IR order is the source of truth), adding an auto margin when the
  * container does not already spread its items; absolute layouts move x/y.
@@ -626,14 +640,14 @@ export function writePosition(ir: IR, childId: string, sideWord: string): IR {
       const o = newOrder.get(n.id);
       if (o === undefined) return n;
       if (n.id !== childId) {
-        const tw = spreads ? n.tailwind : stripAuto(n.tailwind);
+        const tw = alignGrowingGroup(spreads ? n.tailwind : stripAuto(n.tailwind), o, sibs.length);
         return o === n.order && tw === n.tailwind ? n : { ...n, order: o, tailwind: tw };
       }
       const kept = classList(n.tailwind).filter((u) => !AUTO.has(u));
       if (side === 'center' && sibs.length > 1) kept.push(autoCenter);
       else if (toEnd && !spreads) kept.push(autoEnd);
       else if (toStart && reversed && !spreads) kept.push(autoStart);
-      return { ...n, order: o, tailwind: kept.join(' ') };
+      return { ...n, order: o, tailwind: alignGrowingGroup(kept.join(' '), o, sibs.length) };
     }),
   };
 }

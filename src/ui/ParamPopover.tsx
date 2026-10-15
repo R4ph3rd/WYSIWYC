@@ -6,7 +6,7 @@ import {
 } from './primitives/fields';
 import { FontPicker } from './FontPicker';
 import { ICON_CHOICES, resolveIconName } from '@/ir/icons';
-import { ICON_COMPONENTS } from '@/render/iconRegistry';
+import { ICONS } from '@/render/icons';
 
 /**
  * A small anchored popover holding the right widget for a clicked parameter
@@ -248,7 +248,7 @@ function IconPicker({ value, onPick }: { value: string; onPick: (name: string) =
       />
       <div className="grid max-h-40 grid-cols-6 gap-1 overflow-auto">
         {shown.map(({ name, word }) => {
-          const Icon = ICON_COMPONENTS[name];
+          const Icon = ICONS[name];
           if (!Icon) return null;
           return (
             <button

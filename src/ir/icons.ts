@@ -1,15 +1,26 @@
 /**
  * Icon vocabulary: maps the words people use in a spec ("notification",
- * "calendar", "cog", "trash can") to a concrete lucide-react icon name that
- * the renderer can draw (see render/iconRegistry.tsx). Pure, no React.
+ * "calendar", "cog", "trash can") to a canonical kebab-case Lucide icon name
+ * ("bell", "calendar", "settings", "trash-2") that the renderer draws (see
+ * render/icons.tsx). Pure, no React.
  *
- * An icon node's `content` holds the icon name (e.g. "Bell"). Legacy content
- * (emoji glyphs, lower-case words, LLM-invented names like "CalendarCheck") is
- * resolved through the same table, so anything icon-ish renders a real icon.
+ * An icon node's `content` holds the icon name (e.g. "bell"). Other content —
+ * PascalCase lucide names ("Bell"), words ("notifications"), LLM-invented
+ * names ("CalendarCheck"), common emoji — resolves through the same tables,
+ * so anything icon-ish renders a real icon.
  */
 
-/** Canonical icon names the renderer can draw, each with its preferred prose word. */
-export const ICON_WORDS: Record<string, string> = {
+/** PascalCase lucide name → kebab-case key ("BarChart3" → "bar-chart", "Trash2" → "trash-2"). */
+export function toIconKey(name: string): string {
+  if (name === 'BarChart3') return 'bar-chart';
+  return name
+    .replace(/([a-z])([A-Z0-9])/g, '$1-$2')
+    .replace(/([0-9])([A-Za-z])/g, '$1-$2')
+    .toLowerCase();
+}
+
+/** Source table, PascalCase lucide names → preferred prose word. */
+const ICON_WORDS_SRC: Record<string, string> = {
   Bell: 'notification', Calendar: 'calendar', Search: 'search', Settings: 'settings',
   User: 'user', Users: 'users', Home: 'home', Mail: 'mail', MessageSquare: 'message',
   Heart: 'heart', Star: 'star', ShoppingCart: 'cart', ShoppingBag: 'bag', Plus: 'plus',
@@ -34,10 +45,17 @@ export const ICON_WORDS: Record<string, string> = {
   Building2: 'building', Map: 'map', Coffee: 'coffee', BookOpen: 'book', Receipt: 'receipt',
   Megaphone: 'megaphone', Store: 'store', Calculator: 'calculator', SlidersHorizontal: 'sliders',
   UserPlus: 'invite', ExternalLink: 'external link', Circle: 'circle', Shapes: 'shapes',
+  ArrowUpRight: 'arrow', ChevronsUpDown: 'selector', Fingerprint: 'fingerprint', HeartPulse: 'health',
+  LifeBuoy: 'support', ShieldCheck: 'secure',
 };
 
+/** Canonical icon keys the renderer can draw → preferred prose word. */
+export const ICON_WORDS: Record<string, string> = Object.fromEntries(
+  Object.entries(ICON_WORDS_SRC).map(([name, word]) => [toIconKey(name), word]),
+);
+
 /** Fallback when an icon noun is not in the vocabulary. */
-export const FALLBACK_ICON = 'Shapes';
+export const FALLBACK_ICON = 'shapes';
 
 /** Synonyms / plurals / near-words → canonical icon name. */
 const SYNONYMS: Record<string, string> = {
@@ -98,7 +116,9 @@ const SYNONYMS: Record<string, string> = {
   'line chart': 'LineChart', 'pie chart': 'PieChart', pie: 'PieChart',
   trend: 'TrendingUp', trending: 'TrendingUp', growth: 'TrendingUp', increase: 'TrendingUp', up: 'TrendingUp',
   decline: 'TrendingDown', decrease: 'TrendingDown', down: 'TrendingDown', drop: 'TrendingDown',
-  activity: 'Activity', pulse: 'Activity', health: 'Activity', heartbeat: 'Activity', monitor: 'Activity',
+  activity: 'Activity', pulse: 'Activity', health: 'HeartPulse', heartbeat: 'HeartPulse', monitor: 'Activity', uptime: 'HeartPulse',
+  fingerprint: 'Fingerprint', biometric: 'Fingerprint', 'touch id': 'Fingerprint', lifebuoy: 'LifeBuoy', 'life buoy': 'LifeBuoy', lifesaver: 'LifeBuoy',
+  'shield check': 'ShieldCheck', selector: 'ChevronsUpDown', 'up down': 'ChevronsUpDown',
   dashboard: 'LayoutDashboard', overview: 'LayoutDashboard',
   grid: 'LayoutGrid', apps: 'LayoutGrid', tiles: 'LayoutGrid', list: 'List', lists: 'List',
   sparkle: 'Sparkles', sparkles: 'Sparkles', magic: 'Sparkles', ai: 'Sparkles', spark: 'Sparkles',
@@ -150,7 +170,12 @@ const EMOJI: Record<string, string> = {
   '🧾': 'Receipt', '📣': 'Megaphone', '🏪': 'Store',
 };
 
-const CANONICAL_LOWER = new Map(Object.keys(ICON_WORDS).map((n) => [n.toLowerCase(), n]));
+// Any spelling of a canonical name, separators stripped ("barchart3", "trash2", "bell") → key.
+const CANONICAL_LOWER = new Map<string, string>([
+  ...Object.keys(ICON_WORDS_SRC).map((n): [string, string] => [n.toLowerCase(), toIconKey(n)]),
+  ...Object.keys(ICON_WORDS).map((k): [string, string] => [k.replace(/-/g, ''), k]),
+]);
+const SYN = (name: string | undefined) => (name ? toIconKey(name) : undefined);
 
 /** Split "CalendarCheck" / "calendar-check" / "lucide:calendar_check" into lower-case words. */
 function wordsOf(s: string): string[] {
@@ -178,21 +203,21 @@ export function resolveIconName(text: string | undefined | null): string | null 
   if (!text) return null;
   const t = text.trim();
   if (!t) return null;
-  if (EMOJI[t]) return EMOJI[t];
-  if (ICON_WORDS[t]) return t;
+  if (EMOJI[t]) return SYN(EMOJI[t])!;
   const lower = t.toLowerCase().replace(/^lucide[:\-/]/, '');
+  if (ICON_WORDS[lower]) return lower; // already a canonical key ("bell", "bar-chart")
   const canon = CANONICAL_LOWER.get(lower.replace(/[\s_-]+/g, ''));
   if (canon) return canon;
   const syn = SYNONYMS[lower] ?? SYNONYMS[lower.replace(/[_-]+/g, ' ')];
-  if (syn) return syn;
+  if (syn) return SYN(syn)!;
   const words = wordsOf(t);
   // Multi-word phrases first ("credit card", "magnifying glass"), then each word.
   for (let i = 0; i < words.length - 1; i++) {
     const pair = SYNONYMS[`${words[i]} ${words[i + 1]}`];
-    if (pair) return pair;
+    if (pair) return SYN(pair)!;
   }
   for (const w of words) {
-    const hit = SYNONYMS[w] ?? CANONICAL_LOWER.get(w) ?? (w.endsWith('s') ? SYNONYMS[w.slice(0, -1)] : undefined);
+    const hit = SYN(SYNONYMS[w]) ?? CANONICAL_LOWER.get(w) ?? (w.endsWith('s') ? SYN(SYNONYMS[w.slice(0, -1)]) : undefined);
     if (hit) return hit;
   }
   return null;
@@ -203,9 +228,10 @@ export function iconNameOrFallback(text: string | undefined | null): string {
   return resolveIconName(text) ?? FALLBACK_ICON;
 }
 
-/** The prose word for an icon name ("Bell" → "notification"). */
+/** The prose word for an icon name ("bell" → "notification"). */
 export function iconWord(name: string): string {
-  return ICON_WORDS[name] ?? (resolveIconName(name) ? ICON_WORDS[resolveIconName(name)!] : name.toLowerCase());
+  const key = resolveIconName(name);
+  return (key && ICON_WORDS[key]) || name.toLowerCase();
 }
 
 /** True when a word plausibly names an icon (drives the lexer's icon pins). */
@@ -221,4 +247,4 @@ export const ICON_CHOICES: { name: string; word: string }[] = [
   'Phone', 'Camera', 'Image', 'FileText', 'Folder', 'Link', 'Globe', 'Sun', 'Moon', 'Zap', 'Bookmark',
   'Tag', 'Gift', 'CreditCard', 'DollarSign', 'BarChart3', 'TrendingUp', 'Activity', 'LayoutDashboard', 'Sparkles',
   'Shield', 'LogOut', 'Send', 'RefreshCw', 'Inbox', 'Briefcase', 'Package', 'Lightbulb', 'Rocket', 'Building2',
-].map((name) => ({ name, word: ICON_WORDS[name] }));
+].map((n) => ({ name: toIconKey(n), word: ICON_WORDS[toIconKey(n)] }));

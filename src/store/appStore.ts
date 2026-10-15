@@ -3,6 +3,7 @@ import type {
   Annotation,
   ComponentInference,
   ComposerValue,
+  DemoIntent,
   DemoPlanItem,
   IR,
   IRNode,
@@ -36,6 +37,7 @@ import {
   nextComposerRefId,
 } from '@/lib/composer';
 import { applyPatch } from '@/ir/applyPatch';
+import { siblingsOf } from '@/ir/tree';
 import {
   applyManipulation,
   cloneNodes,
@@ -387,6 +389,13 @@ interface AppState {
   fillWireframePlaceholders: (nodeId: string) => void;
   /** Hide the suggestion (icon + canvas bubble) without changing the scene. */
   dismissInference: (nodeId: string) => void;
+  /** Confirm pending (auto-inferred) clauses: they become regular clauses. One undo step. */
+  acceptClauses: (ids: string[]) => void;
+  /**
+   * Reject pending clauses: removes them from the spec, unlinks the nodes they
+   * described and drops their canvas suggestion. Drawn shapes stay. One undo step.
+   */
+  dismissClauses: (ids: string[]) => void;
 
   // --- Annotations / prompt-by-demonstration ---
   addAnnotation: (a: Annotation) => void;
@@ -425,8 +434,72 @@ function patchedIds(patch: IRPatch): string[] {
   return patch.ops.map((op) => (op.type === 'add' ? op.node.id : op.id));
 }
 
+/**
+ * The deterministic IR ops that realise a recognised scribble intent (delete,
+ * move, swap) on the current IR; [] for intents that need the model (fill) or
+ * whose nodes are gone. A same-parent move is a plain reorder (or an x/y move
+ * for an absolutely positioned node); anything else is a reparent.
+ */
+function intentOps(intent: DemoIntent, ir: IR): ManipulationOp[] {
+  const byId = new Map(ir.nodes.map((n) => [n.id, n]));
+  switch (intent.kind) {
+    case 'delete': {
+      const ids = new Set(intent.ids.filter((id) => byId.get(id)?.parentId));
+      // Skip ids inside another deleted subtree: removing the ancestor covers them.
+      const covered = (id: string): boolean => {
+        for (let p = byId.get(id)?.parentId ?? null; p; p = byId.get(p)?.parentId ?? null) {
+          if (ids.has(p)) return true;
+        }
+        return false;
+      };
+      return [...ids].filter((id) => !covered(id)).map((id) => ({ kind: 'delete' as const, id }));
+    }
+    case 'move': {
+      const node = byId.get(intent.id);
+      if (!node || !byId.has(intent.toParentId)) return [];
+      if (node.parentId !== intent.toParentId) {
+        return [{
+          kind: 'reparent', id: node.id, fromParentId: node.parentId,
+          toParentId: intent.toParentId, toIndex: intent.toIndex, layout: intent.layout,
+        }];
+      }
+      if (intent.layout) {
+        return [{ kind: 'move', id: node.id, from: { ...node.layout }, to: { ...node.layout, ...intent.layout } }];
+      }
+      const from = siblingsOf(ir, node.id).findIndex((n) => n.id === node.id);
+      return from === intent.toIndex
+        ? []
+        : [{ kind: 'reorder', id: node.id, parentId: node.parentId, from, to: intent.toIndex }];
+    }
+    case 'swap':
+      return intent.ids.every((id) => byId.has(id)) ? [{ kind: 'swap', id: intent.ids[0], otherId: intent.ids[1] }] : [];
+    case 'fill':
+      return [];
+  }
+}
+
+/**
+ * Apply a user edit to a plan row. Rewording the instruction drops the
+ * recognised intent (the user's text now goes to the model). Re-picking the
+ * targets keeps a delete / fill intent pointed at the new nodes; a move or swap
+ * is only exact for the nodes it was resolved on, so it is dropped too.
+ */
+function withEditedIntent(item: DemoPlanItem, patch: Partial<DemoPlanItem>): DemoPlanItem {
+  const next = { ...item, ...patch };
+  const intent = item.intent;
+  if (!intent || 'intent' in patch) return next;
+  if (patch.instruction !== undefined && patch.instruction !== item.instruction) return { ...next, intent: undefined };
+  if (patch.targetNodeIds) {
+    if (intent.kind === 'delete' || intent.kind === 'fill') return { ...next, intent: { ...intent, ids: patch.targetNodeIds } };
+    return { ...next, intent: undefined };
+  }
+  return next;
+}
+
 function affectedIdsOf(op: ManipulationOp): string[] {
-  return op.kind === 'align' ? op.ids : [op.id];
+  if (op.kind === 'align') return op.ids;
+  if (op.kind === 'swap') return [op.id, op.otherId];
+  return [op.id];
 }
 
 /** Frame nodes get drawn-shape children; falls back to root-level. */
@@ -967,7 +1040,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set((s) => ({
         prompt: {
           clauses: s.prompt.clauses.map((c) =>
-            c.id === clauseId ? { ...c, text, origin: 'explicit' } : c,
+            c.id === clauseId ? { ...c, text, origin: 'explicit', status: undefined } : c,
           ),
         },
       }));
@@ -1087,7 +1160,8 @@ export const useAppStore = create<AppState>((set, get) => {
     editClause: (id, text) => {
       if (applyClauseTextDeterministically(id, text)) return;
       set((s) => ({
-        prompt: { clauses: s.prompt.clauses.map((c) => (c.id === id ? { ...c, text } : c)) },
+        // Editing a pending clause's wording also confirms it.
+        prompt: { clauses: s.prompt.clauses.map((c) => (c.id === id ? { ...c, text, status: undefined } : c)) },
       }));
       syncClauseIcons([id]);
       scheduleCallA([id]);
@@ -1378,6 +1452,8 @@ export const useAppStore = create<AppState>((set, get) => {
         category: 'component',
         origin: 'inferred',
         alternatives: candidates.slice(1).map((c) => c.label),
+        // Shown as a suggestion until the user accepts it (or picks a component).
+        status: 'pending',
       };
       set((st) => ({
         // No history push here: createShape already snapshotted the pre-draw
@@ -1431,7 +1507,10 @@ export const useAppStore = create<AppState>((set, get) => {
           ir: { ...st.ir, nodes: [...others, ...children] },
           prompt: {
             clauses: st.prompt.clauses.map((c) =>
-              c.id === inf.clauseId ? { ...c, text: label, origin: 'inferred' as const, alternatives } : c,
+              // Picking a component is an explicit confirmation of its clause.
+              c.id === inf.clauseId
+                ? { ...c, text: label, origin: 'inferred' as const, alternatives, status: undefined }
+                : c,
             ),
           },
           inferences: {
@@ -1483,6 +1562,46 @@ export const useAppStore = create<AppState>((set, get) => {
         return { inferences: { ...st.inferences, [nodeId]: { ...inf, status: 'dismissed' } } };
       }),
 
+    acceptClauses: (ids) =>
+      set((st) => {
+        const want = new Set(ids);
+        if (!st.prompt.clauses.some((c) => want.has(c.id) && c.status === 'pending')) return {};
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          prompt: {
+            clauses: st.prompt.clauses.map((c) =>
+              want.has(c.id) && c.status === 'pending' ? { ...c, status: undefined } : c,
+            ),
+          },
+          recentIds: ids,
+        };
+      }),
+
+    dismissClauses: (ids) =>
+      set((st) => {
+        const gone = new Set(
+          st.prompt.clauses.filter((c) => ids.includes(c.id) && c.status === 'pending').map((c) => c.id),
+        );
+        if (gone.size === 0) return {};
+        const inferences = { ...st.inferences };
+        for (const inf of Object.values(st.inferences))
+          if (gone.has(inf.clauseId)) inferences[inf.nodeId] = { ...inf, status: 'dismissed' };
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          prompt: { clauses: st.prompt.clauses.filter((c) => !gone.has(c.id)) },
+          ir: {
+            ...st.ir,
+            nodes: st.ir.nodes.map((n) =>
+              n.provenance.promptClauseId && gone.has(n.provenance.promptClauseId)
+                ? { ...n, provenance: { ...n.provenance, promptClauseId: null } }
+                : n,
+            ),
+          },
+          inferences,
+          hoveredClauseId: st.hoveredClauseId && gone.has(st.hoveredClauseId) ? null : st.hoveredClauseId,
+        };
+      }),
+
     // --- Annotations / prompt-by-demonstration ---
 
     addAnnotation: (a) => set((st) => ({ annotations: [...st.annotations, a] })),
@@ -1501,13 +1620,15 @@ export const useAppStore = create<AppState>((set, get) => {
         return txt ? `${n.role} "${txt.slice(0, 24)}"` : n.role;
       };
       let seq = 0;
-      const plan = buildDemoPlanPure(s.annotations, boxes, labelOf, () => `plan_${++seq}`);
+      const plan = buildDemoPlanPure(s.annotations, boxes, labelOf, () => `plan_${++seq}`, s.ir.nodes);
       set({ demoPlan: plan });
     },
 
     updateDemoPlanItem: (id, patch) =>
       set((st) => ({
-        demoPlan: st.demoPlan ? st.demoPlan.map((p) => (p.id === id ? { ...p, ...patch } : p)) : st.demoPlan,
+        demoPlan: st.demoPlan
+          ? st.demoPlan.map((p) => (p.id === id ? withEditedIntent(p, patch) : p))
+          : st.demoPlan,
       })),
     removeDemoPlanItem: (id) =>
       set((st) => ({ demoPlan: st.demoPlan ? st.demoPlan.filter((p) => p.id !== id) : st.demoPlan })),
@@ -1520,29 +1641,57 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ demoPlan: null });
         return;
       }
+      // Recognised gestures (cross-out, arrow, swap) are applied right here on
+      // the IR, one undoable manipulation each, and their markup is cleared so
+      // a later retry of the model part can never re-apply them.
+      const local = plan.filter((p) => p.intent && intentOps(p.intent, get().ir).length > 0);
+      for (const item of local) {
+        for (const op of intentOps(item.intent!, get().ir)) get().manipulate(op);
+      }
+      const applied = new Set(local.map((p) => p.annotationId));
+      const remote = plan.filter((p) => !local.includes(p));
+      if (remote.length === 0) {
+        set({ demoPlan: null, annotations: [] });
+        return;
+      }
+      if (applied.size > 0) {
+        set((st) => ({ annotations: st.annotations.filter((a) => !applied.has(a.id)) }));
+      }
+
       const labelOf = (id: string) => {
         const n = s.ir.nodes.find((x) => x.id === id);
         if (!n) return id;
         const t = n.content?.trim();
         return t ? `the ${n.role} "${t.slice(0, 24)}"` : `the ${n.role}`;
       };
-      const lines = plan.map((p) => {
+      let refSeq = 0;
+      const refs: PromptRef[] = [];
+      const lines = remote.map((p) => {
         const tgt = p.targetNodeIds.length
           ? ` (${p.targetNodeIds.map(labelOf).join(', ')})`
           : '';
-        return `- ${p.instruction}${tgt}`;
+        // An arrow's head is a concrete destination: hand it over as a location
+        // reference instead of leaving the model to guess "where it points".
+        const a = s.annotations.find((x) => x.id === p.annotationId);
+        const head = a?.kind === 'arrow' && a.points && a.points.length > 1 ? a.points[a.points.length - 1] : null;
+        let where = '';
+        if (head) {
+          const refId = `ref_${++refSeq}`;
+          refs.push({
+            kind: 'location', refId, x: head.x, y: head.y, label: 'arrow head',
+            nearNodeId: p.targetNodeIds[0],
+          });
+          where = ` [arrow points at «${refId}»]`;
+        }
+        return `- ${p.instruction}${tgt}${where}`;
       });
       const message = `Apply these changes I marked up on the canvas:\n${lines.join('\n')}`;
-      const scopeNodeIds = Array.from(new Set(plan.flatMap((p) => p.targetNodeIds)));
-      let refSeq = 0;
-      const refs: PromptRef[] = plan.flatMap((p) =>
-        (p.images ?? []).map((dataUrl) => ({
-          kind: 'image' as const,
-          refId: `ref_${++refSeq}`,
-          label: 'comment image',
-          dataUrl,
-        })),
-      );
+      const scopeNodeIds = Array.from(new Set(remote.flatMap((p) => p.targetNodeIds)));
+      for (const p of remote) {
+        for (const dataUrl of p.images ?? []) {
+          refs.push({ kind: 'image', refId: `ref_${++refSeq}`, label: 'comment image', dataUrl });
+        }
+      }
       // Close the plan and mark busy, but KEEP the annotations until the compose
       // actually succeeds, so markup (and dropped images) isn't lost if the call
       // fails (not connected, rate-limited, network). demoBusy hides the re-send

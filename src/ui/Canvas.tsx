@@ -11,10 +11,12 @@ import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
 import { InferenceOverlay } from './InferenceOverlay';
+import { ANNOTATION_INK } from './tokens';
 import { AnnotationLayer } from './AnnotationLayer';
 import { ModificationPlan } from './ModificationPlan';
 import { useStudyStore } from '@/store/studyStore';
 import { scribbleStrokes } from '@/annot/resolve';
+import { strokeJoinsScribble } from '@/annot/gesture';
 
 type Bounds = { x: number; y: number; w: number; h: number };
 
@@ -581,7 +583,9 @@ export function Canvas() {
         const current = scribbleIdRef.current
           ? useAppStore.getState().annotations.find((a) => a.id === scribbleIdRef.current)
           : undefined;
-        if (current) {
+        // A stroke far from the session's scribble starts a new gesture (so two
+        // separate cross-outs stay two annotations); nearby strokes merge.
+        if (current && strokeJoinsScribble(scribbleStrokes(current), d.points)) {
           updateAnnotation(current.id, { strokes: [...scribbleStrokes(current), d.points], points: undefined });
         } else {
           const id = newAnnotId();
@@ -806,7 +810,19 @@ export function Canvas() {
       <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {generating && !isEmpty && (
-        <div className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-600 shadow">
+        // In-flight prompt call: filled in the annotation ink with a soft pulse
+        // ring so it reads clearly against any canvas content.
+        <div
+          role="status"
+          aria-live="polite"
+          className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold text-white shadow-md"
+          style={{ backgroundColor: ANNOTATION_INK, boxShadow: `0 0 0 3px ${ANNOTATION_INK}33, 0 4px 12px ${ANNOTATION_INK}55` }}
+        >
+          <span
+            aria-hidden
+            className="absolute inset-0 -z-10 animate-ping rounded-full opacity-30 motion-reduce:animate-none"
+            style={{ backgroundColor: ANNOTATION_INK, animationDuration: '1.6s' }}
+          />
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Composing…
         </div>
       )}

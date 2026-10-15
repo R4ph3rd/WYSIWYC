@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Send, X, MapPin, Pencil, Check, AlertTriangle } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { DemoPlanItem } from '@/ir/types';
+import { intentLabel } from '@/annot/resolve';
 
 type Box = { x: number; y: number; w: number; h: number };
 
@@ -156,6 +157,18 @@ function PlanRow({
         <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
           {item.source}
         </span>
+        {item.intent && (
+          <span
+            data-intent={item.intent.kind}
+            className={
+              'rounded-full px-1.5 py-0.5 text-[9px] font-semibold ' +
+              (item.intent.kind === 'delete' ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-600')
+            }
+            title={item.intent.kind === 'fill' ? 'Recognised gesture: sent to the model' : 'Recognised gesture: applied directly, without a model call'}
+          >
+            {intentLabel(item.intent, labelOf)}
+          </span>
+        )}
         <button
           onClick={onPick}
           className={

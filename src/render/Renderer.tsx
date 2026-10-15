@@ -1,8 +1,7 @@
 import { createElement, type CSSProperties, type ReactNode } from 'react';
 import type { IR, IRNode, NodeStyle } from '@/ir/types';
 import { buildTree, type IRTreeNode } from '@/ir/tree';
-import { iconNameOrFallback, isGlyph } from '@/ir/icons';
-import { ICON_COMPONENTS } from './iconRegistry';
+import { renderNamedIcon } from './icons';
 
 export interface RendererProps {
   ir: IR;
@@ -160,26 +159,6 @@ function renderPathShape(
   );
 }
 
-/**
- * An icon node's content names its glyph: a lucide icon name ("Bell"), any word
- * the icon vocabulary knows ("notification", "calendar"), or a literal emoji.
- * Names/words render as a real SVG icon (unknown words fall back to a generic
- * glyph rather than printing the word); emoji and empty placeholders render as is.
- */
-function iconChild(node: IRNode): ReactNode {
-  const content = node.content?.trim();
-  if (!content || isGlyph(content)) return node.content ?? null;
-  const name = iconNameOrFallback(content);
-  const Icon = ICON_COMPONENTS[name] ?? ICON_COMPONENTS.Shapes;
-  const dataAttrs = { 'data-icon': name };
-  return createElement(Icon, {
-    ...dataAttrs,
-    'aria-label': content,
-    style: { width: '1.15em', height: '1.15em', flexShrink: 0 },
-    strokeWidth: 2,
-  });
-}
-
 function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
   const { node } = tree;
   const selected = props.selectedIds
@@ -192,9 +171,7 @@ function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
 
   const children: ReactNode = tree.children.length
     ? tree.children.map((c) => renderNode(c, props))
-    : node.role === 'icon'
-      ? iconChild(node)
-      : node.content ?? null;
+    : (node.role === 'icon' ? renderNamedIcon(node.content) : null) ?? node.content ?? null;
 
   const className = [
     node.tailwind,
