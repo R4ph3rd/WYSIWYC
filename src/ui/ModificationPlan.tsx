@@ -4,6 +4,7 @@ import { Send, X, MapPin, Pencil, Check, AlertTriangle } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { DemoPlanItem } from '@/ir/types';
 import { intentLabel } from '@/annot/resolve';
+import { AI, AI_ACCENT, AI_ACCENT_FILL } from './tokens';
 
 type Box = { x: number; y: number; w: number; h: number };
 
@@ -84,7 +85,7 @@ export function ModificationPlan({ stageRef }: { stageRef: React.RefObject<HTMLD
         <div className="mb-2 flex items-center gap-2">
           <span className="text-xs font-semibold tracking-tight text-slate-800">Review changes before applying</span>
           {uncertain && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+            <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 px-1.5 py-0.5 text-[10px] font-medium text-orange-700">
               <AlertTriangle className="h-3 w-3" /> verify targets
             </span>
           )}
@@ -130,7 +131,7 @@ export function ModificationPlan({ stageRef }: { stageRef: React.RefObject<HTMLD
           <button
             onClick={() => { setPicking(null); confirmDemoPlan(); }}
             disabled={demoPlan.length === 0}
-            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 disabled:opacity-40"
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition-colors disabled:opacity-40 ${AI.fill} ${AI.focus}`}
           >
             <Send className="h-3.5 w-3.5" /> Apply changes
           </button>
@@ -152,7 +153,7 @@ function PlanRow({
 }) {
   const low = item.confidence !== 'high' || item.targetNodeIds.length === 0;
   return (
-    <div className={'rounded-xl border p-2 ' + (low ? 'border-amber-200 bg-amber-50/40' : 'border-slate-200')}>
+    <div className={'rounded-xl border p-2 ' + (low ? 'border-orange-200 bg-orange-50/40' : 'border-slate-200')}>
       <div className="mb-1 flex items-center gap-1.5">
         <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
           {item.source}
@@ -162,7 +163,7 @@ function PlanRow({
             data-intent={item.intent.kind}
             className={
               'rounded-full px-1.5 py-0.5 text-[9px] font-semibold ' +
-              (item.intent.kind === 'delete' ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-600')
+              (item.intent.kind === 'delete' ? 'bg-rose-50 text-rose-600' : 'bg-amber-50 text-amber-800 ring-1 ring-amber-300')
             }
             title={item.intent.kind === 'fill' ? 'Recognised gesture: sent to the model' : 'Recognised gesture: applied directly, without a model call'}
           >
@@ -173,7 +174,7 @@ function PlanRow({
           onClick={onPick}
           className={
             'flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium transition-colors ' +
-            (picking ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')
+            (picking ? 'bg-amber-400 text-amber-950' : 'bg-slate-100 text-slate-600 hover:bg-slate-200')
           }
           title="Click elements on the canvas to set the target"
         >
@@ -202,7 +203,7 @@ function PlanRow({
           value={item.instruction}
           onChange={(e) => onText(e.target.value)}
           rows={2}
-          className="w-full resize-none rounded-md border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-50"
+          className={`w-full resize-none rounded-md border border-slate-200 px-2 py-1 text-[12px] outline-none ${AI.fieldFocus}`}
         />
       </div>
       {(item.images?.length ?? 0) > 0 && (
@@ -237,10 +238,10 @@ function StagePins({
         return (
           <div key={id} className="pointer-events-none absolute z-30" style={{ left: b.x, top: b.y, width: b.w, height: b.h }}>
             <div
-              className={'absolute inset-0 rounded ' + (hot ? 'outline outline-2 outline-indigo-500' : 'outline-dashed outline-2 outline-indigo-400/70')}
+              className={'absolute inset-0 rounded ' + (hot ? 'outline outline-2 outline-amber-500' : 'outline-dashed outline-2 outline-amber-400/80')}
               style={{ outlineOffset: 2 }}
             />
-            <MapPin className={'absolute -left-1 -top-5 h-4 w-4 ' + (hot ? 'text-indigo-600' : 'text-indigo-400')} fill="currentColor" />
+            <MapPin className="absolute -left-1 -top-5 h-4 w-4 text-amber-800 drop-shadow-sm" fill={hot ? AI_ACCENT : AI_ACCENT_FILL} />
           </div>
         );
       })}

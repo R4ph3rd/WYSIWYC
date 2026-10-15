@@ -11,7 +11,7 @@ import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
 import { InferenceOverlay } from './InferenceOverlay';
-import { ANNOTATION_INK } from './tokens';
+import { AI, ANNOTATION_INK } from './tokens';
 import { AnnotationLayer } from './AnnotationLayer';
 import { ModificationPlan } from './ModificationPlan';
 import { useStudyStore } from '@/store/studyStore';
@@ -786,7 +786,7 @@ export function Canvas() {
       {!chatOnly && annotations.length > 0 && !demoPlan && !demoBusy && (
         <button
           onClick={() => buildDemoPlan(allNodeBoxes())}
-          className="absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-lg transition-colors hover:bg-indigo-500"
+          className={`absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition-colors ${AI.fill} ${AI.focus}`}
         >
           <Send className="h-3.5 w-3.5" />
           Apply {annotations.length} annotation{annotations.length === 1 ? '' : 's'}
@@ -810,19 +810,13 @@ export function Canvas() {
       <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {generating && !isEmpty && (
-        // In-flight prompt call: filled in the annotation ink with a soft pulse
-        // ring so it reads clearly against any canvas content.
+        // In-flight prompt call: amber AI-accent pill with the shared halo
+        // (same as the prompt send button while busy).
         <div
           role="status"
           aria-live="polite"
-          className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold text-white shadow-md"
-          style={{ backgroundColor: ANNOTATION_INK, boxShadow: `0 0 0 3px ${ANNOTATION_INK}33, 0 4px 12px ${ANNOTATION_INK}55` }}
+          className="wysiwyc-ai-halo absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
         >
-          <span
-            aria-hidden
-            className="absolute inset-0 -z-10 animate-ping rounded-full opacity-30 motion-reduce:animate-none"
-            style={{ backgroundColor: ANNOTATION_INK, animationDuration: '1.6s' }}
-          />
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Composing…
         </div>
       )}
@@ -932,19 +926,19 @@ export function Canvas() {
                   y={Math.min(annotDraft.startY, annotDraft.curY)}
                   width={Math.abs(annotDraft.curX - annotDraft.startX)}
                   height={Math.abs(annotDraft.curY - annotDraft.startY)}
-                  fill="#6366f1" fillOpacity={0.06} stroke="#6366f1" strokeWidth={2} strokeDasharray="6 4" rx={6}
+                  fill={ANNOTATION_INK} fillOpacity={0.08} stroke={ANNOTATION_INK} strokeWidth={2} strokeDasharray="6 4" rx={6}
                 />
               )}
               {annotDraft.kind === 'arrow' && (
                 <line
                   x1={annotDraft.startX} y1={annotDraft.startY} x2={annotDraft.curX} y2={annotDraft.curY}
-                  stroke="#6366f1" strokeWidth={2.5} strokeLinecap="round"
+                  stroke={ANNOTATION_INK} strokeWidth={2.5} strokeLinecap="round"
                 />
               )}
               {annotDraft.kind === 'scribble' && (
                 <polyline
                   points={annotDraft.points.map((p) => `${p.x},${p.y}`).join(' ')}
-                  fill="none" stroke="#6366f1" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"
+                  fill="none" stroke={ANNOTATION_INK} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"
                 />
               )}
             </svg>

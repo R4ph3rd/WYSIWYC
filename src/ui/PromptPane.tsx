@@ -10,6 +10,7 @@ import { AlternativesMenu } from './AlternativesMenu';
 import { ParamPopover } from './ParamPopover';
 import { DiffRibbon } from './DiffRibbon';
 import { VersionRail } from './VersionRail';
+import { AI } from './tokens';
 
 /**
  * The prompt is a LIVING SPEC with two views the user can switch between:
@@ -257,19 +258,19 @@ export function PromptPane() {
           <div
             role="group"
             aria-label="Suggested clauses"
-            className="mb-3 flex items-center gap-1.5 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-600"
+            className={cn('mb-3 flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] text-amber-900', AI.tint)}
           >
             <Sparkles className="h-3 w-3 shrink-0 text-amber-500" />
             <span className="min-w-0 flex-1">{suggestedIds.length} suggested clauses to review</span>
             <button
               onClick={() => dismissClauses(suggestedIds)}
-              className="rounded-md px-1.5 py-0.5 font-medium text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+              className="rounded-md px-1.5 py-0.5 font-medium text-amber-900/70 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
             >
               Dismiss all
             </button>
             <button
               onClick={() => acceptClauses(suggestedIds)}
-              className="flex items-center gap-1 rounded-md bg-slate-900 px-1.5 py-0.5 font-semibold text-white transition-colors hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-1"
+              className={cn('flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold shadow-sm transition-colors', AI.fill, AI.focus)}
             >
               <CheckCheck className="h-3 w-3" /> Accept all
             </button>
@@ -596,9 +597,9 @@ function ClauseItem({
       className={cn(
         'group flex items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] transition-colors',
         pending
-          ? 'cursor-pointer border-dashed border-amber-300 bg-amber-50/60 text-amber-900'
+          ? 'cursor-pointer border-amber-300 bg-amber-100/70 text-amber-950'
           : suggested
-            ? 'cursor-pointer border-dashed border-slate-300 bg-slate-50 italic text-slate-500'
+            ? cn('cursor-pointer italic text-slate-700', AI.tint)
           : selected
             ? 'cursor-pointer border-slate-200 bg-slate-100 text-slate-900'
             : 'cursor-pointer border-transparent text-slate-600 hover:bg-slate-50',
@@ -608,7 +609,7 @@ function ClauseItem({
       <span
         className={cn(
           'mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full',
-          pending ? 'bg-amber-500' : suggested ? 'border border-dashed border-slate-400 bg-white' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
+          pending ? 'bg-amber-500' : suggested ? 'border border-dashed border-amber-500 bg-white' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
         )}
       />
       <ClauseInferenceIcon clauseId={clause.id} />
@@ -621,7 +622,7 @@ function ClauseItem({
         <button
           onClick={(e) => { e.stopPropagation(); onAccept?.(); }}
           title="Accept this change"
-          className="mt-px flex w-16 shrink-0 items-center justify-center rounded-full bg-amber-100 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 transition-colors group-hover:bg-amber-400 group-hover:text-amber-950"
+          className={cn('mt-px flex w-16 shrink-0 items-center justify-center rounded-full bg-amber-400 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-950 transition-colors group-hover:bg-amber-500', AI.focus)}
         >
           <span className="group-hover:hidden">Proposed</span>
           <span className="hidden group-hover:inline">Accept</span>
@@ -707,9 +708,9 @@ function ClauseInline({
         'group -mx-0.5 cursor-pointer rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
         CATEGORY_META[clause.category].underline,
         pending
-          ? 'bg-amber-50 text-amber-900 decoration-dashed'
+          ? 'bg-amber-100 text-amber-950'
           : suggested
-            ? 'bg-slate-100 italic text-slate-500 decoration-dashed'
+            ? 'bg-amber-500/10 italic text-slate-700 decoration-dashed'
           : selected ? 'bg-slate-100 text-slate-900' : 'hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
@@ -718,7 +719,7 @@ function ClauseInline({
         <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" aria-label="proposed" />
       )}
       {suggested && (
-        <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full border border-dashed border-slate-400 bg-white align-middle" aria-label="suggested" />
+        <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full border border-dashed border-amber-500 bg-white align-middle" aria-label="suggested" />
       )}
       {!pending && !suggested && inferred && (
         <span
@@ -775,13 +776,18 @@ function SuggestedActions({
       className={cn('not-italic no-underline', inline ? 'ml-1 inline-flex gap-0.5 align-middle' : 'flex shrink-0 items-center gap-0.5')}
     >
       {!inline && (
-        <span className="mr-1 text-[9px] font-semibold uppercase tracking-wide text-slate-400">Suggested</span>
+        <span className="mr-1 text-[9px] font-semibold uppercase tracking-wide text-amber-800">Suggested</span>
       )}
       <button
         onClick={stop(onAccept)}
         title="Accept — add this clause to the spec"
         aria-label="Accept suggested clause"
-        className="flex items-center gap-0.5 rounded-md border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold not-italic text-slate-700 shadow-sm transition-colors hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+        className={cn(
+          'flex items-center gap-0.5 rounded-md font-semibold not-italic shadow-sm transition-colors',
+          inline ? 'h-[18px] px-1 text-[10px]' : 'px-1.5 py-0.5 text-[10px]',
+          AI.fill,
+          AI.focus,
+        )}
       >
         <Check className="h-3 w-3" />
         {!inline && 'Accept'}
@@ -790,7 +796,7 @@ function SuggestedActions({
         onClick={stop(onDismiss)}
         title="Dismiss — remove this suggestion (the shape stays)"
         aria-label="Dismiss suggested clause"
-        className="grid h-[22px] w-[22px] place-items-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+        className="grid h-[22px] w-[22px] place-items-center rounded-md text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
       >
         <X className="h-3 w-3" />
       </button>

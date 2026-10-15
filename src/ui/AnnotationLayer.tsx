@@ -3,7 +3,7 @@ import { MessageSquare, Trash2, X, ImagePlus } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { Annotation, IR } from '@/ir/types';
 import { intentLabel, resolveScribbleIntent, scribbleStrokes, type NodeBox } from '@/annot/resolve';
-import { ANNOTATION_INK } from './tokens';
+import { AI, ANNOTATION_INK } from './tokens';
 
 /**
  * Annotation layer (prompt-by-demonstration, part B). Renders the rough markup
@@ -13,7 +13,7 @@ import { ANNOTATION_INK } from './tokens';
  * on mouse-out. Coordinates are stage-relative so the markup scrolls with the
  * canvas. The drawings themselves are created in Canvas's mouse handlers.
  */
-const INK = ANNOTATION_INK; // indigo-500 — reads as "markup", distinct from UI + selection
+const INK = ANNOTATION_INK; // amber-500 AI accent — reads as "markup for the model", distinct from selection
 
 export function AnnotationLayer({ stageRef }: { stageRef: React.RefObject<HTMLDivElement | null> }) {
   const annotations = useAppStore((s) => s.annotations);
@@ -61,7 +61,7 @@ export function AnnotationLayer({ stageRef }: { stageRef: React.RefObject<HTMLDi
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); removeAnnotation(a.id); }}
             title="Remove annotation"
-            className="absolute z-30 flex h-4 w-4 items-center justify-center rounded-full border border-indigo-200 bg-white text-indigo-500 shadow-sm hover:bg-indigo-50"
+            className="absolute z-30 flex h-4 w-4 items-center justify-center rounded-full border border-amber-300 bg-white text-amber-700 shadow-sm hover:bg-amber-50"
             style={{ left: b.x - 8, top: b.y - 8 }}
           >
             <X className="h-2.5 w-2.5" />
@@ -108,7 +108,7 @@ function AnnotationShape({ a }: { a: Annotation }) {
     return (
       <rect
         x={a.rect.x} y={a.rect.y} width={a.rect.w} height={a.rect.h}
-        fill={INK} fillOpacity={0.06} stroke={INK} strokeWidth={2}
+        fill={INK} fillOpacity={0.08} stroke={INK} strokeWidth={2}
         strokeDasharray="6 4" rx={6}
       />
     );
@@ -169,7 +169,7 @@ function IntentChip({ a, at, boxes, ir }: { a: Annotation; at: { x: number; y: n
     ? 'border-slate-200 bg-white text-slate-500'
     : intent.kind === 'delete'
       ? 'border-rose-200 bg-rose-50 text-rose-600'
-      : 'border-indigo-200 bg-indigo-50 text-indigo-600';
+      : AI.chip;
   return (
     <span
       data-intent={intent?.kind ?? 'none'}
@@ -259,7 +259,7 @@ function CommentBubble({
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => { e.stopPropagation(); onOpen(); }}
         title={a.text || 'Comment'}
-        className="absolute z-30 flex h-6 items-center gap-1 rounded-full rounded-bl-none border border-indigo-300 bg-indigo-500 px-1.5 text-white shadow-md transition-transform hover:scale-105"
+        className="absolute z-30 flex h-6 items-center gap-1 rounded-full rounded-bl-none border border-amber-500 bg-amber-400 px-1.5 text-amber-950 shadow-md transition-transform hover:scale-105"
         style={{ left: anchor.x, top: anchor.y - 24 }}
       >
         <MessageSquare className="h-3 w-3" />
@@ -283,11 +283,11 @@ function CommentBubble({
       onDrop={(e) => { e.preventDefault(); setDragOver(false); addImages(e.dataTransfer.files); }}
       className={
         'absolute z-40 w-56 rounded-xl border bg-white p-2 shadow-xl ring-1 ring-black/5 ' +
-        (dragOver ? 'border-indigo-400' : 'border-indigo-200')
+        (dragOver ? 'border-amber-400' : 'border-amber-200')
       }
       style={{ left: cardLeft, top: cardTop }}
     >
-      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-indigo-500">
+      <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-amber-700">
         <MessageSquare className="h-3 w-3" /> Note
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(); }}
@@ -305,7 +305,7 @@ function CommentBubble({
         onBlur={() => { focused.current = false; }}
         placeholder="Describe the change… (drop images for context)"
         rows={2}
-        className="w-full resize-none rounded-md border border-slate-200 px-2 py-1 text-[12px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-50"
+        className={`w-full resize-none rounded-md border border-slate-200 px-2 py-1 text-[12px] outline-none ${AI.fieldFocus}`}
       />
       {(a.images?.length ?? 0) > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
@@ -323,7 +323,7 @@ function CommentBubble({
           ))}
         </div>
       )}
-      <label className="mt-1.5 flex cursor-pointer items-center gap-1 text-[10px] text-slate-400 hover:text-indigo-500">
+      <label className="mt-1.5 flex cursor-pointer items-center gap-1 text-[10px] text-slate-400 hover:text-amber-700">
         <ImagePlus className="h-3 w-3" /> Add image
         <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => addImages(e.target.files)} />
       </label>
