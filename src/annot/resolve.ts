@@ -27,6 +27,7 @@
 
 import type { Annotation, DemoIntent, DemoPlanItem, IRNode, ProposalConfidence } from '../ir/types';
 import { classifyGesture, type Gesture } from './gesture';
+import { pickDropTarget } from '../ir/layoutFit';
 
 /** A node's box in stage (canvas) coordinates, as measured from the DOM by the caller. */
 export interface NodeBox { x: number; y: number; w: number; h: number }
@@ -355,7 +356,7 @@ export function resolveTargets(a: Annotation, boxes: Record<string, NodeBox>): {
 // ---------------------------------------------------------------------------
 
 /** The IR facts intent resolution needs about each node. */
-export type IntentNode = Pick<IRNode, 'id' | 'parentId' | 'order' | 'role' | 'layout'>;
+export type IntentNode = Pick<IRNode, 'id' | 'parentId' | 'order' | 'role' | 'layout'> & { tailwind?: string };
 
 /** A recognised scribble gesture and what it resolves to on the scene. */
 export interface ScribbleIntent {
@@ -492,6 +493,20 @@ function resolveMove(
     .filter(([id, b]) => !banned.has(id) && pointInBox(to, b))
     .sort((p, q) => boxArea(p[1]) - boxArea(q[1]));
   if (at.length === 0) return none;
+
+  if (!isAbsolute(moved)) {
+    // A flow node joins a layout: pick the container and index exactly as a
+    // canvas drag would (ir/layoutFit.ts), so both paths agree.
+    const t = pickDropTarget({ nodes, draggedId: movedId, hitId: at[0][0], point: to, boxOf: (id) => boxes[id] });
+    if (t) {
+      const intent: DemoIntent = {
+        kind: 'move', id: movedId, toParentId: t.parentId, toIndex: t.index, placement: t.placement,
+        targetWidth: Math.round(t.container.w),
+      };
+      if (t.nextToId) intent.nextToId = t.nextToId;
+      return { gesture, intent };
+    }
+  }
 
   const container = at.find(([id]) => CONTAINER_ROLES.has(byId.get(id)!.role));
   const leaf = at.find(([id]) => !CONTAINER_ROLES.has(byId.get(id)!.role) && byId.get(id)!.parentId !== null);

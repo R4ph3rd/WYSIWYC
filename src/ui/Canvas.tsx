@@ -3,6 +3,7 @@ import { Loader2, Sparkles, Keyboard, X, Send } from 'lucide-react';
 import { useAppStore, toolToRole, isAnnotTool, type ComputedNodeStyle } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
+import { pickDropTarget, type DropTarget } from '@/ir/layoutFit';
 import type { Annotation, ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
 import { SAMPLES } from '@/ir/samples';
 import { composerIsEmpty, composerRefs, emptyComposer, removeRef, serializeComposer } from '@/lib/composer';
@@ -140,6 +141,7 @@ export function Canvas() {
   const setComputedStyle = useAppStore((s) => s.setComputedStyle);
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
+  const settleDragMove = useAppStore((s) => s.settleDragMove);
   const createShape = useAppStore((s) => s.createShape);
   const updateLayout = useAppStore((s) => s.updateLayout);
   const inferDrawnShape = useAppStore((s) => s.inferDrawnShape);
@@ -155,6 +157,14 @@ export function Canvas() {
   // the browser fires afterwards (which would otherwise add a stray ref chip).
   const draggedRef = useRef(false);
   const [drag, setDrag] = useState<DragState | null>(null);
+  // Where a dragged flow node would land in a layout (insertion line preview);
+  // mirrored in a ref so the mouseup handler reads the latest value.
+  const [dropTarget, setDropTargetState] = useState<DropTarget | null>(null);
+  const dropTargetRef = useRef<DropTarget | null>(null);
+  const setDropTarget = (t: DropTarget | null) => {
+    dropTargetRef.current = t;
+    setDropTargetState(t);
+  };
   // Stage-relative bounds of a selected FLOW node, so resize handles can be shown
   // for LLM-authored components before they are promoted to absolute positioning.
   const [flowBounds, setFlowBounds] = useState<Bounds | null>(null);
@@ -320,6 +330,58 @@ export function Canvas() {
       };
     });
     return out;
+  }
+
+  /**
+   * The layout slot under the pointer for a dragged flow node: the innermost
+   * rendered node under the cursor outside the dragged subtree, resolved to a
+   * container + insertion index by ir/layoutFit.ts.
+   */
+  function findDropTarget(dragId: string, clientX: number, clientY: number, p: PathPoint): DropTarget | null {
+    const stage = stageRef.current;
+    if (!stage) return null;
+    const nodes = useAppStore.getState().ir.nodes;
+    const banned = new Set([dragId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const n of nodes) {
+        if (n.parentId && banned.has(n.parentId) && !banned.has(n.id)) { banned.add(n.id); grew = true; }
+      }
+    }
+    let hitId: string | null = null;
+    for (const el of document.elementsFromPoint(clientX, clientY)) {
+      if (!stage.contains(el)) continue;
+      const id = el.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId;
+      if (id && !banned.has(id)) { hitId = id; break; }
+    }
+    return pickDropTarget({
+      nodes,
+      draggedId: dragId,
+      hitId,
+      point: p,
+      boxOf: (id) => stageRelativeBounds(id) ?? undefined,
+    });
+  }
+
+  /** The op that lands a dragged flow node at `target`, relative to the pre-drag IR (null = no change). */
+  function dropOp(id: string, target: DropTarget, prevIR: IR) {
+    const before = prevIR.nodes.find((n) => n.id === id);
+    if (!before) return null;
+    if (before.parentId === target.parentId) {
+      const from = siblingsOf(prevIR, id).findIndex((n) => n.id === id);
+      return from === target.index
+        ? null
+        : { kind: 'reorder' as const, id, parentId: before.parentId, from, to: target.index };
+    }
+    return {
+      kind: 'reparent' as const,
+      id,
+      fromParentId: before.parentId,
+      toParentId: target.parentId,
+      toIndex: target.index,
+      fit: { containerWidth: Math.round(target.container.w) },
+    };
   }
 
   /** A locally-unique annotation id. */
@@ -548,12 +610,20 @@ export function Canvas() {
     } else if (drag.mode === 'move') {
       const dx = p.x - drag.startX;
       const dy = p.y - drag.startY;
-      if (!drag.moved && Math.hypot(dx, dy) > 3) {
+      if (!drag.moved) {
+        // Sub-threshold jitter is still a click: leave the layout untouched
+        // (writing x/y here would pin a flow node absolutely in place).
+        if (Math.hypot(dx, dy) <= 3) return;
         // First real movement: an LLM node becomes absolute here so it can float.
         if (drag.promote) promoteToAbsolute(drag.id, drag.promote);
         setDrag({ ...drag, moved: true });
       }
       updateLayout(drag.id, { x: Math.round(drag.origX + dx), y: Math.round(drag.origY + dy) });
+      // A flow node being dragged previews where it would join a layout;
+      // holding Ctrl/⌘ floats it freely instead.
+      if (drag.promote) {
+        setDropTarget(e.ctrlKey || e.metaKey ? null : findDropTarget(drag.id, e.clientX, e.clientY, p));
+      }
     } else {
       const dx = p.x - drag.startX;
       const dy = p.y - drag.startY;
@@ -672,7 +742,13 @@ export function Canvas() {
         );
       }
     } else if (drag.mode === 'move') {
+      const target = dropTargetRef.current;
+      setDropTarget(null);
       if (!node || !drag.moved) return;
+      if (drag.promote && target) {
+        settleDragMove(dropOp(drag.id, target, drag.prevIR), drag.prevIR);
+        return;
+      }
       proposeManipulation(
         {
           kind: 'move',
@@ -916,6 +992,31 @@ export function Canvas() {
             }
             onReorder={drawing ? undefined : onReorder}
           />
+
+          {/* Drop preview while dragging a flow node into a layout. */}
+          {dropTarget && (
+            <div className="pointer-events-none absolute inset-0 z-20" data-testid="drop-indicator">
+              <div
+                className="absolute rounded-md border-2 border-dashed border-indigo-400/70 bg-indigo-500/[0.04]"
+                style={{
+                  left: dropTarget.container.x - 2,
+                  top: dropTarget.container.y - 2,
+                  width: dropTarget.container.w + 4,
+                  height: dropTarget.container.h + 4,
+                }}
+              />
+              <div
+                data-testid="drop-line"
+                className="absolute rounded-full bg-indigo-600 shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
+                style={{
+                  left: dropTarget.line.x,
+                  top: dropTarget.line.y,
+                  width: dropTarget.line.w,
+                  height: dropTarget.line.h,
+                }}
+              />
+            </div>
+          )}
 
           {/* Component-inference bubbles + wireframe controls for drawn shapes. */}
           <InferenceOverlay stageRef={stageRef} />

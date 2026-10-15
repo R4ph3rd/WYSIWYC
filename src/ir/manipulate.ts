@@ -2,6 +2,7 @@ import type { IR, IRNode, ManipulationOp, NodeRole, NodeStyle, PathPoint } from 
 import { siblingsOf } from './tree';
 import { setUtility, setAlignment } from './tailwindEdit';
 import { nextNodeId } from './ids';
+import { fitMovedNode } from './layoutFit';
 
 export interface ManipulationResult {
   ir: IR;
@@ -63,8 +64,14 @@ export function applyManipulation(ir: IR, op: ManipulationOp): ManipulationResul
     case 'recipe':
       return { ir, affectedIds: [] };
 
-    case 'reparent':
-      return reparent(ir, op.id, op.toParentId, op.toIndex, op.layout);
+    case 'reparent': {
+      const fromParentId = ir.nodes.find((n) => n.id === op.id)?.parentId ?? null;
+      const moved = reparent(ir, op.id, op.toParentId, op.toIndex, op.layout);
+      if (!op.fit || moved.affectedIds.length === 0) return moved;
+      // Fit the node into its new layout in the same step (one undo).
+      const fitted = fitMovedNode(moved.ir, op.id, fromParentId, op.fit);
+      return { ir: fitted.ir, affectedIds: [op.id, ...fitted.affectedIds.filter((x) => x !== op.id)] };
+    }
 
     case 'swap':
       return swap(ir, op.id, op.otherId);

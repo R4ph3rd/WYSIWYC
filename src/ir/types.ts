@@ -282,7 +282,15 @@ export type ManipulationOp =
   /** Re-applying a saved Recipe (an abstracted prior instruction) to a selection. */
   | { kind: 'recipe'; id: string; recipeId: string; instruction: string }
   /** Moving a node under another parent (e.g. a scribbled arrow into a container). */
-  | { kind: 'reparent'; id: string; fromParentId: string | null; toParentId: string; toIndex: number; layout?: NodeLayout }
+  | {
+      kind: 'reparent'; id: string; fromParentId: string | null; toParentId: string; toIndex: number; layout?: NodeLayout;
+      /**
+       * Fit the moved flow node into the target layout (sibling sizing, grid
+       * columns, source re-balance — see ir/layoutFit.ts). `containerWidth` is
+       * the target's measured width for the overflow check.
+       */
+      fit?: { containerWidth?: number };
+    }
   /** Exchanging the positions (parent, order, absolute x/y) of two nodes. */
   | { kind: 'swap'; id: string; otherId: string };
 
@@ -441,6 +449,8 @@ export type DemoIntent =
       /** The element the drop point landed next to, when not a bare container. */
       nextToId?: string;
       placement?: 'before' | 'after' | 'inside';
+      /** Measured width of the target container (flow moves; layout-fit overflow check). */
+      targetWidth?: number;
     }
   | { kind: 'swap'; ids: [string, string] }
   | { kind: 'fill'; ids: string[] };
