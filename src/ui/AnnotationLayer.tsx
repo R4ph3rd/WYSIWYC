@@ -3,6 +3,7 @@ import { MessageSquare, Trash2, X, ImagePlus } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { Annotation } from '@/ir/types';
 import { scribbleStrokes } from '@/annot/resolve';
+import { ANNOTATION_INK } from './tokens';
 
 /**
  * Annotation layer (prompt-by-demonstration, part B). Renders the rough markup
@@ -12,7 +13,7 @@ import { scribbleStrokes } from '@/annot/resolve';
  * on mouse-out. Coordinates are stage-relative so the markup scrolls with the
  * canvas. The drawings themselves are created in Canvas's mouse handlers.
  */
-const INK = '#6366f1'; // indigo-500 — reads as "markup", distinct from UI + selection
+const INK = ANNOTATION_INK; // indigo-500 — reads as "markup", distinct from UI + selection
 
 export function AnnotationLayer({ stageRef }: { stageRef: React.RefObject<HTMLDivElement | null> }) {
   const annotations = useAppStore((s) => s.annotations);
