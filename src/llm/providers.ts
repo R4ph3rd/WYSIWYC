@@ -100,6 +100,8 @@ export interface CallJSONResult {
   outputTokens: number;
   /** Portion of `inputTokens` served cheaply from a prompt cache (0 if none). */
   cachedInputTokens: number;
+  /** Portion of `inputTokens` written to a prompt cache (Anthropic only; 0 otherwise). */
+  cacheWriteTokens: number;
 }
 
 /** Split a `data:<mime>;base64,<data>` URL into its parts (for Anthropic blocks). */
@@ -367,6 +369,7 @@ async function callAnthropic(opts: CallJSONOptions): Promise<CallJSONResult> {
     inputTokens: (u.input_tokens ?? 0) + cacheRead + cacheCreate,
     outputTokens: u.output_tokens ?? 0,
     cachedInputTokens: cacheRead,
+    cacheWriteTokens: cacheCreate,
   };
 }
 
@@ -414,6 +417,7 @@ async function callOpenAI(opts: CallJSONOptions): Promise<CallJSONResult> {
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
     cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    cacheWriteTokens: 0,
   };
 }
 
@@ -451,6 +455,7 @@ async function callMistral(opts: CallJSONOptions): Promise<CallJSONResult> {
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
     cachedInputTokens: 0,
+    cacheWriteTokens: 0,
   };
 }
 
@@ -489,6 +494,7 @@ async function callGroq(opts: CallJSONOptions): Promise<CallJSONResult> {
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
     cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    cacheWriteTokens: 0,
   };
 }
 

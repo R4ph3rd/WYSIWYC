@@ -19,7 +19,7 @@ import {
 import { callJSON, LLMError, type ProviderId } from './providers';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useStudyStore } from '@/store/studyStore';
-import type { LLMCallRecord } from '@/store/studyStore';
+import type { CallType } from '@/study/schema';
 
 /** Thrown when no provider is connected. The UI surfaces this with the Connect dialog. */
 export class NotConnectedError extends Error {
@@ -34,14 +34,16 @@ async function callConnected<T>(
   schema: unknown,
   schemaName: string,
   maxTokens: number | Record<ProviderId, number>,
-  images?: string[],
-  callType: LLMCallRecord['callType'] = 'compose',
+  images: string[] | undefined,
+  callType: CallType,
 ): Promise<T> {
   const active = useSettingsStore.getState().active();
   if (!active) throw new NotConnectedError();
   const resolvedMaxTokens = typeof maxTokens === 'number' ? maxTokens : maxTokens[active.provider];
+  const study = useStudyStore.getState();
+  const started = performance.now();
   try {
-    const { data, inputTokens, outputTokens, cachedInputTokens } = await callJSON(active.provider, {
+    const { data, inputTokens, outputTokens, cachedInputTokens, cacheWriteTokens } = await callJSON(active.provider, {
       apiKey: active.apiKey,
       model: active.model,
       system,
@@ -51,13 +53,35 @@ async function callConnected<T>(
       maxTokens: resolvedMaxTokens,
       images,
     });
-    const study = useStudyStore.getState();
-    study.logLLMCall({ callType, provider: active.provider, model: active.model, inputTokens, outputTokens, cachedInputTokens, ts: Date.now() });
-    if (callType !== 'call_b') study.logEvent('generation');
+    // Study ledger: one row per call, identical in both conditions.
+    study.logCall({
+      provider: active.provider,
+      model: active.model,
+      callType,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens: cachedInputTokens,
+      cacheWriteTokens,
+      latencyMs: performance.now() - started,
+      ok: true,
+    });
     return data as T;
   } catch (err) {
+    const message = (err as Error).message;
+    study.logCall({
+      provider: active.provider,
+      model: active.model,
+      callType,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      latencyMs: performance.now() - started,
+      ok: false,
+      error: message.slice(0, 300),
+    });
     if (err instanceof LLMError) throw err;
-    throw new LLMError((err as Error).message);
+    throw new LLMError(message);
   }
 }
 
@@ -88,6 +112,7 @@ export function composeFromInstruction(
   prompt: StructuredPrompt,
   instruction: string,
   opts: ComposeOptions = {},
+  callType: CallType = 'compose',
 ): Promise<ComposeResult> {
   const images = (opts.refs ?? [])
     .filter((r): r is Extract<typeof r, { kind: 'image' }> => r.kind === 'image')
@@ -99,7 +124,7 @@ export function composeFromInstruction(
     'compose',
     MAX_SCENE_TOKENS,
     images,
-    'compose',
+    callType,
   );
 }
 
@@ -116,7 +141,7 @@ export function generatePatch(
     'ir_patch',
     MAX_SCENE_TOKENS,
     undefined,
-    'call_a',
+    'patch',
   );
 }
 
@@ -134,6 +159,6 @@ export function proposePromptUpdate(
     'prompt_update',
     1500,
     undefined,
-    'call_b',
+    'backchannel',
   );
 }
