@@ -1,9 +1,17 @@
-import { Fragment, useEffect, useLayoutEffect, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Sparkles, X, Check, Eraser, Image as ImageIcon, LayoutTemplate } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { ComponentInference } from '@/ir/types';
 
 type Box = { x: number; y: number; w: number; h: number };
+
+/** Grace period before the hover controls hide once the pointer leaves. */
+const HIDE_DELAY_MS = 280;
+/** Slack around the host box that still counts as hovering it. */
+const HIT_PAD = 6;
+/** Generous footprint of the controls strip under the host (gap included). */
+const CONTROLS_W = 260;
+const CONTROLS_H = 36;
 
 /**
  * Component-inference layer (prompt-by-demonstration, part A). When a shape is
@@ -11,7 +19,9 @@ type Box = { x: number; y: number; w: number; h: number };
  *  - a small sparkle bubble pinned to the shape's corner (a "suggestions" badge),
  *  - a popover of the top-3 candidate components on click, and
  *  - once a component is chosen, a hovering button group to leave the host empty
- *    or complete it with neutral placeholder content.
+ *    or complete it with neutral placeholder content. It only appears while the
+ *    pointer is over the component (or the controls themselves, with a short
+ *    grace delay bridging the gap), or while keyboard focus is inside it.
  * Choosing a component accepts the proposal: the bubble and popover go away and
  * the variation can still be changed from the spec pane (clause sparkle icon /
  * alternatives menu), which rebuilds the wireframe in the current fill mode.
@@ -26,6 +36,8 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
   const dismissInference = useAppStore((s) => s.dismissInference);
   const [openId, setOpenId] = useState<string | null>(null);
   const [boxes, setBoxes] = useState<Record<string, Box>>({});
+  // Component whose wireframe controls are shown (pointer over host or controls).
+  const [hoverId, setHoverId] = useState<string | null>(null);
 
   const active: ComponentInference[] = Object.values(inferences).filter(
     (inf) => inf.status !== 'dismissed' && ir.nodes.some((n) => n.id === inf.nodeId),
@@ -51,6 +63,56 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Hover tracking. The overlay sits above the rendered nodes and doesn't
+  // receive their pointer events, so hit-test the stage's pointermove against
+  // the measured host boxes. While a component's controls are showing, the
+  // strip below it (gap + controls) counts as "inside" too, and leaving starts
+  // a short grace timer, so moving from the shape onto the buttons keeps them.
+  const chosenIds = active.filter((i) => i.status === 'chosen').map((i) => i.nodeId).join(',');
+  const live = useRef({ boxes, hoverId, chosenIds });
+  live.current = { boxes, hoverId, chosenIds };
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    const hideSoon = () => {
+      if (timer || live.current.hoverId === null) return;
+      timer = setTimeout(() => { timer = null; setHoverId(null); }, HIDE_DELAY_MS);
+    };
+    const onMove = (e: PointerEvent) => {
+      // Mid-drag (moving/resizing/drawing): keep the canvas uncluttered.
+      if (e.buttons !== 0) { cancel(); setHoverId(null); return; }
+      const sr = stage.getBoundingClientRect();
+      const px = e.clientX - sr.left;
+      const py = e.clientY - sr.top;
+      const { boxes: bx, hoverId: cur, chosenIds: ids } = live.current;
+      let hit: string | null = null;
+      let best = Infinity;
+      for (const id of ids ? ids.split(',') : []) {
+        const b = bx[id];
+        if (!b) continue;
+        const inHost = px >= b.x - HIT_PAD && px <= b.x + b.w + HIT_PAD && py >= b.y - HIT_PAD && py <= b.y + b.h + HIT_PAD;
+        const inBridge =
+          id === cur &&
+          px >= b.x - HIT_PAD && px <= b.x + Math.max(b.w, CONTROLS_W) + HIT_PAD &&
+          py >= b.y + b.h && py <= b.y + b.h + CONTROLS_H + HIT_PAD;
+        // The controls strip wins outright; otherwise the innermost host does.
+        const area = inBridge ? -1 : b.w * b.h;
+        if ((inHost || inBridge) && area < best) { best = area; hit = id; }
+      }
+      if (hit) { cancel(); if (hit !== cur) setHoverId(hit); }
+      else hideSoon();
+    };
+    stage.addEventListener('pointermove', onMove);
+    stage.addEventListener('pointerleave', hideSoon);
+    return () => {
+      cancel();
+      stage.removeEventListener('pointermove', onMove);
+      stage.removeEventListener('pointerleave', hideSoon);
+    };
+  }, [stageRef]);
 
   const stageW = stageRef.current?.clientWidth ?? 960;
   const stageH = stageRef.current?.clientHeight ?? 640;
@@ -126,11 +188,19 @@ export function InferenceOverlay({ stageRef }: { stageRef: React.RefObject<HTMLD
               </div>
             )}
 
-            {/* Hovering wireframe controls, shown once a component is chosen. */}
+            {/* Wireframe controls, once a component is chosen: shown on hover
+                (or keyboard focus); otherwise transparent and click-through. */}
             {inf.status === 'chosen' && (
               <div
+                role="toolbar"
+                aria-label={`${inf.chosen} wireframe`}
                 onMouseDown={(e) => e.stopPropagation()}
-                className="absolute z-30 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 p-0.5 shadow-md backdrop-blur"
+                className={
+                  'absolute z-30 flex items-center gap-1 rounded-lg border border-slate-200 bg-white/95 p-0.5 shadow-md backdrop-blur transition-opacity duration-150 ' +
+                  (hoverId === inf.nodeId
+                    ? 'opacity-100'
+                    : 'pointer-events-none opacity-0 has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100')
+                }
                 style={{ left: box.x, top: box.y + box.h + 4 }}
               >
                 {inf.fill === 'empty' ? (
