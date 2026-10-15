@@ -208,6 +208,10 @@ export function describeManipulation(op: ManipulationOp): string {
       return `Hand-drew a new ${op.role} on the canvas at (${op.layout.x}, ${op.layout.y}), about ${op.layout.w}×${op.layout.h}px.`;
     case 'recipe':
       return `Re-applied recipe ${op.recipeId}: "${op.instruction}".`;
+    case 'reparent':
+      return `Moved node ${op.id} into node ${op.toParentId} at position ${op.toIndex} (it was under ${op.fromParentId ?? 'the root'}).`;
+    case 'swap':
+      return `Swapped the positions of nodes ${op.id} and ${op.otherId}.`;
   }
 }
 
@@ -264,5 +268,7 @@ export function callBUser(
 
 function relevant(op: ManipulationOp, id: string): boolean {
   if (op.kind === 'align') return op.ids.includes(id);
+  if (op.kind === 'swap') return op.id === id || op.otherId === id;
+  if (op.kind === 'reparent') return op.id === id || op.toParentId === id;
   return op.id === id;
 }

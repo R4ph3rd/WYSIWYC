@@ -62,6 +62,12 @@ export function applyManipulation(ir: IR, op: ManipulationOp): ManipulationResul
     // a ManipulationOp purely so the re-application is logged like any other.
     case 'recipe':
       return { ir, affectedIds: [] };
+
+    case 'reparent':
+      return reparent(ir, op.id, op.toParentId, op.toIndex, op.layout);
+
+    case 'swap':
+      return swap(ir, op.id, op.otherId);
   }
 }
 
@@ -114,6 +120,80 @@ function reorder(ir: IR, id: string, toIndex: number): ManipulationResult {
     return n.id === id ? markUser(next) : next;
   });
   return { ir: { ...ir, nodes }, affectedIds: [id, ...affected.filter((x) => x !== id)] };
+}
+
+/** Children of a parent in sibling order. */
+function childrenOf(ir: IR, parentId: string | null): IRNode[] {
+  return ir.nodes.filter((n) => n.parentId === parentId).sort((a, b) => a.order - b.order);
+}
+
+/**
+ * Move a node under another parent at a given index (clamped), compacting the
+ * sibling orders of both the old and the new parent. Moving a node into its
+ * own subtree is refused (no-op).
+ */
+function reparent(
+  ir: IR,
+  id: string,
+  toParentId: string,
+  toIndex: number,
+  layout?: IRNode['layout'],
+): ManipulationResult {
+  const node = ir.nodes.find((n) => n.id === id);
+  if (!node || !ir.nodes.some((n) => n.id === toParentId)) return { ir, affectedIds: [] };
+  for (let p: string | null = toParentId; p; p = ir.nodes.find((n) => n.id === p)?.parentId ?? null) {
+    if (p === id) return { ir, affectedIds: [] };
+  }
+
+  const order = new Map<string, number>();
+  if (node.parentId !== toParentId) {
+    childrenOf(ir, node.parentId).filter((n) => n.id !== id).forEach((n, i) => order.set(n.id, i));
+  }
+  const dest = childrenOf(ir, toParentId).filter((n) => n.id !== id);
+  dest.splice(Math.max(0, Math.min(dest.length, toIndex)), 0, node);
+  dest.forEach((n, i) => order.set(n.id, i));
+
+  const nodes = ir.nodes.map((n) => {
+    if (n.id === id) {
+      return markUser({
+        ...n,
+        parentId: toParentId,
+        order: order.get(id)!,
+        layout: layout ? { ...n.layout, ...layout } : n.layout,
+      });
+    }
+    return order.has(n.id) ? { ...n, order: order.get(n.id)! } : n;
+  });
+  return { ir: { ...ir, nodes }, affectedIds: [id] };
+}
+
+/**
+ * Exchange the positions of two nodes: parent and sibling order, plus the
+ * absolute x/y when both are absolutely positioned. Swapping a node with its
+ * own ancestor or descendant is refused (no-op).
+ */
+function swap(ir: IR, aId: string, bId: string): ManipulationResult {
+  const a = ir.nodes.find((n) => n.id === aId);
+  const b = ir.nodes.find((n) => n.id === bId);
+  if (!a || !b || a.id === b.id) return { ir, affectedIds: [] };
+  const isAncestor = (anc: string, of: IRNode) => {
+    for (let p = of.parentId; p; p = ir.nodes.find((n) => n.id === p)?.parentId ?? null) {
+      if (p === anc) return true;
+    }
+    return false;
+  };
+  if (isAncestor(a.id, b) || isAncestor(b.id, a)) return { ir, affectedIds: [] };
+
+  const absolute = (n: IRNode) => n.layout?.x !== undefined || n.layout?.y !== undefined;
+  const bothAbsolute = absolute(a) && absolute(b);
+  const take = (self: IRNode, other: IRNode): IRNode => markUser({
+    ...self,
+    parentId: other.parentId,
+    order: other.order,
+    layout: bothAbsolute ? { ...self.layout, x: other.layout?.x, y: other.layout?.y } : self.layout,
+  });
+  const nodes = ir.nodes.map((n) => (n.id === a.id ? take(a, b) : n.id === b.id ? take(b, a) : n));
+  return { ir: { ...ir, nodes }, affectedIds: [a.id, b.id] };
 }
 
 function align(ir: IR, ids: string[], axis: 'left' | 'center' | 'right'): ManipulationResult {
