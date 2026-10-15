@@ -4,12 +4,14 @@
  * Flow in WYSIWYC: the user draws a rough shape, then picks what UI component
  * it is (e.g. "Item card"). `wireframeChildren` fills that shape with a GREY
  * WIREFRAME of the component's expected parts (image block, title bar,
- * description lines, button, ...). A second action, `fillPlaceholders`, turns
- * the grey blocks into neutral placeholder content (labels, sample copy)
- * while following the overall monochrome design.
+ * description lines, button, ...). A second action, `fillComponent` /
+ * `fillPlaceholders`, turns the grey blocks into placeholder content (labels,
+ * sample copy, icons) themed with a palette derived from the surrounding UI
+ * (see uiPalette.ts), measured so no two parts overlap.
  *
  * Everything here is pure: no React, no DOM, no network and no store access.
- * Only `nextNodeId` (id allocation) and the IR types are imported.
+ * Only `nextNodeId` (id allocation), the palette helpers and the IR types are
+ * imported.
  *
  * Layout model: children are flat IRNodes (`parentId = host.id`) with ABSOLUTE
  * layout relative to the host's top-left corner. A component label is resolved
@@ -30,7 +32,7 @@
  *
  * Text bars are told apart again in `fillPlaceholders` by their (distinct)
  * bar heights, see `TEXT_BAR_HEIGHT`, so the wireframe stays free of extra
- * metadata and the placeholder step never changes layout or ids.
+ * metadata and the placeholder step never changes ids.
  *
  * Greys are RELATIVE to what is behind each part: parts carry a lightness
  * offset (`TONE`, CIE L* units) away from the host's effective background
@@ -42,6 +44,7 @@
 
 import { nextNodeId } from './ids';
 import type { IR, IRNode, NodeRole, NodeStyle } from './types';
+import { derivePalette, inksOn, twHex, type UIPalette } from './uiPalette';
 
 /* -------------------------------------------------------------------------- */
 /* Constants                                                                  */
@@ -78,19 +81,6 @@ const TONE = {
 } as const;
 
 type ToneKind = Exclude<keyof typeof TONE, 'inputStroke'>;
-
-/** Placeholder offsets: blocks one notch off the wireframe, text readable. */
-const PLACEHOLDER_TONE = {
-  image: 13,
-  button: 18,
-  badge: 15,
-  icon: 30,
-  heading: 55,
-  text: 42,
-  /** Label text on a filled part (button, badge), relative to that part. */
-  onFill: 45,
-  inputText: 35,
-} as const;
 
 /** Minimum L* distance between a part and what is behind it. */
 const MIN_TONE_DELTA = 5;
@@ -168,12 +158,15 @@ function tailwindBg(tailwind: string): string | undefined {
         cls,
       );
     if (!m) continue;
+    const family = m[1].split('-')[0];
     const base =
       m[1] === 'black'
         ? '#000000'
         : m[1] === 'transparent'
           ? 'transparent'
-          : SLATE_SCALE[m[2] ?? 'white'];
+          : m[2] === undefined
+            ? SLATE_SCALE.white
+            : (twHex(family, m[2]) ?? SLATE_SCALE[m[2]]);
     if (base === undefined) continue;
     if (m[3] === undefined || base === 'transparent') {
       found = base;
@@ -1221,7 +1214,7 @@ export function wireframeChildren(
 
 const DESCRIPTION_LINES: readonly string[] = [
   'Supporting detail goes here.',
-  'A short line of neutral placeholder copy.',
+  'A short line of placeholder copy.',
   'More detail.',
 ];
 
@@ -1256,45 +1249,445 @@ function defaultTextLook(kind: TextKind, descriptionIndex: number): TextLook {
     case 'stat':
       return { content: '1,234', fontSize: 20, fontWeight: 600 };
     case 'subtitle':
-      return { content: 'A short supporting line for this section.', fontSize: 12, fontWeight: 400 };
+      return { content: 'A short supporting line.', fontSize: 12, fontWeight: 400 };
     case 'link':
-      return { content: 'Link', fontSize: 11, fontWeight: 500 };
+      return { content: 'Link', fontSize: 12, fontWeight: 500 };
     case 'label':
-      return { content: 'Total count', fontSize: 10, fontWeight: 400 };
+      return { content: 'Total count', fontSize: 11, fontWeight: 400 };
     default:
       return {
         content: DESCRIPTION_LINES[Math.min(descriptionIndex, DESCRIPTION_LINES.length - 1)],
-        fontSize: 10,
+        fontSize: 11,
         fontWeight: 400,
       };
   }
 }
 
+/* ---- Theming ------------------------------------------------------------- */
+
+/** How the host itself is restyled when its parts get filled. */
+type HostLook = 'surface' | 'button' | 'field' | 'tint' | 'control';
+
+function hostLookFor(spec: ComponentSpec): HostLook {
+  switch (spec.id) {
+    case 'button':
+      return 'button';
+    case 'inputField':
+    case 'searchBar':
+      return 'field';
+    case 'avatar':
+    case 'thumbnail':
+    case 'illustration':
+    case 'badge':
+    case 'icon':
+      return 'tint';
+    case 'iconButton':
+    case 'radio':
+    case 'progressRing':
+      return 'control';
+    default:
+      return 'surface';
+  }
+}
+
+/** Glyphs for icon parts, in order (cycled). 'logo' paints an accent brand tile. */
+const SPEC_ICONS: Record<string, string[]> = {
+  navRail: ['home', 'search', 'bell', 'settings'],
+  sidebar: ['home', 'bar-chart', 'users'],
+  toolbar: ['pencil', 'copy', 'share-2'],
+  header: ['logo'],
+  searchBar: ['search'],
+  featureList: ['zap', 'shield', 'sparkles'],
+  iconButton: ['plus'],
+  icon: ['star'],
+};
+
+/** Secondary (outlined) buttons; every other button is primary (accent). */
+const SECONDARY_BUTTON = new Set(['itemCard', 'sidebar']);
+
+/** Accent depth of a painted area: surface 0, soft tint 1, mid tint 2, accent 3. */
+type Level = 0 | 1 | 2 | 3;
+
+/** True while a host still wears the default look of a freshly drawn shape. */
+function isDrawnLook(host: IRNode): boolean {
+  const fill = host.style?.fill?.trim().toLowerCase();
+  const twBg = (host.tailwind ?? '').split(/\s+/).some((c) => /^bg-/.test(c));
+  return (fill === undefined || fill === DRAWN_FILL) && !twBg;
+}
+
+function hostStyleFor(look: HostLook, host: IRNode, spec: ComponentSpec, p: UIPalette): NodeStyle {
+  const w = host.layout?.w ?? DEFAULT_HOST_W;
+  const h = host.layout?.h ?? DEFAULT_HOST_H;
+  const base: NodeStyle = { ...host.style };
+  // Round looks only on (roughly) square shapes; a pill-stretched circle reads wrong.
+  const squarish = Math.max(w, h) <= Math.min(w, h) * 1.3;
+  if (p.fontFamily) base.fontFamily = p.fontFamily;
+  switch (look) {
+    case 'button':
+      return { ...base, fill: p.accent, strokeWidth: 0, borderRadius: p.controlRadius };
+    case 'field':
+      return { ...base, fill: p.field, stroke: p.border, strokeWidth: 1, borderRadius: p.controlRadius };
+    case 'tint':
+      return {
+        ...base,
+        fill: p.accentSoft,
+        strokeWidth: 0,
+        borderRadius:
+          spec.id === 'badge' || (spec.id === 'avatar' && squarish)
+            ? 9999
+            : Math.min(p.radius, Math.round(Math.min(w, h) / 4)),
+      };
+    case 'control':
+      return spec.id === 'progressRing'
+        ? { ...base, fill: p.surface, stroke: p.accent, strokeWidth: 4, borderRadius: squarish ? 9999 : p.radius }
+        : {
+            ...base,
+            fill: p.surface,
+            stroke: p.border,
+            strokeWidth: spec.id === 'radio' ? 1.5 : 1,
+            borderRadius: spec.id === 'radio' && squarish ? 9999 : p.controlRadius,
+          };
+    default:
+      return {
+        ...base,
+        fill: p.surface,
+        stroke: p.border,
+        strokeWidth: 1,
+        borderRadius: Math.min(p.radius, Math.round(Math.min(w, h) / 4)),
+        shadow: p.dark ? '' : '0 1px 2px rgba(0,0,0,0.05)',
+      };
+  }
+}
+
+function levelFill(p: UIPalette, level: Level): string {
+  return level >= 3 ? p.accent : level === 2 ? p.accentMid : level === 1 ? p.accentSoft : p.surface;
+}
+
+/* ---- Text measurement ----------------------------------------------------- */
+
+const LINE_HEIGHT = 1.25;
+const MIN_FONT = 9;
+const TEXT_GAP = 4;
+
+/** Deterministic width estimate of one line of sans-serif text, in px. */
+export function estimateTextWidth(text: string, fontSize: number, fontWeight: number | string = 400): number {
+  let em = 0;
+  for (const ch of text) {
+    if (ch === ' ') em += 0.28;
+    else if ("il.,:;|!'`".includes(ch)) em += 0.27;
+    else if ('fjrt()[]-'.includes(ch)) em += 0.37;
+    else if ('mwMW'.includes(ch)) em += 0.86;
+    else if (/[A-Z]/.test(ch)) em += 0.67;
+    else if (/[0-9$%]/.test(ch)) em += 0.6;
+    else em += 0.56;
+  }
+  const weight = Number(fontWeight) || 400;
+  const bold = weight >= 600 ? 1.06 : weight >= 500 ? 1.03 : 1;
+  return Math.ceil(em * fontSize * bold * 1.04) + 2;
+}
+
+function lineBox(fontSize: number): number {
+  return Math.ceil(fontSize * LINE_HEIGHT);
+}
+
+/* ---- Fit (no overlap) ----------------------------------------------------- */
+
 /**
- * Convert grey-wireframe children into placeholder content: titles/descriptions
- * get sample text, images keep a neutral fill, buttons get a label. Returns NEW
- * nodes (inputs are not mutated). Keeps every node's id and layout; only
- * changes content/style/tailwind so it reads as real but still monochrome data.
- * `host` and `backdrop` set the background the greys are picked against (as in
- * `wireframeChildren`); without a host a default drawn shape is assumed.
+ * How a filled part is sized: `line` single-line text (never wraps, may widen,
+ * shrink or truncate), `wrap` multi-line copy (line-clamped), `label` a
+ * control with centered text (button, badge), `block` fixed-size content.
  */
-export function fillPlaceholders(
+type FitKind = 'line' | 'wrap' | 'label' | 'block';
+
+interface FitItem {
+  node: IRNode;
+  kind: FitKind;
+  /** Original (wireframe) box. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fontSize: number;
+  fontWeight: number | string;
+  text: string;
+  centered: boolean;
+  /** A flexible block (big image) that may give up height. */
+  flexImage: boolean;
+  /** A round image (avatar) that may shrink as a last resort. */
+  roundImage: boolean;
+  /** Index of the item this one is pinned inside (badge on a photo). */
+  overlayOf: number;
+}
+
+interface FitParams {
+  maxLines: number;
+  /** Scale for flexible image heights, down to `imageFloor` of the original. */
+  imageScale: number;
+  imageFloor: number;
+  fontScale: number;
+  shrinkAvatars: boolean;
+}
+
+interface FitBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fontSize: number;
+  lines: number;
+  truncated: boolean;
+}
+
+interface FitOutcome {
+  boxes: FitBox[];
+  /** Host height needed so every part fits with the original bottom padding. */
+  needH: number;
+}
+
+function vOverlap(a: { y: number; h: number }, b: { y: number; h: number }): boolean {
+  return a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+function hOverlap(a: { x: number; w: number }, b: { x: number; w: number }): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w;
+}
+
+function contains(outer: Rect, inner: Rect): boolean {
+  return (
+    inner.x >= outer.x &&
+    inner.y >= outer.y &&
+    inner.x + inner.w <= outer.x + outer.w &&
+    inner.y + inner.h <= outer.y + outer.h
+  );
+}
+
+/**
+ * Lay the filled parts out without overlap. Horizontal: single-line text and
+ * labels widen into free space beside them (never past a neighbour or the
+ * host padding), then shrink their font, then truncate. Vertical: each part
+ * keeps its wireframe position unless a part above it (sharing columns) grew,
+ * in which case it is pushed down, keeping the original gap (capped). Parts
+ * pinned inside another part move with it. Pure and deterministic.
+ */
+function fitItems(items: FitItem[], hostW: number, hostH: number, params: FitParams, layout: LayoutKind): FitOutcome {
+  const boxes: FitBox[] = items.map((it) => ({
+    x: it.x,
+    y: it.y,
+    w: it.w,
+    h: it.h,
+    fontSize: Math.max(MIN_FONT, Math.round(it.fontSize * params.fontScale)),
+    lines: 1,
+    truncated: false,
+  }));
+  const peers = (i: number) =>
+    items
+      .map((it, j) => ({ it, j }))
+      .filter(({ it, j }) => j !== i && it.overlayOf !== i && items[i].overlayOf !== j && !contains(it, items[i]) && !contains(items[i], it));
+
+  // 1. Widths and font sizes.
+  items.forEach((it, i) => {
+    const box = boxes[i];
+    if (it.kind === 'block') {
+      if (it.flexImage && params.imageScale < 1) {
+        box.h = Math.max(Math.round(it.h * params.imageFloor), IMAGE_MIN_H, Math.round(it.h * params.imageScale));
+        box.h = Math.min(box.h, it.h);
+      }
+      if (it.roundImage && params.shrinkAvatars && it.w > 28) {
+        const side = Math.max(24, Math.round(it.w * 0.75));
+        box.x = it.x + Math.round((it.w - side) / 2);
+        box.w = side;
+        box.h = side;
+      }
+      return;
+    }
+    // Right edge a part may widen to: the nearest (already widened) neighbour
+    // on its right, else the host's inner edge.
+    const rightLimit = () =>
+      peers(i)
+        .filter(({ it: o }) => vOverlap(o, it) && o.x >= it.x + it.w - 0.5)
+        .reduce((m, { j }) => Math.min(m, boxes[j].x - TEXT_GAP), hostW - Math.min(PAD, Math.max(0, hostW - it.x - it.w)));
+    if (it.kind === 'wrap') {
+      const width = estimateTextWidth(it.text, box.fontSize, it.fontWeight);
+      // Copy first widens into free room on its right, then wraps.
+      if (width > it.w) box.w = Math.round(clamp(width, it.w, Math.max(it.w, rightLimit() - it.x)));
+      box.lines = clamp(Math.ceil(width / Math.max(1, box.w)), 1, params.maxLines);
+      box.truncated = width > box.w * box.lines;
+      box.h = Math.max(it.h, Math.ceil(box.lines * box.fontSize * LINE_HEIGHT));
+      return;
+    }
+    const pad = it.kind === 'label' ? 16 : 0;
+    const need = () => estimateTextWidth(it.text, box.fontSize, it.fontWeight) + pad;
+    if (need() > it.w) {
+      const others = peers(i);
+      // Neighbours as already widened (earlier items took their share first).
+      const right = rightLimit();
+      const left = others
+        .filter(({ it: o }) => vOverlap(o, it) && o.x + o.w <= it.x + 0.5)
+        .reduce((m, { j }) => Math.max(m, boxes[j].x + boxes[j].w + TEXT_GAP), Math.min(PAD, Math.max(0, it.x)));
+      const freeR = Math.max(0, right - (it.x + it.w));
+      const freeL = Math.max(0, it.x - left);
+      let extra = need() - it.w;
+      let growL = 0;
+      let growR = 0;
+      if (it.centered) {
+        const half = Math.ceil(extra / 2);
+        growL = Math.min(half, freeL);
+        growR = Math.min(half, freeR);
+        extra -= growL + growR;
+        const moreR = Math.min(extra, freeR - growR);
+        growR += Math.max(0, moreR);
+        extra -= Math.max(0, moreR);
+        growL += Math.max(0, Math.min(extra, freeL - growL));
+      } else {
+        const rightAnchored = layout === 'horizontal' && it.x + it.w >= hostW - PAD - 1;
+        if (rightAnchored) {
+          growL = Math.min(extra, freeL);
+          growR = Math.min(extra - growL, freeR);
+        } else {
+          growR = Math.min(extra, freeR);
+          growL = Math.min(extra - growR, freeL);
+        }
+      }
+      box.x = Math.round(it.x - growL);
+      box.w = Math.round(it.w + growL + growR);
+      if (need() > box.w) {
+        const textW = estimateTextWidth(it.text, box.fontSize, it.fontWeight);
+        const scaled = Math.floor((box.fontSize * (box.w - pad)) / Math.max(1, textW));
+        box.fontSize = Math.max(Math.min(MIN_FONT, box.fontSize), Math.min(box.fontSize, scaled));
+        box.truncated = need() > box.w;
+      }
+    }
+    if (it.kind === 'label') {
+      // Text must sit inside the control with a little vertical breathing room.
+      const room = it.h - 4;
+      if (lineBox(box.fontSize) > room) {
+        box.fontSize = Math.max(Math.min(MIN_FONT, box.fontSize), Math.floor(room / LINE_HEIGHT));
+      }
+      box.h = Math.max(it.h, lineBox(box.fontSize) + 2);
+    } else {
+      box.h = Math.max(it.h, lineBox(box.fontSize));
+    }
+  });
+
+  // Sibling labels of one kind (nav links, tabs, menu items) share one size.
+  const groups = new Map<string, number[]>();
+  items.forEach((it, i) => {
+    if (it.kind !== 'line') return;
+    const key = `${it.node.role}|${it.h}|${it.fontSize}`;
+    groups.set(key, [...(groups.get(key) ?? []), i]);
+  });
+  groups.forEach((members) => {
+    if (members.length < 2) return;
+    const size = Math.min(...members.map((i) => boxes[i].fontSize));
+    members.forEach((i) => {
+      const it = items[i];
+      const box = boxes[i];
+      box.fontSize = size;
+      box.truncated = estimateTextWidth(it.text, size, it.fontWeight) > box.w;
+      box.h = Math.max(it.h, lineBox(size));
+    });
+  });
+
+  // 2. Vertical positions, top to bottom.
+  const order = items.map((_, i) => i).sort((a, b) => items[a].y - items[b].y || items[a].x - items[b].x);
+  const placed: number[] = [];
+  order.forEach((i) => {
+    const it = items[i];
+    const box = boxes[i];
+    if (it.overlayOf >= 0) {
+      const base = items[it.overlayOf];
+      const bb = boxes[it.overlayOf];
+      box.x += bb.x - base.x;
+      box.y = bb.y + (it.y - base.y);
+      // Keep the pinned part inside a base that lost height.
+      box.y = Math.min(box.y, bb.y + Math.max(0, bb.h - box.h));
+      return;
+    }
+    const grown = box.h - it.h;
+    let y = it.kind === 'line' || it.kind === 'label' ? it.y - Math.floor(grown / 2) : it.y;
+    y = Math.max(0, y);
+    const above = placed.filter((j) => items[j].y + items[j].h <= it.y + 0.5 && hOverlap(boxes[j], box));
+    if (above.length > 0) {
+      // Clear every part above (keeping the original gap, capped) ...
+      const need = Math.max(
+        ...above.map((j) => boxes[j].y + boxes[j].h + clamp(it.y - (items[j].y + items[j].h), 2, 16)),
+      );
+      // ... and follow them up when they all got shorter (a shrunk image).
+      const delta = Math.max(...above.map((j) => boxes[j].y + boxes[j].h - (items[j].y + items[j].h)));
+      y = Math.max(need, delta < 0 ? y + delta : y);
+    }
+    box.y = Math.round(y);
+    placed.push(i);
+  });
+
+  const origBottom = items.reduce((m, it) => Math.max(m, it.y + it.h), 0);
+  const bottom = boxes.reduce((m, b) => Math.max(m, b.y + b.h), 0);
+  let padB = clamp(hostH - origBottom, 0, PAD);
+  // Growing: give the bottom edge the same padding as the top (up to PAD).
+  if (bottom + padB > hostH) {
+    const top = items.reduce((m, it) => Math.min(m, it.y), Number.POSITIVE_INFINITY);
+    padB = Math.max(padB, clamp(top, 0, PAD));
+  }
+  return { boxes, needH: Math.ceil(bottom + padB) };
+}
+
+/* ---- Fill ----------------------------------------------------------------- */
+
+export interface FillOptions {
+  /** Design palette to theme the placeholders with (default: neutral + indigo). */
+  palette?: UIPalette;
+  /** Largest width / height the host may grow to (its parent's room). */
+  maxW?: number;
+  maxH?: number;
+}
+
+export interface FillResult {
+  /** Filled children (parts that cannot fit even after shrinking are left out). */
+  children: IRNode[];
+  /** Ids of input children that were left out. */
+  removed: string[];
+  /** The host with its new size and look (undefined when no host was given). */
+  host?: IRNode;
+}
+
+/**
+ * Turn grey-wireframe children into themed placeholder content laid out
+ * without overlap. Colours come from `palette` (derived from the UI the shape
+ * is drawn into): headings/body in the UI's text colours, primary buttons in
+ * the accent, secondary buttons outlined, images and avatars as accent tints,
+ * icons as muted glyphs, badges as accent pills, dividers in the border
+ * colour. A host still wearing the drawn-shape grey is restyled as a surface,
+ * button, field or tint matching the component. Text is measured
+ * (estimated); the host grows to fit (up to `maxW` / `maxH`), and when it may
+ * not, copy is clamped to one line, images and avatars shrink, fonts shrink
+ * and, last, parts that still do not fit are dropped. Pure; ids kept.
+ */
+export function fillComponent(
   children: IRNode[],
   componentLabel: string,
   host?: IRNode,
   backdrop?: string,
-): IRNode[] {
+  options: FillOptions = {},
+): FillResult {
   const spec = resolveComponent(componentLabel);
-  const hostBg = hostBackground(host, backdrop);
+  const palette = options.palette ?? derivePalette(undefined, backdrop ?? DEFAULT_BACKDROP);
+  const look = hostLookFor(spec);
+
+  // Host look: restyle a still-grey drawn shape to match the UI.
+  let hostStyle: NodeStyle | undefined = host?.style;
+  if (host && isDrawnLook(host)) hostStyle = hostStyleFor(look, host, spec, palette);
+  const styledHost: IRNode | undefined = host ? { ...host, style: hostStyle } : undefined;
+  const hostBg = hostBackground(styledHost, backdrop);
+  const restyled = host !== undefined && hostStyle !== host.style;
+  const hostLevel: Level = restyled ? (look === 'button' ? 3 : look === 'tint' ? 1 : 0) : 0;
+
   const ordered = [...children].sort((a, b) => a.order - b.order);
 
   // Index consecutive description bars (in order) so the lines differ.
   const descriptionIndex = new Map<string, number>();
   let run = 0;
   ordered.forEach((node) => {
-    const isDescriptionBar =
-      node.role === 'text' &&
-      textKindForHeight(node.layout?.h ?? 0) === 'description';
+    const isDescriptionBar = node.role === 'text' && textKindForHeight(node.layout?.h ?? 0) === 'description';
     if (isDescriptionBar) {
       descriptionIndex.set(node.id, run);
       run += 1;
@@ -1303,79 +1696,183 @@ export function fillPlaceholders(
     }
   });
 
-  // Paint in stacking order so each part is toned against what is behind it.
-  const painted: { rect: Rect; fill: RGB | null }[] = [];
-  const result = new Map<string, IRNode>();
+  const rowLike = spec.layout === 'horizontal' || spec.layout === 'tabs' || spec.layout === 'center';
+  const icons = SPEC_ICONS[spec.id] ?? [];
+  let iconIndex = 0;
+  let linkIndex = 0;
+
+  // Paint in stacking order so each part is themed against what is behind it.
+  const painted: { rect: Rect; fill: RGB | null; level: Level }[] = [];
+  const styledNodes: IRNode[] = [];
+  const items: FitItem[] = [];
   ordered.forEach((node, index) => {
     const style: NodeStyle = { ...node.style };
     const next: IRNode = {
       ...node,
       layout: node.layout ? { ...node.layout } : undefined,
-      points: node.points ? node.points.map((p) => ({ ...p })) : undefined,
+      points: node.points ? node.points.map((pt) => ({ ...pt })) : undefined,
       provenance: { ...node.provenance },
       style,
     };
     const l = node.layout;
-    painted.push({ rect: { x: l?.x ?? 0, y: l?.y ?? 0, w: l?.w ?? 0, h: l?.h ?? 0 }, fill: null });
-    const bg = backgroundBehind(painted, index, hostBg);
-
-    switch (node.role) {
-      case 'heading':
-        next.content = spec.heading ?? 'Section title';
-        style.fill = 'transparent';
-        style.fontColor = tone(bg, PLACEHOLDER_TONE.heading);
-        style.fontSize = 14;
-        style.fontWeight = 600;
-        style.textAlign = spec.align ?? 'left';
-        break;
-      case 'text': {
-        const kind = textKindForHeight(node.layout?.h ?? 0);
-        const look = textLook(kind, descriptionIndex.get(node.id) ?? 0, spec.text?.[kind]);
-        next.content = look.content;
-        style.fill = 'transparent';
-        style.fontColor = tone(bg, PLACEHOLDER_TONE.text);
-        style.fontSize = look.fontSize;
-        style.fontWeight = look.fontWeight;
-        style.textAlign = spec.align ?? 'left';
+    const rect: Rect = { x: l?.x ?? 0, y: l?.y ?? 0, w: l?.w ?? 0, h: l?.h ?? 0 };
+    painted.push({ rect, fill: null, level: 0 });
+    let behind = -1;
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (painted[i].fill && overlaps(painted[i].rect, rect)) {
+        behind = i;
         break;
       }
-      case 'button':
+    }
+    const bgRgb = behind >= 0 ? (painted[behind].fill as RGB) : hostBg;
+    const bgLevel: Level = behind >= 0 ? painted[behind].level : hostLevel;
+    const bg = toHex(bgRgb);
+    const ink =
+      bgLevel === 3
+        ? { text: palette.onAccent, body: palette.onAccent, muted: palette.onAccent, icon: palette.onAccent }
+        : bgLevel >= 1
+          ? {
+              text: palette.accentSoftText,
+              body: palette.accentSoftText,
+              muted: palette.accentSoftText,
+              icon: palette.accent,
+            }
+          : inksOn(palette, bg);
+    let level: Level = 0;
+    let kind: FitKind = 'block';
+    const contained = behind >= 0 && contains(painted[behind].rect, rect);
+    const text = (fontColor: string) => {
+      style.fill = 'transparent';
+      style.fontColor = fontColor;
+      if (palette.fontFamily) style.fontFamily = palette.fontFamily;
+    };
+
+    switch (node.role) {
+      case 'heading': {
+        next.content = spec.heading ?? 'Section title';
+        text(ink.text);
+        const caption = spec.layout === 'center';
+        style.fontSize = spec.id === 'hero' ? 20 : caption ? 13 : 14;
+        style.fontWeight = 600;
+        style.textAlign = spec.align ?? 'left';
+        kind = 'line';
+        break;
+      }
+      case 'text': {
+        const tk = textKindForHeight(node.layout?.h ?? 0);
+        const tl = textLook(tk, descriptionIndex.get(node.id) ?? 0, spec.text?.[tk]);
+        next.content = tl.content;
+        style.fontSize = tl.fontSize;
+        style.fontWeight = tl.fontWeight;
+        style.textAlign = spec.align ?? 'left';
+        let color = tk === 'stat' ? ink.text : tk === 'label' ? ink.muted : ink.body;
+        if (tk === 'link') {
+          // The first tab is the active one (it carries the indicator).
+          if (spec.layout === 'tabs') {
+            style.textAlign = 'center';
+            if (linkIndex === 0) {
+              color = ink.text;
+              style.fontWeight = 600;
+            }
+          }
+          linkIndex += 1;
+        }
+        if (spec.id === 'badge') {
+          color = ink.text;
+          style.fontWeight = 600;
+        }
+        text(color);
+        kind = (tk === 'description' || tk === 'subtitle') && !rowLike ? 'wrap' : 'line';
+        break;
+      }
+      case 'button': {
         next.content = spec.button ?? 'Action';
-        style.fill = tone(bg, PLACEHOLDER_TONE.button);
-        style.fontColor = tone(hexToRgb(style.fill) as RGB, PLACEHOLDER_TONE.onFill);
+        const secondary = SECONDARY_BUTTON.has(spec.id);
+        if (secondary) {
+          style.fill = 'transparent';
+          style.stroke = palette.border;
+          style.strokeWidth = 1;
+          style.fontColor = ink.text;
+        } else {
+          style.fill = palette.accent;
+          style.strokeWidth = 0;
+          style.fontColor = palette.onAccent;
+          level = 3;
+        }
+        style.borderRadius = palette.controlRadius;
+        if (palette.fontFamily) style.fontFamily = palette.fontFamily;
         style.fontSize = 12;
         style.fontWeight = 500;
         style.textAlign = 'center';
+        kind = 'label';
         break;
-      case 'image':
-        // Keep the block neutral; just a slightly different grey, no content.
+      }
+      case 'image': {
         delete next.content;
-        style.fill = tone(bg, PLACEHOLDER_TONE.image);
+        level = Math.min(3, bgLevel + 1) as Level;
+        style.fill = levelFill(palette, level);
         break;
-      case 'icon':
-        delete next.content;
-        style.fill = tone(bg, PLACEHOLDER_TONE.icon);
+      }
+      case 'icon': {
+        const round = (style.borderRadius ?? 0) * 2 >= Math.min(rect.w, rect.h) - 1;
+        if (spec.id === 'radio') {
+          delete next.content;
+          style.fill = palette.accent;
+          level = 3;
+        } else if (contained || (round && bgLevel >= 1)) {
+          // A shape inside an image (the picture's "sun"): one tint deeper.
+          delete next.content;
+          level = Math.min(3, bgLevel + 1) as Level;
+          style.fill = levelFill(palette, level);
+        } else {
+          const glyph = icons.length ? icons[iconIndex % icons.length] : 'circle';
+          iconIndex += 1;
+          if (glyph === 'logo') {
+            delete next.content;
+            style.fill = palette.accent;
+            style.borderRadius = Math.max(4, Math.round(Math.min(rect.w, rect.h) / 4));
+            level = 3;
+          } else {
+            next.content = glyph;
+            style.fill = 'transparent';
+            style.fontColor = spec.id === 'icon' ? palette.accent : spec.id === 'iconButton' ? ink.body : ink.icon;
+            style.fontSize = Math.max(8, Math.round(Math.min(rect.w, rect.h)));
+          }
+        }
         break;
-      case 'badge':
+      }
+      case 'badge': {
         next.content = 'New';
-        style.fill = tone(bg, PLACEHOLDER_TONE.badge);
-        style.fontColor = tone(hexToRgb(style.fill) as RGB, PLACEHOLDER_TONE.onFill);
-        style.fontSize = 11;
-        style.fontWeight = 500;
+        if (bgLevel >= 1) {
+          style.fill = palette.accent;
+          style.fontColor = palette.onAccent;
+          level = 3;
+        } else {
+          style.fill = palette.accentSoft;
+          style.fontColor = palette.accentSoftText;
+          level = 1;
+        }
+        style.strokeWidth = 0;
+        if (palette.fontFamily) style.fontFamily = palette.fontFamily;
+        style.fontSize = 10;
+        style.fontWeight = 600;
         style.textAlign = 'center';
+        kind = 'label';
         break;
+      }
       case 'input':
         next.content = 'Type here...';
-        style.fill = inputFill(bg);
-        style.stroke = tone(bg, TONE.inputStroke);
+        style.fill = palette.field;
+        style.stroke = palette.border;
         style.strokeWidth = style.strokeWidth ?? 1;
-        style.fontColor = tone(hexToRgb(style.fill) as RGB, PLACEHOLDER_TONE.inputText);
+        style.fontColor = palette.textMuted;
         style.fontSize = 12;
         style.textAlign = 'left';
         break;
       case 'divider':
         // A thicker bar is an emphasis line (active-tab underline), not a rule.
-        style.fill = tone(bg, (node.layout?.h ?? 1) > 1 ? TONE.button : TONE.divider);
+        style.fill = (node.layout?.h ?? 1) > 1 ? palette.accent : palette.border;
+        level = (node.layout?.h ?? 1) > 1 ? 3 : 0;
         break;
       default:
         // Anything else keeps its wireframe look untouched.
@@ -1383,11 +1880,164 @@ export function fillPlaceholders(
     }
 
     const fill = parseColor(style.fill);
-    painted[index].fill = fill && fill.alpha > 0 ? composite(fill, bg) : null;
+    painted[index].fill = fill && fill.alpha > 0 ? composite(fill, bgRgb) : null;
+    painted[index].level = painted[index].fill ? level : bgLevel;
     if (next.layout === undefined) delete next.layout;
     if (next.points === undefined) delete next.points;
-    result.set(node.id, next);
+    styledNodes.push(next);
+
+    const radius = style.borderRadius ?? 0;
+    items.push({
+      node: next,
+      kind,
+      ...rect,
+      fontSize: style.fontSize ?? 12,
+      fontWeight: style.fontWeight ?? 400,
+      text: next.content ?? '',
+      centered: style.textAlign === 'center',
+      flexImage: node.role === 'image' && !contained && rect.h >= 40 && radius * 2 < Math.min(rect.w, rect.h) - 1,
+      roundImage: node.role === 'image' && !contained && radius * 2 >= Math.min(rect.w, rect.h) - 1,
+      overlayOf: contained ? behind : -1,
+    });
   });
 
-  return children.map((node) => result.get(node.id) ?? node);
+  // Fit: try to keep the drawn size, else grow, else shrink content.
+  let hostW = host?.layout?.w ?? DEFAULT_HOST_W;
+  const hostH = host?.layout?.h ?? DEFAULT_HOST_H;
+  const maxW = Math.max(hostW, options.maxW ?? Number.POSITIVE_INFINITY);
+  const maxH = Math.max(hostH, options.maxH ?? Number.POSITIVE_INFINITY);
+
+  // A centered single label (button, badge) widens its host rather than truncating.
+  if (spec.layout === 'center') {
+    const labels = items.filter((it) => it.kind === 'line' || it.kind === 'label');
+    if (labels.length === 1) {
+      const it = labels[0];
+      const pad = Math.min(PAD, Math.round(Math.min(hostW, hostH) * 0.15));
+      const want = estimateTextWidth(it.text, it.fontSize, it.fontWeight) + (it.kind === 'label' ? 16 : 0) + pad * 2;
+      if (want > hostW) {
+        const grownW = Math.min(maxW, want);
+        const dx = (grownW - hostW) / 2;
+        items.forEach((item) => {
+          item.x = Math.round(item.x + dx);
+        });
+        it.x = pad;
+        it.w = Math.round(grownW - pad * 2);
+        hostW = Math.round(grownW);
+      }
+    }
+  }
+
+  // Children sit in the host's padding box: a border eats into the room.
+  const inset = (hostStyle?.strokeWidth ?? 0) > 0 ? (hostStyle?.strokeWidth as number) : 0;
+  const innerW = hostW - inset * 2;
+  const innerH = hostH - inset * 2;
+  const base: FitParams = { maxLines: 2, imageScale: 1, imageFloor: 0.6, fontScale: 1, shrinkAvatars: false };
+  const run1 = (pms: FitParams) => {
+    const out = fitItems(items, innerW, innerH, pms, spec.layout);
+    return { ...out, needH: out.needH + inset * 2 };
+  };
+  let chosen: { params: FitParams; out: FitOutcome } | undefined;
+  // 1. Keep the drawn height: roomy copy first, then flexible images give up
+  //    to 40% of theirs.
+  const keep: FitParams[] = [{ ...base, maxLines: 3 }, base];
+  for (const s of [0.9, 0.8, 0.7, 0.6]) keep.push({ ...base, imageScale: s });
+  for (const pms of keep) {
+    const out = run1(pms);
+    if (out.needH <= hostH) {
+      chosen = { params: pms, out };
+      break;
+    }
+  }
+  // 2. Grow the host within its room (no image shrink: growing is preferred).
+  if (!chosen) {
+    const out = run1(base);
+    if (out.needH <= maxH) chosen = { params: base, out };
+  }
+  // 3. Shrink content: one-line copy, smaller images / avatars, smaller fonts.
+  if (!chosen) {
+    const shrink: FitParams[] = [
+      { ...base, maxLines: 1 },
+      { ...base, maxLines: 1, imageScale: 0.6 },
+      { ...base, maxLines: 1, imageScale: 0, imageFloor: 0, shrinkAvatars: true },
+      { maxLines: 1, imageScale: 0, imageFloor: 0, fontScale: 0.85, shrinkAvatars: true },
+    ];
+    for (const pms of shrink) {
+      const out = run1(pms);
+      chosen = { params: pms, out };
+      if (out.needH <= maxH) break;
+    }
+  }
+  const { out } = chosen as { params: FitParams; out: FitOutcome };
+  let newH = clamp(Math.max(hostH, out.needH), hostH, maxH);
+
+  // Center layouts re-center their content in the (possibly grown) host.
+  if (spec.layout === 'center') {
+    const top = Math.min(...out.boxes.map((b) => b.y));
+    const bottom = Math.max(...out.boxes.map((b) => b.y + b.h));
+    newH = clamp(Math.max(hostH, bottom - top + inset * 2), hostH, maxH);
+    const dy = Math.round((newH - inset * 2 - (bottom - top)) / 2 - top);
+    out.boxes.forEach((b) => {
+      b.y += dy;
+    });
+  }
+
+  // Write boxes back; drop parts that still spill out of the host.
+  const removed: string[] = [];
+  const result = new Map<string, IRNode>();
+  items.forEach((it, i) => {
+    const b = out.boxes[i];
+    const node = it.node;
+    if (b.y < 0 || b.x < 0 || b.y + b.h > newH - inset * 2 + 0.5 || b.x + b.w > innerW + 0.5) {
+      removed.push(node.id);
+      return;
+    }
+    node.layout = { ...node.layout, x: b.x, y: b.y, w: b.w, h: b.h };
+    const style = node.style as NodeStyle;
+    const classes: string[] = [];
+    if (it.kind === 'line') {
+      style.fontSize = b.fontSize;
+      classes.push('truncate', 'leading-tight');
+    } else if (it.kind === 'wrap') {
+      style.fontSize = b.fontSize;
+      classes.push('overflow-hidden', 'leading-tight', b.lines > 1 ? `line-clamp-${b.lines}` : 'truncate');
+    } else if (it.kind === 'label') {
+      style.fontSize = b.fontSize;
+      classes.push('flex', 'items-center', 'justify-center', 'overflow-hidden', 'whitespace-nowrap', 'leading-none');
+    } else if (node.role === 'icon' && node.content) {
+      style.fontSize = Math.max(8, Math.round(Math.min(b.w, b.h)));
+      classes.push('flex', 'items-center', 'justify-center');
+    } else if (node.role === 'divider') {
+      // An <hr> otherwise paints a top border in the inherited text colour.
+      classes.push('border-0');
+    } else if (node.role === 'image' && it.roundImage) {
+      style.borderRadius = Math.round(Math.min(b.w, b.h) / 2);
+    }
+    node.tailwind = classes.join(' ');
+    result.set(node.id, node);
+  });
+  // Any child keeps a removed one's slot ids stable; `order` stays as is.
+  const filled = children.filter((c) => result.has(c.id)).map((c) => result.get(c.id) as IRNode);
+
+  const nextHost: IRNode | undefined = styledHost
+    ? {
+        ...styledHost,
+        layout: { ...styledHost.layout, w: hostW, h: newH },
+      }
+    : undefined;
+  return { children: filled, removed, host: nextHost };
+}
+
+/**
+ * Convert grey-wireframe children into themed placeholder content (see
+ * `fillComponent`); returns only the children. Kept for callers that do not
+ * resize or restyle the host.
+ */
+export function fillPlaceholders(
+  children: IRNode[],
+  componentLabel: string,
+  host?: IRNode,
+  backdrop?: string,
+  options: FillOptions = {},
+): IRNode[] {
+  return fillComponent(children, componentLabel, host, backdrop, options).children;
 }
