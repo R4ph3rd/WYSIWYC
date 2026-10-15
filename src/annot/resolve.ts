@@ -610,9 +610,9 @@ export function componentAt(leafId: string, nodes: IntentNode[], boxes: Record<s
  * drag lands (ir/layoutFit.ts `pickDropTarget`): container under the arrow
  * head + insertion index among its items.
  *
- * Source: the selected component when the arrow starts on (or within
- * {@link ARROW_NEAR_PX} of) it — even on one of its children; otherwise the
- * component under the tail ({@link componentAt}). Destination: the innermost
+ * Source: the selected component, wherever the arrow starts — even on one
+ * of its children (closest selected node wins when several are selected);
+ * otherwise the component under the tail ({@link componentAt}). Destination: the innermost
  * node under the head outside the moved subtree. Pointing into the moved
  * node's own subtree is an error; no source, or a head on bare canvas / the
  * root frame, leaves `intent` null so the model interprets the arrow.
@@ -632,7 +632,6 @@ export function resolveArrowMove(a: Annotation, boxes: Record<string, NodeBox>, 
   const selected = (a.selectedIds ?? [])
     .filter((id) => byId.get(id)?.parentId && boxes[id])
     .map((id) => ({ id, d: distanceToBox(tail, boxes[id]), area: boxArea(boxes[id]) }))
-    .filter((c) => c.d <= ARROW_NEAR_PX)
     .sort((p, q) => p.d - q.d || p.area - q.area);
   if (selected.length) {
     sourceId = selected[0].id;
