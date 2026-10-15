@@ -1449,23 +1449,34 @@ export const useAppStore = create<AppState>((set, get) => {
         const t = n.content?.trim();
         return t ? `the ${n.role} "${t.slice(0, 24)}"` : `the ${n.role}`;
       };
+      let refSeq = 0;
+      const refs: PromptRef[] = [];
       const lines = plan.map((p) => {
         const tgt = p.targetNodeIds.length
           ? ` (${p.targetNodeIds.map(labelOf).join(', ')})`
           : '';
-        return `- ${p.instruction}${tgt}`;
+        // An arrow's head is a concrete destination: hand it over as a location
+        // reference instead of leaving the model to guess "where it points".
+        const a = s.annotations.find((x) => x.id === p.annotationId);
+        const head = a?.kind === 'arrow' && a.points && a.points.length > 1 ? a.points[a.points.length - 1] : null;
+        let where = '';
+        if (head) {
+          const refId = `ref_${++refSeq}`;
+          refs.push({
+            kind: 'location', refId, x: head.x, y: head.y, label: 'arrow head',
+            nearNodeId: p.targetNodeIds[0],
+          });
+          where = ` [arrow points at «${refId}»]`;
+        }
+        return `- ${p.instruction}${tgt}${where}`;
       });
       const message = `Apply these changes I marked up on the canvas:\n${lines.join('\n')}`;
       const scopeNodeIds = Array.from(new Set(plan.flatMap((p) => p.targetNodeIds)));
-      let refSeq = 0;
-      const refs: PromptRef[] = plan.flatMap((p) =>
-        (p.images ?? []).map((dataUrl) => ({
-          kind: 'image' as const,
-          refId: `ref_${++refSeq}`,
-          label: 'comment image',
-          dataUrl,
-        })),
-      );
+      for (const p of plan) {
+        for (const dataUrl of p.images ?? []) {
+          refs.push({ kind: 'image', refId: `ref_${++refSeq}`, label: 'comment image', dataUrl });
+        }
+      }
       // Close the plan and mark busy, but KEEP the annotations until the compose
       // actually succeeds, so markup (and dropped images) isn't lost if the call
       // fails (not connected, rate-limited, network). demoBusy hides the re-send

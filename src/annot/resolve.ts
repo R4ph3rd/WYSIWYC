@@ -402,10 +402,9 @@ export function synthesizeInstruction(a: Annotation, targetLabels: string[]): st
       return text || compose('Revise this element.', targets);
     case 'arrow': {
       if (text) return compose(text, targets);
-      const base = labels.length >= 2
-        ? 'Move this element to where the arrow points.'
-        : 'Point this toward the indicated spot.';
-      return compose(base, targets);
+      // Labels are [head, tail]: the element at the tail is the one that moves.
+      if (labels.length >= 2) return `Move the ${labels[1]} to where the arrow points, next to the ${labels[0]}.`;
+      return compose('Point this toward the indicated spot.', targets);
     }
     case 'box':
       return text
