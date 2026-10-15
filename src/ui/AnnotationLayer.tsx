@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MessageSquare, Trash2, X, ImagePlus } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
-import type { Annotation } from '@/ir/types';
-import { scribbleStrokes } from '@/annot/resolve';
+import type { Annotation, IR } from '@/ir/types';
+import { intentLabel, resolveScribbleIntent, scribbleStrokes, type NodeBox } from '@/annot/resolve';
 
 /**
  * Annotation layer (prompt-by-demonstration, part B). Renders the rough markup
@@ -18,7 +18,9 @@ export function AnnotationLayer({ stageRef }: { stageRef: React.RefObject<HTMLDi
   const annotations = useAppStore((s) => s.annotations);
   const updateAnnotation = useAppStore((s) => s.updateAnnotation);
   const removeAnnotation = useAppStore((s) => s.removeAnnotation);
+  const ir = useAppStore((s) => s.ir);
   const [openId, setOpenId] = useState<string | null>(null);
+  const boxes = useNodeBoxes(stageRef, [annotations, ir]);
   const prevCount = useRef(annotations.length);
 
   // Auto-open a freshly placed comment for immediate typing.
@@ -64,6 +66,12 @@ export function AnnotationLayer({ stageRef }: { stageRef: React.RefObject<HTMLDi
             <X className="h-2.5 w-2.5" />
           </button>
         );
+      })}
+
+      {/* What each scribble gesture was recognised as (top-right of its bounds). */}
+      {drawings.filter((a) => a.kind === 'scribble').map((a) => {
+        const b = shapeBounds(a);
+        return b ? <IntentChip key={`intent-${a.id}`} a={a} at={{ x: b.x + b.w + 6, y: b.y - 10 }} boxes={boxes} ir={ir} /> : null;
       })}
 
       {comments.map((a) => (
@@ -121,6 +129,61 @@ function AnnotationShape({ a }: { a: Annotation }) {
     );
   }
   return null;
+}
+
+/** Stage-relative boxes of every rendered IR node, re-measured when `deps` change. */
+function useNodeBoxes(stageRef: React.RefObject<HTMLDivElement | null>, deps: unknown[]): Record<string, NodeBox> {
+  const [boxes, setBoxes] = useState<Record<string, NodeBox>>({});
+  useLayoutEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const sr = stage.getBoundingClientRect();
+    const next: Record<string, NodeBox> = {};
+    stage.querySelectorAll<HTMLElement>('[data-node-id]').forEach((el) => {
+      const id = el.dataset.nodeId;
+      if (!id) return;
+      const r = el.getBoundingClientRect();
+      next[id] = { x: r.left - sr.left, y: r.top - sr.top, w: r.width, h: r.height };
+    });
+    setBoxes(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return boxes;
+}
+
+/**
+ * The recognised meaning of a scribble ("Delete", "Move into container",
+ * "Swap", "Fill"), so the user sees what applying it will do. Unrecognised
+ * marks read "Edit" and go to the model as before.
+ */
+function IntentChip({ a, at, boxes, ir }: { a: Annotation; at: { x: number; y: number }; boxes: Record<string, NodeBox>; ir: IR }) {
+  const { gesture, intent } = resolveScribbleIntent(a, boxes, ir.nodes);
+  const labelOf = (id: string) => {
+    const n = ir.nodes.find((x) => x.id === id);
+    if (!n) return id;
+    const t = n.content?.trim();
+    return t ? `"${t.slice(0, 16)}"` : n.role;
+  };
+  const tone = !intent
+    ? 'border-slate-200 bg-white text-slate-500'
+    : intent.kind === 'delete'
+      ? 'border-rose-200 bg-rose-50 text-rose-600'
+      : 'border-indigo-200 bg-indigo-50 text-indigo-600';
+  return (
+    <span
+      data-intent={intent?.kind ?? 'none'}
+      data-gesture={gesture.kind}
+      title={
+        !intent || intent.kind === 'fill'
+          ? 'The model will interpret this mark when you apply the annotations'
+          : 'Recognised gesture: applied directly when you apply the annotations'
+      }
+      className={`pointer-events-none absolute z-30 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] font-semibold shadow-sm ${tone}`}
+      style={{ left: at.x, top: at.y }}
+    >
+      {intentLabel(intent, labelOf)}
+    </span>
+  );
 }
 
 function shapeBounds(a: Annotation): { x: number; y: number; w: number; h: number } | null {

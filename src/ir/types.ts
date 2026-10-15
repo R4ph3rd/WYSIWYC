@@ -262,7 +262,11 @@ export type ManipulationOp =
   /** A shape/text/path hand-drawn on the canvas with the tool palette. */
   | { kind: 'draw'; id: string; role: NodeRole; layout: NodeLayout }
   /** Re-applying a saved Recipe (an abstracted prior instruction) to a selection. */
-  | { kind: 'recipe'; id: string; recipeId: string; instruction: string };
+  | { kind: 'recipe'; id: string; recipeId: string; instruction: string }
+  /** Moving a node under another parent (e.g. a scribbled arrow into a container). */
+  | { kind: 'reparent'; id: string; fromParentId: string | null; toParentId: string; toIndex: number; layout?: NodeLayout }
+  /** Exchanging the positions (parent, order, absolute x/y) of two nodes. */
+  | { kind: 'swap'; id: string; otherId: string };
 
 // --- DirectGPT interaction layer (CHI 2024, Masson et al.) ----------------
 //
@@ -395,4 +399,30 @@ export interface DemoPlanItem {
   confidence: ProposalConfidence;
   /** Images carried from the source comment (data URLs). */
   images?: string[];
+  /**
+   * What a recognised scribble gesture means (cross-out, arrow, swap, fill).
+   * delete / move / swap are applied deterministically on the IR; editing the
+   * row's instruction drops the intent so the edited text goes to the model.
+   */
+  intent?: DemoIntent;
 }
+
+/**
+ * The resolved meaning of a scribble gesture (see annot/gesture.ts). Node ids
+ * are IR ids; `move` carries the exact destination so it needs no model call.
+ */
+export type DemoIntent =
+  | { kind: 'delete'; ids: string[] }
+  | {
+      kind: 'move';
+      id: string;
+      toParentId: string;
+      toIndex: number;
+      /** New absolute x/y (absolute-positioned nodes only), relative to the new parent. */
+      layout?: { x: number; y: number };
+      /** The element the drop point landed next to, when not a bare container. */
+      nextToId?: string;
+      placement?: 'before' | 'after' | 'inside';
+    }
+  | { kind: 'swap'; ids: [string, string] }
+  | { kind: 'fill'; ids: string[] };

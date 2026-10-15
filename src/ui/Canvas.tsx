@@ -15,6 +15,7 @@ import { AnnotationLayer } from './AnnotationLayer';
 import { ModificationPlan } from './ModificationPlan';
 import { useStudyStore } from '@/store/studyStore';
 import { scribbleStrokes } from '@/annot/resolve';
+import { strokeJoinsScribble } from '@/annot/gesture';
 
 type Bounds = { x: number; y: number; w: number; h: number };
 
@@ -581,7 +582,9 @@ export function Canvas() {
         const current = scribbleIdRef.current
           ? useAppStore.getState().annotations.find((a) => a.id === scribbleIdRef.current)
           : undefined;
-        if (current) {
+        // A stroke far from the session's scribble starts a new gesture (so two
+        // separate cross-outs stay two annotations); nearby strokes merge.
+        if (current && strokeJoinsScribble(scribbleStrokes(current), d.points)) {
           updateAnnotation(current.id, { strokes: [...scribbleStrokes(current), d.points], points: undefined });
         } else {
           const id = newAnnotId();
