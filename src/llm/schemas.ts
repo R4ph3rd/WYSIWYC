@@ -181,12 +181,12 @@ const paramSpanSchema = {
     end: { type: 'integer', description: 'Char offset into clause.text (exclusive).' },
     kind: {
       type: 'string',
-      enum: ['color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'text'],
+      enum: ['color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'shape', 'position', 'icon', 'text'],
     },
     nodeIds: { type: 'array', items: { type: 'string' } },
     path: {
       type: 'string',
-      description: 'IR field: "style.<key>", "layout.<key>", "tailwind:<prefix>", "align", or "content".',
+      description: 'IR field: "style.<key>", "layout.<key>", "tailwind:<prefix>", "gradient:from|via|to", "position:<containerId>", "icon", "align", or "content".',
     },
     value: { type: 'string', description: 'Current value (e.g. "#4f46e5", "600", "16", "Inter").' },
     options: { type: 'array', items: { type: 'string' } },

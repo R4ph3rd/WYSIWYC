@@ -172,10 +172,12 @@ export type ParamKind =
   | 'align'       // left/center/right → Segmented
   | 'enum'        // closed set from `options` → Segmented/Select
   | 'shape'       // round/rounded/square/rectangle → maps to borderRadius → ShapeControl
+  | 'position'    // where a subject sits in its layout container (left/center/right, top/bottom) → Segmented
+  | 'icon'        // which icon an icon node draws (lucide name) → IconPicker
   | 'text';       // fallback: free text → TextInput
 
 export const PARAM_KINDS: ParamKind[] = [
-  'color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'shape', 'text',
+  'color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'shape', 'position', 'icon', 'text',
 ];
 
 /**
@@ -186,6 +188,13 @@ export const PARAM_KINDS: ParamKind[] = [
  *   - "tailwind:<prefix>" → a Tailwind utility family via setUtility (e.g. "tailwind:bg-")
  *   - "align"             → text alignment via setAlignment
  *   - "content"           → the node's text content
+ *   - "gradient:<stop>"   → one gradient stop ("from" | "via" | "to"), keeping the gradient
+ *   - "position:<containerId>" → the node's side inside that layout container (reorder / x)
+ *   - "icon"              → the icon an icon node draws (content = lucide icon name, e.g. "Bell")
+ *
+ * `nodeIds` is the SUBSET of the clause's dependent nodes the token refers to
+ * (see ir/bindings.ts): "green" in "positive changes are green, negative ones
+ * red" binds only the nodes currently green / qualified as positive.
  */
 export interface ParamSpan {
   id: string;          // "param_1", unique within the clause

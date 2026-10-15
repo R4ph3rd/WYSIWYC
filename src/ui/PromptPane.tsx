@@ -114,7 +114,13 @@ export function PromptPane() {
     }
     return m;
   }, [irNodes]);
-  const spansFor = (c: PromptClause): ParamSpan[] => paramsForClause(c, ownedByClause.get(c.id) ?? []);
+  // Binding context: the whole IR (descendants / layout parents of owned
+  // nodes) and other clauses' text (to match subjects like "page title").
+  const lexCtx = useMemo(() => {
+    const textById = new Map(clauses.map((c) => [c.id, c.text]));
+    return { nodes: irNodes, clauseText: (id: string) => textById.get(id) };
+  }, [irNodes, clauses]);
+  const spansFor = (c: PromptClause): ParamSpan[] => paramsForClause(c, ownedByClause.get(c.id) ?? [], lexCtx);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [altMenu, setAltMenu] = useState<{ clauseId: string; x: number; y: number; pending?: boolean } | null>(null);
@@ -439,7 +445,8 @@ function ClauseContent({
 
 const PARAM_LABEL: Record<ParamSpan['kind'], string> = {
   color: 'color', length: 'size', fontFamily: 'font', fontWeight: 'weight', shadow: 'shadow',
-  radius: 'corners', opacity: 'opacity', align: 'alignment', enum: 'option', shape: 'shape', text: 'value',
+  radius: 'corners', opacity: 'opacity', align: 'alignment', enum: 'option', shape: 'shape',
+  position: 'position', icon: 'icon', text: 'value',
 };
 
 /**
@@ -700,6 +707,8 @@ const BIND_KINDS: { kind: ParamKind; label: string }[] = [
   { kind: 'radius', label: 'Corners' },
   { kind: 'shape', label: 'Shape' },
   { kind: 'align', label: 'Align' },
+  { kind: 'position', label: 'Position' },
+  { kind: 'icon', label: 'Icon' },
   { kind: 'shadow', label: 'Shadow' },
   { kind: 'text', label: 'Value' },
 ];

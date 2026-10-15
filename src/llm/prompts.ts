@@ -18,6 +18,9 @@ export interface ComposeOptions {
  */
 const compact = (value: unknown): string => JSON.stringify(value);
 
+/** How icon nodes are authored so the renderer can draw them. */
+const ICON_RULE = `ICONS: a node with role "icon" draws a lucide-react icon named by its "content" — use the PascalCase lucide name (e.g. "Bell" for notifications, "Calendar", "Search", "Settings", "User", "Mail", "Plus", "BarChart3"), never an empty string. When a clause changes an icon noun ("a calendar icon" → "a notification icon"), update that icon node's content to the matching name.`;
+
 /** Shared design-quality bar for everything the model authors. */
 const DESIGN_BAR = `Author production-quality Tailwind in each node's "tailwind" field: a consistent 4/8px spacing scale, one primary color, neutral grays, rounded-lg/xl, subtle shadows. Aim for Linear / Vercel / v0-grade polish — a real designed UI, not a wireframe. Use gradients, ring-1, shadow-* and proper type scale where appropriate.`;
 
@@ -54,6 +57,8 @@ Given the user's instruction, the current spec and the current scene graph:
 - Fold the instruction into the spec: refine existing clauses IN PLACE (reuse their ids), add new clauses for genuinely new ideas (fresh ids counting up), remove clauses that no longer hold. Do NOT return untouched clauses. Keep one idea per clause, roughly 5–15 words.
 - ORIGIN: set "origin" on every clause you return. Use "explicit" when the user stated the information (even loosely); use "inferred" when YOU chose it — a sensible default, a guess, or a facet the user never mentioned. Be honest: default palettes, fonts, spacing and moods you invented are "inferred", not "explicit".
 - PARAMS: for each clause, when the sentence names a concrete, editable visual value (a color, a length in px, a font family, a font weight, a shadow/elevation, a corner radius, an opacity, or a text alignment), emit a "params" entry: set start/end to the substring of the clause "text" that names it, "kind" to the matching ParamKind, "nodeIds" to the node(s) it controls, "path" to the IR field it maps to ("style.*", "layout.*", "tailwind:<prefix>" like "tailwind:bg-"/"text-"/"border-"/"ring-" for colors that live only in Tailwind, "align", or "content"), and "value" to the current value. Use kind "text" for anything editable that has no structured widget. Omit params when a clause names no concrete value.
+- PARAM SCOPE: "nodeIds" lists ONLY the nodes that token describes, not every node of the clause. In "positive changes are green, negative ones red", "green" binds just the positive-change nodes and "red" just the negative ones. A color word naming a gradient stop uses path "gradient:from" / "gradient:via" / "gradient:to" (never a solid fill). A side word placing a subject in a row/column ("page title on the LEFT") is kind "position", path "position:<containerId>", nodeIds [the subject's node], options ["left","center","right"] (or top/center/bottom). An icon noun ("a CALENDAR icon") is kind "icon", path "icon", value the lucide icon name.
+- ${ICON_RULE}
 - ALTERNATIVES: for each clause, optionally give up to 3 short "alternatives" — other plausible values/phrasings the user might pick instead (e.g. other palettes, fonts, layouts, moods). ALWAYS provide alternatives for "inferred" clauses so the user can swap a guess in one click. Each alternative is a full replacement sentence for that clause.
 - Emit the MINIMAL IR patch (add/update/remove/reorder ops) that makes the scene match the new spec. If the scene is empty, generate the full UI.
 - Reuse existing node IDs. Only create new IDs for genuinely new elements. NEVER renumber.
@@ -146,6 +151,7 @@ Rules:
 - ${DESIGN_BAR}
 - The "tailwind" field is where visual richness lives — the renderer is generic and applies it verbatim.
 - Set provenance.promptClauseId on every node you add or change to the clause id that motivated it, and provenance.source to "llm".
+- ${ICON_RULE}
 - Emit the SMALLEST patch that satisfies the change. Do not rewrite untouched nodes.
 - There must be exactly one root node (parentId null), typically a role:"frame" that centers/lays out the screen.`;
 

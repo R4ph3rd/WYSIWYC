@@ -21,7 +21,11 @@ import type {
   WireframeFill,
 } from '@/ir/types';
 import { setAlignment, setUtility } from '@/ir/tailwindEdit';
-import { COLOR_NAMES, createManualSpan } from '@/ir/paramLexer';
+import { createManualSpan, paramsForClause, type LexContext } from '@/ir/paramLexer';
+import { nearestColorName } from '@/ir/colors';
+import { writeGradientStop, writePosition, type GradientStop } from '@/ir/bindings';
+import { iconWord } from '@/ir/icons';
+import { diffParamEdit, reconcilePositionProse, syncIconsToClauses } from '@/ir/clauseEdit';
 import { familyFromStack } from '@/lib/fonts';
 import { loadGoogleFont } from '@/lib/loadFont';
 import {
@@ -451,6 +455,18 @@ const SHAPE_RADIUS: Record<string, number> = { round: 9999, circular: 9999, roun
 
 /** Write one parameter's value onto a node by its ParamSpan path. Deterministic. */
 function writeParam(ir: IR, node: IRNode, span: ParamSpan, value: string): IR {
+  // Gradient stop: edit only that stop, keep the gradient (never a solid fill).
+  if (span.path.startsWith('gradient:')) {
+    return writeGradientStop(ir, node.id, span.path.slice('gradient:'.length) as GradientStop, value);
+  }
+  // Position: move the subject to that side of its layout container.
+  if (span.kind === 'position' || span.path.startsWith('position')) {
+    return writePosition(ir, node.id, value);
+  }
+  // Icon: the node draws the chosen lucide icon (content = icon name).
+  if (span.kind === 'icon' || span.path === 'icon') {
+    return updateNodeContent(ir, node.id, value);
+  }
   if (span.kind === 'align' || span.path === 'align') {
     const cls = value === 'left' ? 'text-left' : value === 'right' ? 'text-right' : 'text-center';
     return setNodeTailwindOnly(ir, node.id, setAlignment(node.tailwind, cls));
@@ -491,29 +507,6 @@ function nearestShapeWord(borderRadius: number): string {
   return 'square';
 }
 
-/** Map a 6-digit hex color back to the closest named color in the lexer palette. */
-function nearestColorName(hex: string): string {
-  const lc = hex.toLowerCase();
-  // Exact match: avoid a distance search when the picker lands on a palette color.
-  const exact = Object.keys(COLOR_NAMES).find((name) => COLOR_NAMES[name].toLowerCase() === lc);
-  if (exact) return exact;
-  // Nearest by RGB Euclidean distance.
-  if (!/^#[0-9a-f]{6}$/.test(lc)) return hex; // not a 6-char hex — return as-is
-  const r1 = parseInt(lc.slice(1, 3), 16);
-  const g1 = parseInt(lc.slice(3, 5), 16);
-  const b1 = parseInt(lc.slice(5, 7), 16);
-  let best = 'blue';
-  let bestDist = Infinity;
-  for (const [name, namedHex] of Object.entries(COLOR_NAMES)) {
-    const r2 = parseInt(namedHex.slice(1, 3), 16);
-    const g2 = parseInt(namedHex.slice(3, 5), 16);
-    const b2 = parseInt(namedHex.slice(5, 7), 16);
-    const dist = (r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2;
-    if (dist < bestDist) { bestDist = dist; best = name; }
-  }
-  return best;
-}
-
 /** The human-readable prose form of a value (null = leave the clause token unchanged). */
 function humanParamValue(span: ParamSpan, value: string): string | null {
   switch (span.kind) {
@@ -529,9 +522,41 @@ function humanParamValue(span: ParamSpan, value: string): string | null {
     case 'color':
       // Color picker emits hex; keep the prose readable with a named color.
       return value.startsWith('#') ? nearestColorName(value) : value;
+    case 'icon':
+      return iconWord(value); // "Bell" → "notification"
+    case 'position':
+      return value;
     default:
       return value; // font family, weight, align word, enum, free text
   }
+}
+
+/** Binding context for the lexer: whole IR + other clauses' text. */
+function lexContext(ir: IR, prompt: StructuredPrompt): LexContext {
+  const textById = new Map(prompt.clauses.map((c) => [c.id, c.text]));
+  return { nodes: ir.nodes, clauseText: (id) => textById.get(id) };
+}
+
+/** Write a param value onto every node it binds, preserving each node's provenance. */
+function applySpanValue(ir: IR, clauseId: string, span: ParamSpan, value: string): IR {
+  // A size/spacing slider the model left "prose only" (no bound nodes) still
+  // ought to move the UI: fall back to the nodes this clause describes so the
+  // change is visible on the canvas, not just in the sentence.
+  const targetIds =
+    span.nodeIds.length > 0
+      ? span.nodeIds
+      : span.kind === 'length' || span.kind === 'radius'
+        ? ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId).map((n) => n.id)
+        : [];
+  let next = ir;
+  for (const nodeId of targetIds) {
+    const before = next.nodes.find((n) => n.id === nodeId);
+    if (!before) continue;
+    const prov = before.provenance;
+    next = writeParam(next, before, span, value);
+    next = { ...next, nodes: next.nodes.map((n) => (n.id === nodeId ? { ...n, provenance: prov } : n)) };
+  }
+  return next;
 }
 
 export const useAppStore = create<AppState>((set, get) => {
@@ -560,10 +585,67 @@ export const useAppStore = create<AppState>((set, get) => {
         recentIds: patchedIds(patch),
         generating: false,
       }));
+      // The model sometimes leaves an icon slot empty or emits a word / emoji
+      // that is not the icon the clause names: reconcile deterministically.
+      syncClauseIcons(changedClauseIds);
       recordVersion('Spec edit');
     } catch (err) {
       handleLLMError(set, err, 'generating');
     }
+  }
+
+  /**
+   * A free-text clause edit that only changes parameter tokens ("calendar" →
+   * "notification", "green" → "teal", "left" → "right") is applied straight to
+   * the IR through the known token bindings — no LLM call. Returns false when
+   * the edit is structural (then the caller falls back to Call A).
+   */
+  function applyClauseTextDeterministically(
+    clauseId: string,
+    text: string,
+    extra: Partial<PromptClause> = {},
+  ): boolean {
+    const s = get();
+    const clause = s.prompt.clauses.find((c) => c.id === clauseId);
+    if (!clause || clause.text === text) return false;
+    const ctx = lexContext(s.ir, s.prompt);
+    const owned = s.ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId);
+    const spans = paramsForClause(clause, owned, ctx);
+    const diff = diffParamEdit(clause.text, text, spans);
+    if (!diff || diff.changes.length === 0) return false;
+    let ir = s.ir;
+    for (const ch of diff.changes) {
+      ir = applySpanValue(ir, clauseId, ch.span, ch.value);
+      if (ch.span.kind === 'fontFamily') loadGoogleFont(familyFromStack(ch.value) || ch.value);
+    }
+    // Persisted (model/manual) spans move with the edit; lexed ones re-derive.
+    const params = clause.params
+      ?.filter((p) => !p.id.startsWith('lex_'))
+      .map((p) => {
+        const off = diff.offsets.get(p.id);
+        const ch = diff.changes.find((c) => c.span.id === p.id);
+        return off ? { ...p, start: off[0], end: off[1], ...(ch ? { value: ch.value } : {}) } : p;
+      });
+    let nextClause: PromptClause = { ...clause, ...extra, text, params };
+    if (diff.changes.some((c) => c.span.kind === 'position') && !params?.some((p) => p.kind === 'position')) {
+      nextClause = { ...nextClause, text: reconcilePositionProse(nextClause, ir, lexContext(ir, s.prompt)) };
+    }
+    set((st) => ({
+      history: [...st.history, snapshot(st)].slice(-50),
+      ir,
+      prompt: { clauses: st.prompt.clauses.map((c) => (c.id === clauseId ? nextClause : c)) },
+      recentIds: [clauseId, ...diff.changes.flatMap((c) => c.span.nodeIds)],
+    }));
+    recordVersion('Spec edit');
+    return true;
+  }
+
+  /** Make the given clauses' icon nodes draw the icon their prose names (deterministic). */
+  function syncClauseIcons(clauseIds: string[]): void {
+    const { ir, prompt } = get();
+    const clauses = prompt.clauses.filter((c) => clauseIds.length === 0 || clauseIds.includes(c.id));
+    const next = syncIconsToClauses(ir, clauses, lexContext(ir, prompt));
+    if (next !== ir) set({ ir: next });
   }
 
   function scheduleCallA(changedClauseIds: string[]): void {
@@ -881,6 +963,7 @@ export const useAppStore = create<AppState>((set, get) => {
         get().chooseComponent(inf.nodeId, cand.label);
         return;
       }
+      if (applyClauseTextDeterministically(clauseId, text, { origin: 'explicit' })) return;
       set((s) => ({
         prompt: {
           clauses: s.prompt.clauses.map((c) =>
@@ -888,6 +971,7 @@ export const useAppStore = create<AppState>((set, get) => {
           ),
         },
       }));
+      syncClauseIcons([clauseId]);
       scheduleCallA([clauseId]);
     },
 
@@ -950,6 +1034,7 @@ export const useAppStore = create<AppState>((set, get) => {
             lastSent: opts.viaRecipe ? s.lastSent : text,
             generating: false,
           }));
+          syncClauseIcons(result.updatedClauses.map((c) => c.id));
           recordVersion(text.length > 40 ? `${text.slice(0, 40).trim()}…` : text);
           opts.onSettled?.(true);
         } catch (err) {
@@ -1000,9 +1085,11 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     editClause: (id, text) => {
+      if (applyClauseTextDeterministically(id, text)) return;
       set((s) => ({
         prompt: { clauses: s.prompt.clauses.map((c) => (c.id === id ? { ...c, text } : c)) },
       }));
+      syncClauseIcons([id]);
       scheduleCallA([id]);
     },
 
@@ -1156,31 +1243,17 @@ export const useAppStore = create<AppState>((set, get) => {
 
       // 1. Deterministic IR write, preserving provenance (NOT diverged: a forward
       //    param edit keeps the node described by — linked to — its clause).
-      let ir = state.ir;
-      // A size/spacing slider the model left "prose only" (no bound nodes) still
-      // ought to move the UI: fall back to the nodes this clause describes so the
-      // change is visible on the canvas, not just in the sentence.
-      const targetIds =
-        span.nodeIds.length > 0
-          ? span.nodeIds
-          : span.kind === 'length' || span.kind === 'radius'
-            ? ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId).map((n) => n.id)
-            : [];
-      for (const nodeId of targetIds) {
-        const before = ir.nodes.find((n) => n.id === nodeId);
-        if (!before) continue;
-        const prov = before.provenance;
-        ir = writeParam(ir, before, span, value);
-        ir = { ...ir, nodes: ir.nodes.map((n) => (n.id === nodeId ? { ...n, provenance: prov } : n)) };
-      }
+      const ir = applySpanValue(state.ir, clauseId, span, value);
       if (span.kind === 'fontFamily') loadGoogleFont(familyFromStack(value) || value);
 
       // 2. Rewrite the parameter token in the clause prose; shift later spans.
       const baseText = original?.text ?? clause.text;
-      const baseParams = original?.params ?? clause.params;
+      // Lexer-derived spans are re-derived from text + IR on read; only
+      // model-emitted / manually bound spans are persisted on the clause.
+      const baseParams = (original?.params ?? clause.params)?.filter((p) => !p.id.startsWith('lex_'));
       const human = humanParamValue(span, value);
       let newText = clause.text;
-      let newParams = clause.params;
+      let newParams = clause.params?.filter((p) => !p.id.startsWith('lex_'));
       if (human !== null) {
         newText = baseText.slice(0, span.start) + human + baseText.slice(span.end);
         const delta = human.length - (span.end - span.start);
@@ -1193,6 +1266,10 @@ export const useAppStore = create<AppState>((set, get) => {
         }
       } else if (baseParams) {
         newParams = baseParams.map((p) => (p.id === span.id ? { ...p, value } : p));
+      }
+      // A move changes the sides of the other subjects in the same clause too.
+      if (span.kind === 'position' && !newParams?.some((p) => p.kind === 'position')) {
+        newText = reconcilePositionProse({ ...clause, text: newText, params: newParams }, ir, lexContext(ir, state.prompt));
       }
 
       // 3. One undo step per burst; flash; NO scheduleCallA, NO propose.
@@ -1223,7 +1300,7 @@ export const useAppStore = create<AppState>((set, get) => {
         const clause = s.prompt.clauses.find((c) => c.id === clauseId);
         if (!clause || start >= end || end > clause.text.length) return {};
         const owned = s.ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId);
-        const span = createManualSpan(clause, owned, start, end, kind);
+        const span = createManualSpan(clause, owned, start, end, kind, lexContext(s.ir, s.prompt));
         // Replace any model-emitted spans the new range overlaps — rebinding a
         // token to a different widget type is an explicit user gesture.
         const kept = (clause.params ?? []).filter((p) => p.end <= start || p.start >= end);
