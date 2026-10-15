@@ -52,7 +52,7 @@ import { SAMPLES, emptyIR, emptyPrompt } from '@/ir/samples';
 import { inferComponentCandidates } from '@/ir/componentInfer';
 import { wireframeChildren, fillComponent, wireframeBackdrop } from '@/ir/wireframe';
 import { derivePalette } from '@/ir/uiPalette';
-import { buildDemoPlan as buildDemoPlanPure } from '@/annot/resolve';
+import { attachedNotes, buildDemoPlan as buildDemoPlanPure, isPureMoveText, nodeLabel } from '@/annot/resolve';
 import {
   composeFromInstruction,
   generatePatch,
@@ -499,7 +499,15 @@ function withEditedIntent(item: DemoPlanItem, patch: Partial<DemoPlanItem>): Dem
   const next = { ...item, ...patch };
   const intent = item.intent;
   if (!intent || 'intent' in patch) return next;
-  if (patch.instruction !== undefined && patch.instruction !== item.instruction) return { ...next, intent: undefined };
+  if (patch.instruction !== undefined && patch.instruction !== item.instruction) {
+    // An arrow's move stays exact; what the user typed beyond "move it" rides
+    // along to the model as a follow-up.
+    if (intent.kind === 'move' && intent.source) {
+      const text = patch.instruction.trim();
+      return { ...next, followUp: text && !isPureMoveText(text) ? text : undefined };
+    }
+    return { ...next, intent: undefined };
+  }
   if (patch.targetNodeIds) {
     if (intent.kind === 'delete' || intent.kind === 'fill') return { ...next, intent: { ...intent, ids: patch.targetNodeIds } };
     return { ...next, intent: undefined };
@@ -1722,12 +1730,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     buildDemoPlan: (boxes) => {
       const s = get();
-      const labelOf = (id: string) => {
-        const n = s.ir.nodes.find((x) => x.id === id);
-        if (!n) return id;
-        const txt = n.content?.trim();
-        return txt ? `${n.role} "${txt.slice(0, 24)}"` : n.role;
-      };
+      const labelOf = (id: string) => nodeLabel(id, s.ir.nodes);
       let seq = 0;
       const plan = buildDemoPlanPure(s.annotations, boxes, labelOf, () => `plan_${++seq}`, s.ir.nodes);
       set({ demoPlan: plan });
@@ -1750,17 +1753,23 @@ export const useAppStore = create<AppState>((set, get) => {
         set({ demoPlan: null });
         return;
       }
-      // Recognised gestures (cross-out, arrow, swap) are applied right here on
-      // the IR, one undoable manipulation each, and their markup is cleared so
-      // a later retry of the model part can never re-apply them.
-      const local = plan.filter((p) => p.intent && intentOps(p.intent, get().ir).length > 0);
+      // Recognised gestures (cross-out, arrow moves, swap) are applied right
+      // here on the IR, one undoable manipulation each, and their markup is
+      // cleared so a later retry of the model part can never re-apply them.
+      // A step that cannot be applied (error) is skipped and its markup kept.
+      const blocked = plan.filter((p) => p.error);
+      const local = plan.filter((p) => !p.error && p.intent && p.intent.kind !== 'fill');
       for (const item of local) {
         for (const op of intentOps(item.intent!, get().ir)) get().manipulate(op);
       }
-      const applied = new Set(local.map((p) => p.annotationId));
-      const remote = plan.filter((p) => !local.includes(p));
-      if (remote.length === 0) {
-        set({ demoPlan: null, annotations: [] });
+      const notes = attachedNotes(s.annotations);
+      const keep = new Set(blocked.flatMap((p) => [p.annotationId, ...(notes.get(p.annotationId) ?? []).map((c) => c.id)]));
+      // Notes attached to an applied arrow were folded into its step.
+      const applied = new Set(local.flatMap((p) => [p.annotationId, ...(notes.get(p.annotationId) ?? []).map((c) => c.id)]));
+      const followUps = local.filter((p) => p.followUp?.trim());
+      const remote = plan.filter((p) => !p.error && !local.includes(p));
+      if (remote.length === 0 && followUps.length === 0) {
+        set((st) => ({ demoPlan: null, annotations: st.annotations.filter((a) => keep.has(a.id)) }));
         return;
       }
       if (applied.size > 0) {
@@ -1770,11 +1779,16 @@ export const useAppStore = create<AppState>((set, get) => {
       const labelOf = (id: string) => {
         const n = s.ir.nodes.find((x) => x.id === id);
         if (!n) return id;
-        const t = n.content?.trim();
-        return t ? `the ${n.role} "${t.slice(0, 24)}"` : `the ${n.role}`;
+        return `the ${nodeLabel(id, s.ir.nodes)}`;
       };
       let refSeq = 0;
       const refs: PromptRef[] = [];
+      // Extra instructions on an applied arrow move: say what was done so the
+      // model builds on it instead of moving the element again.
+      const followLines = followUps.map((p) => {
+        const mv = p.intent as Extract<DemoIntent, { kind: 'move' }>;
+        return `- ${p.followUp!.trim()} (${labelOf(mv.id)} has ALREADY been moved into ${labelOf(mv.toParentId)} at position ${mv.toIndex + 1}; keep it there, do not move it again)`;
+      });
       const lines = remote.map((p) => {
         const tgt = p.targetNodeIds.length
           ? ` (${p.targetNodeIds.map(labelOf).join(', ')})`
@@ -1794,9 +1808,12 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         return `- ${p.instruction}${tgt}${where}`;
       });
-      const message = `Apply these changes I marked up on the canvas:\n${lines.join('\n')}`;
-      const scopeNodeIds = Array.from(new Set(remote.flatMap((p) => p.targetNodeIds)));
-      for (const p of remote) {
+      const message = `Apply these changes I marked up on the canvas:\n${[...followLines, ...lines].join('\n')}`;
+      const scopeNodeIds = Array.from(new Set([
+        ...followUps.map((p) => (p.intent as Extract<DemoIntent, { kind: 'move' }>).id),
+        ...remote.flatMap((p) => p.targetNodeIds),
+      ]));
+      for (const p of [...followUps, ...remote]) {
         for (const dataUrl of p.images ?? []) {
           refs.push({ kind: 'image', refId: `ref_${++refSeq}`, label: 'comment image', dataUrl });
         }

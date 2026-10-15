@@ -33,6 +33,7 @@ export interface FitHints {
 /** The IR facts drop-target picking needs about each node. */
 export type FitNode = Pick<IRNode, 'id' | 'parentId' | 'order' | 'role'> & {
   tailwind?: string;
+  content?: string;
   layout?: NodeLayout;
 };
 
@@ -284,6 +285,65 @@ function setGridCols(tailwind: string, from: number, to: number): string {
 }
 
 /**
+ * A container that only arranges its children: no content, no visual styling
+ * of its own (background, border, padding…), in flow. Such wrappers are an
+ * implementation detail of a layout (e.g. cards paired up so a row reflows
+ * 4 → 2×2), not something the user sees as a separate element.
+ */
+export function isLayoutWrapper(n: Pick<IRNode, 'role' | 'content' | 'layout'> & { tailwind?: string }): boolean {
+  return n.role === 'container' && !n.content?.trim() && !isAbsolute(n)
+    && !isHidden({ tailwind: n.tailwind ?? '' }) && !hasBase(n.tailwind, VISUAL);
+}
+
+/** A container with visual styling of its own (a card, a pill, a panel) — reads as a component. */
+export function isVisualContainer(n: Pick<IRNode, 'role'> & { tailwind?: string }): boolean {
+  return n.role === 'container' && hasBase(n.tailwind, VISUAL);
+}
+
+const GROW_BASIS = /^flex-\[(\d*\.?\d+)_(\d*\.?\d+)_(\d*\.?\d+)px\]$/;
+
+/**
+ * When every in-flow child of the row `g` is a layout-only row wrapper that
+ * grows (`flex-1`, `flex-[1_1_260px]`…), re-weight the wrappers by how many
+ * items each holds: grow = n, basis = n·unit + (n−1)·gap. Free space is then
+ * shared per item, so items in a 3-item wrapper are exactly as wide as those
+ * in a 2-item one. `patch` is updated in place.
+ */
+function rebalanceWrapperRow(
+  ir: IR,
+  g: IRNode,
+  patch: Map<string, string>,
+  removed: Set<string>,
+  fromParentId: string | null,
+  toParentId: string,
+): void {
+  if (flowKind(g.tailwind) !== 'row') return;
+  const tw = (n: IRNode) => patch.get(n.id) ?? n.tailwind;
+  const wrappers = flowChildren(ir, g.id).filter((w) => !removed.has(w.id));
+  if (wrappers.length < 2) return;
+  if (!wrappers.every((w) => isLayoutWrapper(w) && flowKind(tw(w)) === 'row' && rowSizing(tw(w)).kind === 'grow')) return;
+  const counts = wrappers.map((w) => flowChildren(ir, w.id).length);
+  if (counts.some((c) => c === 0)) return;
+  // Before the move, to recover the per-item basis the author intended.
+  const before = wrappers.map((w, i) => counts[i] - (w.id === toParentId ? 1 : 0) + (w.id === fromParentId ? 1 : 0));
+  let unit = 0;
+  for (let i = 0; i < wrappers.length && !unit; i++) {
+    const m = classList(tw(wrappers[i])).map((u) => splitVariant(u)[1].match(GROW_BASIS)).find(Boolean);
+    const gap = spacingPx(tw(wrappers[i]), /^gap(?:-x)?-(.+)$/);
+    if (m && before[i] > 0) unit = Math.max(0, (Number(m[3]) - (before[i] - 1) * gap) / before[i]);
+  }
+  if (counts.every((c, i) => c === before[i])) return; // nothing changed in this row
+  wrappers.forEach((w, i) => {
+    const n = counts[i];
+    const gap = spacingPx(tw(w), /^gap(?:-x)?-(.+)$/);
+    const basis = Math.round(n * unit + (n - 1) * gap);
+    let next = without(tw(w), FLEX_SIZING);
+    next = withClass(withClass(next, `flex-[${n}_1_${basis}px]`), 'min-w-0');
+    if (next !== tw(w)) patch.set(w.id, next);
+  });
+}
+
+/**
  * Make a node that was just moved under a new parent fit that parent's
  * layout, and re-balance the container it left. `ir` is the IR AFTER the
  * reparent; `fromParentId` is where the node came from. Returns the patched IR
@@ -428,19 +488,39 @@ export function fitMovedNode(
 
   // 3. Re-balance the container it left.
   const from = fromParentId && fromParentId !== parent.id ? byId.get(fromParentId) : undefined;
+  /** The ancestor whose child list changed when emptied wrappers were removed. */
+  let compactParentId: string | null = null;
   if (from) {
     const left = flowChildren(ir, from.id);
     const fromKind = flowKind(from.tailwind);
-    if (left.length === 0 && from.parentId && from.role === 'container' && !from.content
-      && !isAbsolute(from) && childrenOf(ir, from.id).length === 0 && !hasBase(from.tailwind, VISUAL)) {
-      // An emptied layout-only wrapper would leave a hole in its row: remove it.
-      removed.add(from.id);
+    const emptyWrapper = (w: IRNode) => w.parentId && isLayoutWrapper(w) && w.id !== parent.id
+      && childrenOf(ir, w.id).filter((c) => !removed.has(c.id)).length === 0;
+    if (left.length === 0 && emptyWrapper(from)) {
+      // An emptied layout-only wrapper would leave a hole in its row: remove
+      // it — and any wrapper above it that this leaves empty in turn.
+      let w: IRNode | undefined = from;
+      while (w && emptyWrapper(w)) {
+        removed.add(w.id);
+        compactParentId = w.parentId;
+        w = w.parentId ? byId.get(w.parentId) : undefined;
+      }
     } else if (fromKind === 'row') {
       redistributeFractions(left, patch);
     } else if (fromKind === 'grid') {
       const cols = gridCols(tw(from));
       if (cols && cols > 1 && left.length === cols - 1) patch.set(from.id, setGridCols(tw(from), cols, cols - 1));
     }
+  }
+
+  // 3b. A visual row built from wrappers (e.g. cards paired up for a 2×2
+  //     reflow): weight each wrapper by its item count so every item keeps
+  //     the same width after one wrapper gains or loses an item.
+  const touched = new Set<string>();
+  if (parent.parentId) touched.add(parent.parentId);
+  if (from && !removed.has(from.id) && from.parentId) touched.add(from.parentId);
+  for (const gid of touched) {
+    const g = byId.get(gid);
+    if (g) rebalanceWrapperRow(ir, g, patch, removed, fromParentId, parent.id);
   }
 
   // 4. Drop absolute coordinates and a stored width on the moved node.
@@ -463,9 +543,9 @@ export function fitMovedNode(
       return next;
     });
   // Keep the emptied wrapper's former siblings compactly ordered.
-  if (removed.size && from?.parentId) {
+  if (removed.size && compactParentId) {
     const order = new Map(
-      nodes.filter((n) => n.parentId === from.parentId).sort((a, b) => a.order - b.order).map((n, i) => [n.id, i]),
+      nodes.filter((n) => n.parentId === compactParentId).sort((a, b) => a.order - b.order).map((n, i) => [n.id, i]),
     );
     for (let i = 0; i < nodes.length; i++) {
       const o = order.get(nodes[i].id);
@@ -588,10 +668,28 @@ export function pickDropTarget(args: {
     if (c.role === dragged.role) s += c.role === 'container' ? 0.1 : 0.15;
     const cb = boxOf(c.id);
     if (dragBox && cb && dragBox.w * dragBox.h > 0 && cb.w * cb.h > 0) {
+      // Peers are of a comparable size: a button that shares a card's border
+      // classes is still no peer of a chart card 50× its area.
       const ratio = Math.abs(Math.log((dragBox.w * dragBox.h) / (cb.w * cb.h)));
-      s += 0.3 * Math.max(0, 1 - ratio / Math.log(16));
+      const size = Math.max(0, 1 - ratio / Math.log(16));
+      s = s * Math.min(1, 0.25 + 1.5 * size) + 0.3 * size;
     }
     return s;
+  };
+  /**
+   * Pointing at a container's own area. In the gap BETWEEN its items (not its
+   * outer padding) that means "in here, next to these" — the more so the more
+   * the dragged node looks like those items.
+   */
+  const ownAreaScore = (c: FitNode): number => {
+    const items = nodes.filter((n) => n.parentId === c.id && !banned.has(n.id) && !isAbsolute(n)
+      && !isHidden({ tailwind: n.tailwind ?? '' }) && boxOf(n.id));
+    if (items.length < 2) return OWN_AREA_SCORE;
+    const bs = items.map((n) => boxOf(n.id)!);
+    const inside = point.x >= Math.min(...bs.map((b) => b.x)) && point.x <= Math.max(...bs.map((b) => b.x + b.w))
+      && point.y >= Math.min(...bs.map((b) => b.y)) && point.y <= Math.max(...bs.map((b) => b.y + b.h));
+    if (!inside) return OWN_AREA_SCORE;
+    return OWN_AREA_SCORE + 0.5 * Math.min(1, Math.max(...items.map(similarity)));
   };
 
   let best: { parent: FitNode; child: FitNode | null; score: number } | null = null;
@@ -599,10 +697,25 @@ export function pickDropTarget(args: {
   for (let cur = byId.get(hitId); cur; child = cur, cur = cur.parentId ? byId.get(cur.parentId) : undefined) {
     if (!cur.parentId) break; // the root frame is free canvas, not a drop container
     if (!DROP_CONTAINERS.has(cur.role) || isHidden({ tailwind: cur.tailwind ?? '' })) continue;
-    const score = child ? similarity(child) : OWN_AREA_SCORE;
+    const score = child ? similarity(child) : ownAreaScore(cur);
     if (!best || score > best.score + 1e-6) best = { parent: cur, child, score };
   }
   if (!best) return null;
+
+  // A visual row made of layout-only wrappers (cards paired up for a 2×2
+  // reflow, a toolbar split into groups) is ONE row to the user: resolve the
+  // insertion against its items, then pick the wrapper that slot belongs to.
+  const flat = flattenedRowTarget(nodes, byId, best.parent, draggedId, point, boxOf);
+  if (flat) {
+    if (best.child) {
+      const leafIdx = flat.leaves.findIndex((l) => l.id === best!.child!.id);
+      if (leafIdx >= 0) {
+        flat.target.nextToId = best.child.id;
+        flat.target.placement = flat.k <= leafIdx ? 'before' : 'after';
+      }
+    }
+    return flat.target;
+  }
 
   const parent = best.parent;
   const container = boxOf(parent.id);
@@ -626,4 +739,90 @@ export function pickDropTarget(args: {
     }
   }
   return target;
+}
+
+
+interface RowLeaf { id: string; parentId: string; box: Box }
+
+/**
+ * Resolve a drop against a row whose items sit in layout-only row wrappers.
+ * `picked` is the container the scoring chose: when it is such a wrapper
+ * nested in a row, the outermost enclosing wrapper row is used instead (the
+ * user aims at "the row of 4 cards", not at one pair of it). Returns null when
+ * `picked` is not part of a wrapper row, so the plain path handles it.
+ *
+ * The insertion slot is computed among the row's items (wrappers expanded
+ * recursively). A slot strictly inside one wrapper goes there; a slot on the
+ * boundary between two wrappers goes to the one the point is inside, else to
+ * the one holding fewer items (ties → the earlier one) so the groups stay
+ * balanced.
+ */
+function flattenedRowTarget(
+  nodes: FitNode[],
+  byId: Map<string, FitNode>,
+  picked: FitNode,
+  draggedId: string,
+  point: { x: number; y: number },
+  boxOf: (id: string) => Box | undefined,
+): { target: DropTarget; leaves: RowLeaf[]; k: number } | null {
+  const kidsOf = (pid: string) => nodes
+    .filter((n) => n.parentId === pid && n.id !== draggedId)
+    .sort((a, b) => a.order - b.order);
+  const flowOf = (pid: string) => kidsOf(pid).filter((n) => !isAbsolute(n) && !isHidden({ tailwind: n.tailwind ?? '' }) && boxOf(n.id));
+  const rowWrapper = (n: FitNode) => isLayoutWrapper(n)
+    && flowKind(n.tailwind) === 'row' && flowOf(n.id).length > 0;
+
+  // Climb from a picked wrapper to the outermost row it is an item of.
+  let root = picked;
+  while (rowWrapper(root) && root.parentId) {
+    const up = byId.get(root.parentId);
+    if (!up || !up.parentId || !DROP_CONTAINERS.has(up.role) || flowKind(up.tailwind) !== 'row') break;
+    root = up;
+  }
+  if (flowKind(root.tailwind) !== 'row') return null;
+
+  const leaves: RowLeaf[] = [];
+  let expanded = false;
+  const walk = (pid: string) => {
+    for (const c of flowOf(pid)) {
+      if (rowWrapper(c)) { expanded = true; walk(c.id); }
+      else if (isLayoutWrapper(c) && kidsOf(c.id).length === 0 && nodes.some((n) => n.parentId === c.id)) continue; // holds only the dragged node
+      else leaves.push({ id: c.id, parentId: pid, box: boxOf(c.id)! });
+    }
+  };
+  walk(root.id);
+  if (!expanded || leaves.length === 0) return null;
+
+  const k = insertionIndex('row', leaves.map((l) => l.box), point);
+  const prev = leaves[k - 1];
+  const next = leaves[k];
+  let parentId: string;
+  if (!prev) parentId = next.parentId;
+  else if (!next) parentId = prev.parentId;
+  else if (prev.parentId === next.parentId) parentId = prev.parentId;
+  else {
+    const inside = (pid: string) => { const b = boxOf(pid); return !!b && pid !== root.id && point.x >= b.x && point.x <= b.x + b.w && point.y >= b.y && point.y <= b.y + b.h; };
+    const count = (pid: string) => flowOf(pid).length;
+    if (inside(next.parentId) && !inside(prev.parentId)) parentId = next.parentId;
+    else if (inside(prev.parentId) && !inside(next.parentId)) parentId = prev.parentId;
+    else parentId = count(next.parentId) < count(prev.parentId) ? next.parentId : prev.parentId;
+  }
+  const flow = flowOf(parentId);
+  const all = kidsOf(parentId);
+  let local: number;
+  if (prev && prev.parentId === parentId) local = flow.findIndex((n) => n.id === prev.id) + 1;
+  else if (next && next.parentId === parentId) local = flow.findIndex((n) => n.id === next.id);
+  else local = flow.length;
+  const index = local < flow.length ? all.indexOf(flow[local]) : flow.length ? all.indexOf(flow[flow.length - 1]) + 1 : all.length;
+  const container = boxOf(parentId);
+  const rootBox = boxOf(root.id);
+  if (!container || !rootBox) return null;
+  return {
+    target: {
+      parentId, index, kind: 'row', placement: 'inside', container,
+      line: insertionLine('row', leaves.map((l) => l.box), k, rootBox),
+    },
+    leaves,
+    k,
+  };
 }

@@ -414,6 +414,12 @@ export interface Annotation {
   images?: string[];
   /** Target IR nodes this annotation refers to (geometry-resolved or user-set). */
   targetNodeIds?: string[];
+  /**
+   * The canvas selection when the annotation was drawn. An arrow drawn from
+   * inside a selected component moves that component (with its children),
+   * whichever child the tail visually starts on.
+   */
+  selectedIds?: string[];
   createdAt: number;
 }
 
@@ -436,6 +442,14 @@ export interface DemoPlanItem {
    * row's instruction drops the intent so the edited text goes to the model.
    */
   intent?: DemoIntent;
+  /**
+   * Extra instructions riding on a deterministic step (e.g. the note attached
+   * to an arrow says more than "move it"): the step is applied locally, then
+   * this text goes to the model together with what was already done.
+   */
+  followUp?: string;
+  /** Why this step cannot be applied (e.g. moving a node into itself); it is skipped. */
+  error?: string;
 }
 
 /**
@@ -456,6 +470,8 @@ export type DemoIntent =
       placement?: 'before' | 'after' | 'inside';
       /** Measured width of the target container (flow moves; layout-fit overflow check). */
       targetWidth?: number;
+      /** Arrow tool: whether the moved node came from the selection or the arrow tail. */
+      source?: 'selection' | 'tail';
     }
   | { kind: 'swap'; ids: [string, string] }
   | { kind: 'fill'; ids: string[] };
