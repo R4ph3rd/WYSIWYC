@@ -307,6 +307,12 @@ interface AppState {
    */
   proposeManipulation: (op: ManipulationOp, prevIR: IR) => void;
   /**
+   * Finish a canvas drag of a flow node into a layout: replace the live drag
+   * preview with `op` applied to `prevIR` (the IR before the drag) as ONE undo
+   * step. A null op (dropped back where it was) just restores `prevIR`.
+   */
+  settleDragMove: (op: ManipulationOp | null, prevIR: IR) => void;
+  /**
    * Resolve the pending back-channel proposal by folding it into the prompt.
    * `overrideText` replaces the primary edited clause's text (used when the
    * user rephrases it or picks one of the proposed alternatives). There is no
@@ -458,10 +464,14 @@ function intentOps(intent: DemoIntent, ir: IR): ManipulationOp[] {
       const node = byId.get(intent.id);
       if (!node || !byId.has(intent.toParentId)) return [];
       if (node.parentId !== intent.toParentId) {
-        return [{
+        const op: ManipulationOp = {
           kind: 'reparent', id: node.id, fromParentId: node.parentId,
           toParentId: intent.toParentId, toIndex: intent.toIndex, layout: intent.layout,
-        }];
+        };
+        // A flow node joins the target's layout (sizing, columns) in the same step.
+        const flow = node.layout?.x === undefined && node.layout?.y === undefined && !intent.layout;
+        if (flow) op.fit = intent.targetWidth !== undefined ? { containerWidth: intent.targetWidth } : {};
+        return [op];
       }
       if (intent.layout) {
         return [{ kind: 'move', id: node.id, from: { ...node.layout }, to: { ...node.layout, ...intent.layout } }];
@@ -1204,6 +1214,27 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     proposeManipulation: (op, prevIR) => maybePropose(op, prevIR),
+
+    settleDragMove: (op, prevIR) => {
+      const s = get();
+      // The drag preview (promoteToAbsolute) already pushed the pre-drag snapshot.
+      const top = s.history[s.history.length - 1];
+      const stepped = top?.ir === prevIR;
+      if (!op) {
+        set({ ir: prevIR, history: stepped ? s.history.slice(0, -1) : s.history });
+        return;
+      }
+      const { ir, affectedIds } = applyManipulation(prevIR, op);
+      set({
+        ir,
+        recentIds: affectedIds,
+        history: stepped
+          ? s.history
+          : [...s.history, { ir: prevIR, prompt: s.prompt, inferences: s.inferences }].slice(-50),
+      });
+      useStudyStore.getState().logEvent('manipulation', { kind: op.kind });
+      maybePropose(op, prevIR);
+    },
 
     acceptProposal: (overrideText) => {
       const { pendingProposal } = get();
