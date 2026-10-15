@@ -15,7 +15,7 @@ WYSIWYC is a prompt ⇄ UI editor (React + TypeScript + Vite + Zustand). You des
 > - **Token-efficient by design.** The LLM sends patches instead of regenerating everything. Many edits never reach a model at all: pins, gestures, arrow moves, wireframes and component swaps. Static system and schema prefixes are cached (Anthropic `cache_control`, OpenAI automatic caching), and the IR is sent as minified JSON.
 > - **Configuration history, not chat history.** A version rail records restorable spec+IR snapshots. Recipes turn an accepted instruction into a one-click command for the current selection.
 > - **Bring your own model, no backend.** The browser calls Anthropic, OpenAI, Mistral or Groq directly. Keys stay in `localStorage`.
-> - **Study kit included.** A `/study` route logs every prompt, LLM call, token count and canvas edit, and has a *chat-only* baseline condition. An `/analysis` page plots the dataset.
+> - **Study kit included.** A `/study` route runs counterbalanced participant sessions against a *chat-only* baseline, logs every prompt, LLM call, token and canvas edit, and exports CSVs (or a Google Sheet). An `/analysis` page computes paired statistics and plots them.
 
 ## Demo
 
@@ -118,8 +118,9 @@ Tools stay active until you switch. `Esc` goes back to Select. Markup tools crea
 
 The study protocol, tasks and analysis plan are in **[docs/STUDY.md](docs/STUDY.md)**.
 
-- **`/study`** (e.g. `http://localhost:5173/study`) turns on study mode. A setup modal asks for participant, condition and task, and the top bar shows a timer, prompt and edit counters, **Done** and **Export logs**. The `chat_only` condition limits the canvas to a read-only preview: Select only, with no drawing, markup, dragging or back-channel.
-- **`/analysis`** opens the analysis page. It loads the dataset from `localStorage` or an exported file and plots prompts, tokens and time to target, edits after first render, and back-channel accept rate by condition and task.
+- **`/study`** (e.g. `http://localhost:5173/study`) runs a full participant session: demographics, background and consent, then a briefing with the rules and target, then 4 timed blocks (2 conditions × 2 tasks, Latin-square counterbalanced). NASA-TLX follows each block and SUS follows each condition, and the session ends with preference and interview notes. The `chat_only` baseline swaps the spec for a chat transcript and locks the canvas: no drawing, markup, dragging, widgets or back-channel.
+- Every prompt, LLM call (input, output and cached tokens, plus latency), manipulation, proposal outcome and undo is logged against the block clock. The session is autosaved to `localStorage` and can be recovered. At the end, CSVs (events, LLM calls, per-block summary, demographics) and a session JSON are downloaded, and optionally sent to a Google Sheet through the Apps Script in `docs/apps-script/Code.gs`.
+- **`/analysis`** loads exported files (drag and drop) or the Google Sheet. It computes paired medians, % change, Wilcoxon signed-rank tests and effect sizes, and draws Observable Plot charts with written interpretations. It can export the stats as Markdown or JSON for the case study. A clearly labelled synthetic dataset is available for preview.
 - Reference targets for the tasks are in `public/tasks/`.
 
 ## Project structure
