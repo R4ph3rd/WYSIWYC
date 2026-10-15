@@ -1,124 +1,151 @@
 # WYSIWYC — What You See Is What You Chat
 
-A bidirectional **prompt ⇄ UI** editor. 
-You describe a UI in plain natural language; it becomes a UI mockup you can directly draw on, drag, resize, and restyle with design tools.
-Every manipulation propagates back into a synchronized prompt with element-level provenance linking both directions.
+**Describe a UI in words, then keep working on it by hand. The prompt keeps up.**
 
+WYSIWYC is a prompt ⇄ UI editor (React + TypeScript + Vite + Zustand). You describe an interface in plain language and get an editable mockup. You can then draw on it, drag it, restyle it or mark it up, and every change shows up again as short, human-readable sentences in a living spec. The spec is written for people to read and edit. It is not a chat log.
 
-## The core idea
+## Why WYSIWYC
 
-Three artifacts and **one source of truth**:
+> - **Text and UI stay in sync through readable clauses.** One JSON scene graph (the IR) is the single source of truth. The spec and the canvas are both projections of it. Prompt → UI is authoritative. UI → prompt comes back as *proposals* (dashed clauses with Accept, Rephrase and alternatives), so the spec never drifts silently.
+> - **Inline widgets inside the prose, with zero tokens.** Style words in a clause become controls: colour pickers, gradient stops (from / via / to), positions (left / centre / right), icons with a picker, fonts, sizes, weights, radii, shadows. Each pin is scoped to the nodes its phrase refers to ("positive changes are **green**" recolours only the positive figures). It writes the IR directly, with no LLM call. Retyping only those words in a clause also skips the model.
+> - **Prompting by demonstration.** You can comment, draw arrows, box things or scribble directly on the canvas. A cross or a scratch-out deletes, an arrow moves, a double arrow swaps. These recognised gestures become exact, undoable edits without a model call. Everything else goes through a reviewable plan, where you confirm targets and wording before anything is sent.
+> - **From low-fi sketch to component.** If you draw a rough rectangle or circle, WYSIWYC infers the three most likely components (card, header bar, avatar…) and suggests one as a pending clause. Pick a candidate to get a contrast-aware grey wireframe. Then you can fill it with placeholder content that takes its colours, font and radius from the surrounding design and is laid out so parts never overlap.
+> - **Provenance and brushing & linking.** Hover a clause to outline the nodes it owns. Hover a parameter word to outline exactly the nodes it controls. Select a node to highlight the spec words bound to it.
+> - **Deterministic direct manipulation.** Moving, resizing, recolouring, reordering and duplicating are pure IR operations with undo. Drag-and-drop is layout-aware. A drop line shows the slot, and the moved component takes on its new siblings' sizing (flex share, fraction, grid column) while the old container rebalances.
+> - **Token-efficient by design.** The LLM sends patches instead of regenerating everything. Many edits never reach a model at all: pins, gestures, arrow moves, wireframes and component swaps. Static system and schema prefixes are cached (Anthropic `cache_control`, OpenAI automatic caching), and the IR is sent as minified JSON.
+> - **Configuration history, not chat history.** A version rail records restorable spec+IR snapshots. Recipes turn an accepted instruction into a one-click command for the current selection.
+> - **Bring your own model, no backend.** The browser calls Anthropic, OpenAI, Mistral or Groq directly. Keys stay in `localStorage`.
+> - **Study kit included.** A `/study` route logs every prompt, LLM call, token count and canvas edit, and has a *chat-only* baseline condition. An `/analysis` page plots the dataset.
 
-```
-PROMPT (natural-language living spec)  ⇄  IR (JSON Intermediate Representation scene graph = SOURCE OF TRUTH)  ⇄  RENDER (React + Tailwind)
-```
+## Demo
 
-- **IR is the single source of truth.** The prompt view and the rendered UI are both *projections* of it.
-- **Instruction → Spec + IR** (Compose): entry point. You just *talk* ("a pricing page with three plans…", "make the button green"); one LLM call folds the instruction into the living spec (clause upserts) AND emits the IR patch realizing it, so provenance lines up clause-by-node.
-- **Prompt → IR** (Call A): editing a spec sentence in place makes the LLM emit a *patch* (add / update / remove / reorder), never a full regeneration unless the IR is empty.
-- **IR → Render**: deterministic, no LLM in the projection. The LLM authors *data* (Tailwind classNames + a structured `style` block); the renderer projects it to React + Tailwind, emitting plain HTML for flow elements and SVG only for vector primitives.
-- **Render → IR**: direct manipulation (drawing tools, drag-move, resize handles, properties panel, drag-to-reorder) writes **deterministically** (no LLM in the gesture itself).
-- **IR → Prompt** (Call B, the lossy back-channel): the manipulation is applied to the IR immediately; a banner then proposes a one-sentence prompt delta the user must resolve: **Accept** it, swap in one of **three generated alternatives**, or **rephrase** it inline. A substantial change has to be described in the spec, so there is no silent "reject"/diverge. This covers *every* manipulation: canvas drags, hand-drawn shapes, and (debounced per editing burst) Properties-panel changes.
+There are no screenshots in the repo yet. To see the main features in about a minute:
 
-**The asymmetry is intentional and visible:** prompt→output is authoritative; output→prompt is a *proposal* applied only once the user accepts, swaps, or rephrases it.
+1. Run `npm run dev`, click **Connect** and paste a key.
+2. On the empty canvas, pick one of the samples under **Try:**. Each has its own design system: **Login screen** (Medora health sign-in), **Pricing card** (Tally invoicing, Stripe-like), **Dashboard header** (Northwind, dark) and **Analytics dashboard** (Northwind, light).
+3. Hover a clause in the spec to see its nodes. Click a colour or position word to edit it in place.
+4. Drag a stat card into another row, or switch to **Arrow (A)** and draw from one element to a container.
+5. Draw a rectangle with **R** and pick a component from the sparkle bubble. Hover it and choose **Fill placeholders**.
 
-**The prompt reads like a person, not a config file.** The spec is rendered as short, categorized sentences and offers two views you can switch between:
-- a **Structured** view (clauses grouped into Layout / Components / Style / Content sections) 
-- a **Prose** view (the same clauses as flowing text, each underlined in its category color). Each clause is hoverable (it traces the UI nodes it owns), single-click opens alternatives/remove, and double-click edits it in place. Both LLM directions are instructed to use *semantic* values first (e.g."place the CTA below the form", "a softer pink") never raw pixels or hex codes unless the user typed them.
-
-### The IR schema
-Nodes are **flat** with `parentId` references (not deeply nested), (deep nesting degrades structured-output reliability). Each node carries:
-
-- `role`: `frame` / `container` / `text` / `heading` / `button` / `input` / `image` / `icon` / `divider` / `badge` / `rectangle` / `circle` / `line` / `path` (pen-tool paths carry a `points` array relative to their bounding box)
-- `tailwind`: LLM-authored className
-- `style`: structured visual properties written by the Properties panel (fill / stroke / strokeWidth / borderRadius / fontFamily / fontSize /
-  fontWeight / fontColor / italic / underline / textAlign / shadow / opacity)
-- `layout`: optional absolute `x / y / w / h` (drawn shapes and moved nodes)
-- `provenance`: `{ promptClauseId, source: "llm" | "user" }`
-
-We between `tailwind` and `style` because tailwind is what the LLM authors freely; style is what the user dialled in by hand and we don't want to round-trip through tokens. The renderer applies both.
-
-### Inline parameter editing
-Style words inside **prompt** clauses (a color, a size, a font, a weight, a shadow, a radius, …) are clickable: clicking one opens a small widget (color picker, slider, font selector, …) that edits the bound IR field **deterministically** (no LLM) and rewrites the word in the prose. Any token the system can't type precisely still opens a plain text input. 
-_This is a forward Prompt→IR edit, so it does not run the Call B back-channel._
-
-### Malleable spec (inspired by "From Words to Widgets", arXiv:2604.10925)
-The inline parameters were extended with three ideas adapted from the *Malleable Prompting* paper — Zhang et al., ["From Words to Widgets for Controllable LLM Generation"](https://arxiv.org/abs/2604.10925) — which reifies preference expressions in prompts into GUI widgets and links each widget to the output spans it influences:
-
-- **Manual span binding** (paper §4, Fig. 2C — "highlight any text span to bind it to a specific control type"): select any text range inside a spec clause and a **Make editable** menu offers widget kinds (Color / Size / Weight / Corners / Shape / Align / Shadow / free Value). Picking one creates a persistent interactive parameter on the clause — covering preference expressions neither the model nor the deterministic lexer recognized, and replacing an auto-generated widget when the selection overlaps one (`createManualSpan` in `src/ir/paramLexer.ts`, `bindClauseParam` in the store).
-- **Bidirectional attribution** (paper DG2 + the "reverse widget" from §7.3): hovering a param token in the spec outlines, in amber, exactly the canvas nodes it controls (finer-grained than the existing whole-clause trace); conversely, selecting a canvas element highlights every spec token bound to it. Because WYSIWYC's param spans already carry `nodeIds`, this attribution is fully deterministic — no Shapley/logit machinery needed, the IR *is* the attribution map.
-- **Configuration versions** (paper Fig. 4, linearized): every meaningful configuration change — a compose send, a spec-edit regeneration, a canvas sync, a param-widget adjustment burst — records a restorable spec+IR version. The rail above the spec shows them as chips; clicking one jumps the whole document back to that configuration (the jump itself is undoable). Iterations are organized around *configurations* rather than a linear chat history.
-
-Two of the paper's contributions were deliberately **not** adopted: the token-probability decoding algorithm (requires logit access to a locally deployed model — WYSIWYC calls hosted provider APIs from the browser) and continuous intensity sliders for subjective tone attributes (WYSIWYC's parameters map to concrete CSS dimensions, where discrete widgets are the right fit). The paper's "prompt enrichment" idea already exists here as the model's *inferred* clauses (`origin: "inferred"`, marked with an amber dot in the spec).
-
-### Prompt by demonstration
-Three cooperating capabilities let you steer the model by sketching and marking up the canvas instead of typing full instructions.
-
-**1. Draw a shape → infer a component (not a shape spec).** Drawing a rectangle or circle no longer produces a technical clause like "a 220×320 rectangle". A geometry heuristic (`src/ir/componentInfer.ts`) guesses the *UI component* it most likely represents — a tall card-shaped rectangle → **Item card**, a wide shape at the top → **Header bar**, a small circle → **Avatar** — and records the **top-3** candidates. The inferred clause reads semantically ("Item card"), carries the amber *inferred* dot, and gets:
-- a **sparkle bubble** pinned to the shape on the canvas, and a matching **sparkle icon on the clause** in the spec pane; both open the top-3 candidate picker.
-- on choosing a candidate, the host fills with a **grey wireframe** of that component's parts (image / title / description / button, …) via `src/ir/wireframe.ts`.
-- a **hovering button group** on the shape to *leave it empty* (revert the wireframe) or *fill with placeholders* — neutral placeholder text/images that follow the overall (monochrome) design.
-
-**2. Comment & draw on the canvas to prompt the model.** A second palette group adds markup tools — **Comment (C)**, **Arrow (A)**, **Surround (B)**, **Scribble (S)** — that create *annotations*, not IR nodes (`src/ui/AnnotationLayer.tsx`). Arrows, surrounding boxes and scribbles are rough drafting marks; text comments live in pinned bubbles that expand to an overlay editor on hover (and collapse back to a bubble on mouse-out), accept **drag-and-dropped images** for extra context, and are deletable. Once at least one annotation exists, a floating **"Apply N annotations"** button appears above the toolbar.
-
-**3. Guardrails: review the plan before applying.** Sending the annotations doesn't blindly mutate the scene. `src/annot/resolve.ts` resolves, by geometry, which element(s) each annotation targets and synthesizes a plain-English instruction, each with a confidence. The **ModificationPlan** overlay (`src/ui/ModificationPlan.tsx`) then pins the guessed targets on the canvas and, for every change, lets you: **re-pick the target** elements by clicking them, **edit the instruction text**, or drop the change — low-confidence guesses are flagged with a *verify targets* warning. Confirming routes the confirmed targets + wording (and any comment images) through the existing compose pipeline, so provenance and the spec stay in sync.
-
-The deterministic cores (inference, wireframe templates, target resolution) are pure, dependency-free modules and are unit-tested; the LLM is only involved when the confirmed plan is applied through compose.
-
-
-
-## App
-### Workspace
-
-- **Connect** button (provider + key) in Top bar
-- **Left panel**: the **Spec** panel (the living prompt, with the Structured/Prose toggle and the inline composer at the bottom). A toggleable
-  **Layers** tree can sit beside it.
-- in **Canvas**: a floating tool palette sits at the **bottom** — drawing tools (Pointer / Rectangle / Circle / Line / Pen / Text // V R O L P T) and a markup group for prompt-by-demonstration (Comment / Arrow / Surround / Scribble // C A B S). A **sync-mode toggle** sits in the top-left corner (to toggle auto/manual calls to LLM providers). **Auto** runs the Call B back-channel immediately after each edit;
-**Manual** holds the edits (the IR still updates live) and shows an *Update spec* button to run the back-channel on demand.
-- **Right panel**: nodes properties (transforms, fill/stroke with opacity, drop/inner **shadow**, searchable Google-Fonts family picker, weight, alignment).
-  
-
-### LLM providers
-Browser-direct calls to four providers; no backend, keys stay in `localStorage`:
-
-| Provider | Default model | Structured output mode | Vision |
-|---|---|---|---|
-| Anthropic | `claude-opus-4-8` | schema-in-prompt + client-side parse (see note) | ✓ |
-| OpenAI | `gpt-4o` | `response_format` (json_schema, non-strict) | ✓ |
-| Mistral | `mistral-large-latest` | `response_format` (json_schema, non-strict) | — |
-| Groq | `llama-3.3-70b-versatile` | `response_format: {json_object}` + schema-in-prompt + client-side parse | — |
-
-Note that Groq models support only text in prompt requests. Every raw provider response (text + token usage + cache hits) is logged to the browser console under a collapsed `[LLM <provider>]` group, and API/parse errors are logged in full, so a failing call can always be inspected.
-
-**Token optimization.** Every call re-sends the same large, static preamble (base system instructions + the JSON schema, ~2–3k tokens) that only changes between *call types*, not between edits — so it's cached:
-- **Anthropic prompt caching** — the schema-conditioned system block carries a `cache_control: {type: "ephemeral"}` breakpoint. Repeated edits of the same type within the 5-minute window read that prefix back at ~10% of the input cost. (Anthropic's grammar decoder caps the *minimum* cacheable prefix at 4096 tokens on Opus-tier models, so on the smallest calls caching is best-effort — it silently no-ops below the threshold rather than erroring.)
-- **OpenAI automatic caching** — OpenAI caches identical prompt prefixes ≥1024 tokens with no configuration; keeping the static system first maximizes those hits.
-- **Compact serialization** — the IR + spec re-sent on every request are minified (`JSON.stringify` with no indentation) instead of pretty-printed, trimming a meaningful slice of input tokens on every call across all four providers.
-
-Cache-read tokens are surfaced in the console log and captured per call in the study dataset (`cachedInputTokens`) so the savings are measurable.
-
-**On Anthropic and `output_config.format`:** Anthropic's grammar-constrained structured-output decoder caps a schema at 24 *optional* properties **and** 16 *union-typed* (nullable/`anyOf`) properties. The IR patch schema — a flat node list where each node carries a 13-field `style` block plus `layout`/`points`, referenced by both add and update ops — has ~51 genuinely-omittable fields, which cannot fit inside the combined 24+16 budget under any encoding, so `output_config.format` returns HTTP 400 on it (either "too many optional parameters" or, if you make them nullable to dodge that, "too many parameters with union types"). Anthropic is therefore driven the same way as Groq: the JSON Schema is appended to the system prompt as a hard output constraint and the response is parsed and null-stripped client-side. Claude follows a schema presented this way reliably.
-
-Because those providers see the schema as *guidance* rather than a compiled grammar, the schema is kept **lean** — optional fields are omitted from `required` instead of being forced present-and-nullable. This keeps generated JSON compact (each node emits only the fields it needs); a schema that instead forced all ~20 fields per node to be emitted as `null` bloated the output past `max_tokens` and truncated the JSON mid-string. OpenAI and Mistral consume the same lean schema via **non-strict** `json_schema` (strict mode would require every property in `required`, reintroducing the bloat); non-strict still guides those models reliably.
-Because the LLM authors arbitrary Tailwind classes **at runtime**, build-time JIT purging cannot know them. This PoC uses the **Tailwind Play CDN** (in-browser compiler, see `index.html`) so any class, including arbitrary values like `bg-[#4f46e5]` written by inline parameter edits. Compiles on the fly.
-
-
-### Fonts 
-The font controls draw from a bundled, curated catalogue of Google Fonts (`src/lib/fonts.ts`). 
-The complete Google Fonts list can be regenerated at build time from `https://www.googleapis.com/webfonts/v1/webfonts?key=$GOOGLE_FONTS_API_KEY&sort=popularity` into the same `{ family, category }[]` shape (the key stays build-time only).
-
-
-### Direct manipulation & shortcuts
-Direct edits write the IR deterministically (no LLM in the gesture). Use common transform handles for resizing, rotation, double-click to select, ctrl+c/v, multi-select, undo, alt+drag to duplicate
-Press **?** (or trigger any unbound hotkey) to open a slide-up keyboard shortcuts sheet.
-
-
-
-### Running locally
+## Getting started
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # Vite dev server, http://localhost:5173
+npm run build      # tsc -b && vite build (relative base, works under a sub-path)
+npm run preview    # serve the production build
+npm run lint       # tsc --noEmit
 ```
 
-Open the app, click **Connect**, paste an API key, pick a model. No backend required, all LLM calls go from the browser directly to the provider. 
+Open the app and click **Connect** in the top bar. Choose a provider tab, paste an API key and pick a model. Keys and model choices are stored in this browser's `localStorage`, and every call goes straight from the browser to the provider. You don't need a server or `.env` file.
+
+| Provider | Default model | Other models offered | Structured output | Images in prompts |
+|---|---|---|---|---|
+| Anthropic | `claude-opus-4-8` | Sonnet 4.6, Haiku 4.5 | schema in system prompt + client-side parse | yes |
+| OpenAI | `gpt-4o` | GPT-4o mini, GPT-4 Turbo | `response_format` json_schema (non-strict) | yes |
+| Mistral | `mistral-large-latest` | Mistral Small, Codestral | `response_format` json_schema (non-strict) | no |
+| Groq | `llama-3.3-70b-versatile` | Llama 3.1 70B, Mixtral 8x7B | JSON mode + schema in prompt + client-side parse | no |
+
+Each raw response (text, token usage, cache hits) is logged to the browser console under a collapsed `[LLM <provider>]` group.
+
+`server/llmProxy.ts` is a Vite dev/preview plugin that serves `/api/llm` with `ANTHROPIC_API_KEY` from the environment. The current client does not call it, so you only need it if you want a server-held key.
+
+## How it works
+
+```
+PROMPT (living spec of clauses)  ⇄  IR (flat JSON scene graph — source of truth)  ⇄  RENDER (React + Tailwind)
+```
+
+- **IR** (`src/ir/types.ts`). Nodes are stored flat with `parentId` and `order`, which keeps structured output reliable. Each node has a `role` (frame, container, text, heading, button, input, image, icon, badge, divider, rectangle, circle, line, path), an LLM-authored `tailwind` className, a hand-tuned `style` block, an optional absolute `layout`, and `provenance` (`promptClauseId`, `source: llm | user`). Clauses carry a category (Layout / Components / Style / Content), an `origin` (user or inferred), a `status` (pending or accepted) and parameter spans.
+- **The LLM only works at the edges** (`src/llm/`):
+  - **Compose**: a free-form instruction becomes clause upserts plus an IR patch in a single call, so new nodes point at the clauses created with them. You can scope it to a selection and include reference chips (dragged nodes, extracted properties, here/there location pins, images).
+  - **Call A** (spec → IR): editing a clause produces a patch (add / update / remove / reorder), not a regeneration. Edits that change only parameter words are handled deterministically (`src/ir/clauseEdit.ts`).
+  - **Call B** (IR → spec): after a manual edit the IR has already changed. Call B proposes clause changes that you accept, rephrase or swap for an alternative. **Auto** runs it after every edit. **Manual** waits for *Update spec*.
+- **Everything else is pure and deterministic.** That covers rendering (`src/render/`), patch application, direct manipulation (`src/ir/manipulate.ts`), layout fitting and drop targets (`src/ir/layoutFit.ts`), parameter lexing and node scoping (`paramLexer.ts`, `bindings.ts`), component inference (`componentInfer.ts`), wireframes and themed placeholders (`wireframe.ts`, `uiPalette.ts`), gesture recognition (`src/annot/gesture.ts`) and annotation target resolution (`src/annot/resolve.ts`).
+- **Robust JSON.** `parseJSON` in `src/llm/providers.ts` ignores code fences, leading prose, stray objects and trailing commas, and still reports genuinely malformed output. Nulls are removed so optional fields stay absent.
+- **Tailwind at runtime.** The model writes arbitrary classes, so `index.html` uses the Tailwind Play CDN to compile them in the browser.
+
+On Anthropic, the IR patch schema has about 50 omittable fields. That is more than `output_config.format` allows (24 optional and 16 union-typed properties), so the schema goes into the system prompt and the response is parsed client-side. The schema is deliberately lean: optional fields are left out of `required` so the model doesn't pad its output with nulls.
+
+## Interaction reference
+
+### Tools
+
+| Key | Tool | What it does |
+|---|---|---|
+| `V` | Select | Select, move, resize. Drops are layout-aware and show a drop line |
+| `R` / `O` | Rectangle / Circle | Draw a shape and get a pending inferred-component clause with a 3-candidate picker |
+| `L` / `P` | Line / Pen | Vector primitives. With the pen, `Enter` commits the path and `Esc` cancels it |
+| `T` | Text | Text node |
+| `C` | Comment | Pinned note that expands on hover and accepts dropped images |
+| `A` | Arrow | Move the selected element (or the one under the tail) into the container at the head, at the indicated slot. No LLM |
+| `B` | Surround | Box a region to target it with a comment or instruction |
+| `S` | Scribble | Freehand marks, classified as gestures (below) |
+
+Tools stay active until you switch. `Esc` goes back to Select. Markup tools create *annotations*, not IR nodes. Once any exist, **Apply N annotations** opens the modification plan, where you can re-pick targets, edit the wording or drop a step.
+
+### Scribble gestures
+
+| Gesture | Meaning | Applied |
+|---|---|---|
+| Cross (X) or scratch-out / hatch | delete the target | deterministically, undoable |
+| Arrow (one-headed or bare line) | move / reparent into the container it points at | deterministically, undoable |
+| Double arrow | swap the two elements | deterministically, undoable |
+| Dense shading | fill / recolour | through the LLM, after the plan |
+
+### Keyboard shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `⌘/Ctrl Z` | Undo (the top bar also has Undo) |
+| `⌘/Ctrl C` / `⌘/Ctrl V` | Copy / paste selection |
+| `⌘/Ctrl D`, or `Alt`-drag | Duplicate |
+| `Delete` / `Backspace` | Delete selection |
+| `Shift`-click | Add to selection (marquee also works) |
+| Double-click | Edit text |
+| `Esc` | Deselect / exit tool |
+| `?` | Open the shortcut sheet |
+
+### In the spec
+
+- Toggle between the **Structured** view (grouped by category) and the **Prose** view.
+- Hover a clause to see its nodes. Click it for alternatives or to remove it. Double-click to edit it.
+- Click a parameter word to open its widget. To bind a widget to any other phrase, select the text and choose a widget kind from the *Make “…” editable* menu.
+- Pending clauses (inferred from shapes) and proposed clauses (from Call B) are drawn dashed in the amber AI accent, with **Accept**, **Dismiss** and **Accept all**.
+- The version rail restores any earlier configuration, and that restore can itself be undone. The recipes rail re-runs saved instructions on the current selection.
+
+## User study
+
+The study protocol, tasks and analysis plan are in **[docs/STUDY.md](docs/STUDY.md)**.
+
+- **`/study`** (e.g. `http://localhost:5173/study`) turns on study mode. A setup modal asks for participant, condition and task, and the top bar shows a timer, prompt and edit counters, **Done** and **Export logs**. The `chat_only` condition limits the canvas to a read-only preview: Select only, with no drawing, markup, dragging or back-channel.
+- **`/analysis`** opens the analysis page. It loads the dataset from `localStorage` or an exported file and plots prompts, tokens and time to target, edits after first render, and back-channel accept rate by condition and task.
+- Reference targets for the tasks are in `public/tasks/`.
+
+## Project structure
+
+```
+src/
+  ir/        IR types, patch application, manipulation, layout fitting, param lexer + bindings,
+             clause edits, component inference, wireframes, UI palette, icons, samples
+  annot/     scribble gesture classifier, annotation → target/instruction resolution
+  llm/       providers (4 vendors), prompts, schemas, client (token + cache logging)
+  render/    deterministic IR → React renderer, icon set
+  store/     appStore (document, history, versions, sync), settingsStore (keys), studyStore
+  ui/        Canvas, ToolPalette, PromptPane, ParamPopover, AnnotationLayer, InferenceOverlay,
+             ModificationPlan, DiffRibbon, VersionRail, RecipesRail, RefComposer, panels, AnalysisPage
+  lib/       composer serialization, fonts catalogue, logging
+server/      optional Vite /api/llm proxy (not used by the client)
+public/tasks study reference targets
+```
+
+## Limitations
+
+- This is a research prototype. The output is a mockup, not exportable production code, and document state is not saved across reloads. Only the study dataset and connection settings persist.
+- Keys live in browser `localStorage`, and calls go directly from the browser. Use personal or limited keys.
+- Mistral and Groq don't receive images, so comment images and image chips are ignored there.
+- Inference, gesture recognition and target resolution are geometric heuristics. They can guess wrong, so low-confidence targets are flagged for you to verify in the plan.
+- Call B is lossy by nature. It proposes wording, and that wording is only as good as the model.
+- Anthropic prompt caching is best-effort. Prefixes below the model's minimum cacheable length are not cached.
+- Tailwind compiles at runtime through the Play CDN, which is fine for a prototype but not for production.
+- The deterministic modules are pure and written to be unit-testable, but the repo does not ship a test suite yet.
