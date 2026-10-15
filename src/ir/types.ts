@@ -139,6 +139,13 @@ export const CLAUSE_CATEGORIES: ClauseCategory[] = ['layout', 'component', 'styl
  */
 export type ClauseOrigin = 'explicit' | 'inferred';
 
+/**
+ * Review state of a clause. Clauses the app adds on its own (e.g. inferred from
+ * a freshly drawn shape) start 'pending' until the user accepts or dismisses
+ * them; absent means 'accepted' (every clause the user wrote or confirmed).
+ */
+export type ClauseStatus = 'pending' | 'accepted';
+
 export interface PromptClause {
   /** Stable id, e.g. "clause_3". */
   id: string;
@@ -148,6 +155,8 @@ export interface PromptClause {
   origin?: ClauseOrigin;
   /** Up to 3 plausible alternative values/phrasings the user can swap in. */
   alternatives?: string[];
+  /** Review state; absent = 'accepted'. See ClauseStatus. */
+  status?: ClauseStatus;
   /**
    * Optional addressable parameter spans: substrings of `text` that name a
    * concrete, editable visual value bound to IR field(s) on specific node(s).

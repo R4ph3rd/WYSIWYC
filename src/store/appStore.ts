@@ -383,6 +383,13 @@ interface AppState {
   fillWireframePlaceholders: (nodeId: string) => void;
   /** Hide the suggestion (icon + canvas bubble) without changing the scene. */
   dismissInference: (nodeId: string) => void;
+  /** Confirm pending (auto-inferred) clauses: they become regular clauses. One undo step. */
+  acceptClauses: (ids: string[]) => void;
+  /**
+   * Reject pending clauses: removes them from the spec, unlinks the nodes they
+   * described and drops their canvas suggestion. Drawn shapes stay. One undo step.
+   */
+  dismissClauses: (ids: string[]) => void;
 
   // --- Annotations / prompt-by-demonstration ---
   addAnnotation: (a: Annotation) => void;
@@ -884,7 +891,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set((s) => ({
         prompt: {
           clauses: s.prompt.clauses.map((c) =>
-            c.id === clauseId ? { ...c, text, origin: 'explicit' } : c,
+            c.id === clauseId ? { ...c, text, origin: 'explicit', status: undefined } : c,
           ),
         },
       }));
@@ -1001,7 +1008,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
     editClause: (id, text) => {
       set((s) => ({
-        prompt: { clauses: s.prompt.clauses.map((c) => (c.id === id ? { ...c, text } : c)) },
+        // Editing a pending clause's wording also confirms it.
+        prompt: { clauses: s.prompt.clauses.map((c) => (c.id === id ? { ...c, text, status: undefined } : c)) },
       }));
       scheduleCallA([id]);
     },
@@ -1301,6 +1309,8 @@ export const useAppStore = create<AppState>((set, get) => {
         category: 'component',
         origin: 'inferred',
         alternatives: candidates.slice(1).map((c) => c.label),
+        // Shown as a suggestion until the user accepts it (or picks a component).
+        status: 'pending',
       };
       set((st) => ({
         // No history push here: createShape already snapshotted the pre-draw
@@ -1354,7 +1364,10 @@ export const useAppStore = create<AppState>((set, get) => {
           ir: { ...st.ir, nodes: [...others, ...children] },
           prompt: {
             clauses: st.prompt.clauses.map((c) =>
-              c.id === inf.clauseId ? { ...c, text: label, origin: 'inferred' as const, alternatives } : c,
+              // Picking a component is an explicit confirmation of its clause.
+              c.id === inf.clauseId
+                ? { ...c, text: label, origin: 'inferred' as const, alternatives, status: undefined }
+                : c,
             ),
           },
           inferences: {
@@ -1404,6 +1417,46 @@ export const useAppStore = create<AppState>((set, get) => {
         const inf = st.inferences[nodeId];
         if (!inf) return {};
         return { inferences: { ...st.inferences, [nodeId]: { ...inf, status: 'dismissed' } } };
+      }),
+
+    acceptClauses: (ids) =>
+      set((st) => {
+        const want = new Set(ids);
+        if (!st.prompt.clauses.some((c) => want.has(c.id) && c.status === 'pending')) return {};
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          prompt: {
+            clauses: st.prompt.clauses.map((c) =>
+              want.has(c.id) && c.status === 'pending' ? { ...c, status: undefined } : c,
+            ),
+          },
+          recentIds: ids,
+        };
+      }),
+
+    dismissClauses: (ids) =>
+      set((st) => {
+        const gone = new Set(
+          st.prompt.clauses.filter((c) => ids.includes(c.id) && c.status === 'pending').map((c) => c.id),
+        );
+        if (gone.size === 0) return {};
+        const inferences = { ...st.inferences };
+        for (const inf of Object.values(st.inferences))
+          if (gone.has(inf.clauseId)) inferences[inf.nodeId] = { ...inf, status: 'dismissed' };
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          prompt: { clauses: st.prompt.clauses.filter((c) => !gone.has(c.id)) },
+          ir: {
+            ...st.ir,
+            nodes: st.ir.nodes.map((n) =>
+              n.provenance.promptClauseId && gone.has(n.provenance.promptClauseId)
+                ? { ...n, provenance: { ...n.provenance, promptClauseId: null } }
+                : n,
+            ),
+          },
+          inferences,
+          hoveredClauseId: st.hoveredClauseId && gone.has(st.hoveredClauseId) ? null : st.hoveredClauseId,
+        };
       }),
 
     // --- Annotations / prompt-by-demonstration ---
