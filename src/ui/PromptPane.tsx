@@ -191,7 +191,7 @@ export function PromptPane() {
   // rephrases, or discards it.
   const onDonePendingEdit = (c: PromptClause) => (text: string | null) => {
     setEditingId(null);
-    if (text !== null && text.trim() && text.trim() !== c.text.trim()) acceptProposal(text);
+    if (text !== null && text.trim() && text.trim() !== c.text.trim()) acceptProposal(text, 'rephrase');
   };
   // Proposed (pending) clauses expose no param tokens (their value isn't in the
   // store yet), but ARE interactive: single click opens alternatives, double
@@ -371,7 +371,7 @@ export function PromptPane() {
             x={altMenu.x}
             y={altMenu.y}
             onPick={(text) => {
-              if (altMenu.pending) acceptProposal(text);
+              if (altMenu.pending) acceptProposal(text, 'alternative');
               else chooseAlternative(clause.id, text);
               setAltMenu(null);
             }}

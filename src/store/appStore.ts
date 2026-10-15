@@ -66,7 +66,9 @@ import {
   setLastDecision,
   type GestureProvenance,
 } from '@/lib/log';
-import { useStudyStore } from '@/store/studyStore';
+import { track, useStudyStore } from '@/store/studyStore';
+import type { DmCategory, ProposalOutcome } from '@/study/schema';
+import { wordCount } from '@/study/metrics';
 import { nextClauseId, nextRecipeId } from '@/ir/ids';
 
 /** Options for a compose send (DirectGPT scope + reference chips + recipe). */
@@ -77,6 +79,74 @@ export interface InstructOptions {
   viaRecipe?: boolean;
   /** Called once the compose settles (true = applied, false = failed). */
   onSettled?: (ok: boolean) => void;
+  /** Where the instruction came from (study log). */
+  source?: 'composer' | 'annotation' | 'recipe';
+}
+
+/** One turn of the chat-only baseline's transcript. */
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  ts: number;
+  error?: boolean;
+}
+
+// --- Study instrumentation helpers ------------------------------------------
+
+/** The baseline condition: canvas, widgets and back-channel are locked. */
+function locked(): boolean {
+  return useStudyStore.getState().condition === 'chat_only';
+}
+
+const OP_CATEGORY: Record<ManipulationOp['kind'], DmCategory> = {
+  move: 'drag',
+  reorder: 'drag',
+  reparent: 'drag',
+  swap: 'drag',
+  resize: 'resize',
+  draw: 'draw',
+  delete: 'structure',
+  align: 'structure',
+  recolor: 'edit',
+  restyle: 'edit',
+  recipe: 'gesture',
+};
+
+/** Set while confirmDemoPlan applies recognised scribble/arrow gestures. */
+let manipSource: DmCategory | null = null;
+
+function trackManipulation(op: ManipulationOp, category?: DmCategory): void {
+  track('manipulation', { subkind: op.kind, category: category ?? manipSource ?? OP_CATEGORY[op.kind] });
+}
+
+// Proposal lifecycle (back-channel proposals and inferred-clause suggestions).
+let proposalSeq = 0;
+let openProposal: { id: string; shownAt: number; opKind: string } | null = null;
+const openInferences = new Map<string, { id: string; shownAt: number }>();
+
+function resolveOpenProposal(outcome: ProposalOutcome): void {
+  if (!openProposal) return;
+  track('proposal_resolved', {
+    subkind: outcome,
+    data: { proposalId: openProposal.id, source: 'backchannel', opKind: openProposal.opKind, latencyMs: Date.now() - openProposal.shownAt },
+  });
+  openProposal = null;
+}
+
+function resolveInference(clauseId: string, outcome: ProposalOutcome): void {
+  const p = openInferences.get(clauseId);
+  if (!p) return;
+  track('proposal_resolved', {
+    subkind: outcome,
+    data: { proposalId: p.id, source: 'inference', clauseId, latencyMs: Date.now() - p.shownAt },
+  });
+  openInferences.delete(clauseId);
+}
+
+/** Close every open proposal (block end / reset) so none is left unresolved in the log. */
+export function flushOpenProposals(outcome: ProposalOutcome = 'abandoned'): void {
+  resolveOpenProposal(outcome);
+  for (const id of [...openInferences.keys()]) resolveInference(id, outcome);
 }
 
 /** Derive the gesture-provenance signals present in a compose send (study log). */
@@ -240,6 +310,9 @@ interface AppState {
    */
   computedStyle: ComputedNodeStyle | null;
 
+  /** Chat-only baseline transcript (user prompts + short assistant replies). */
+  chatLog: ChatMessage[];
+
   generating: boolean; // Compose / Call A in flight
   proposing: boolean; // Call B in flight
   error: string | null;
@@ -319,7 +392,7 @@ interface AppState {
    * user rephrases it or picks one of the proposed alternatives). There is no
    * "reject" — a substantial IR change must be described in the spec.
    */
-  acceptProposal: (overrideText?: string) => void;
+  acceptProposal: (overrideText?: string, via?: 'alternative' | 'rephrase') => void;
   /** Discard a pending proposal's spec wording without folding it in. */
   discardProposal: () => void;
 
@@ -820,6 +893,9 @@ export const useAppStore = create<AppState>((set, get) => {
    * proposal for the user to accept/reject. NEVER auto-applies.
    */
   function propose(op: ManipulationOp, prevIR: IR): void {
+    if (locked()) return;
+    // A new edit replaces a proposal that was never resolved.
+    resolveOpenProposal('superseded');
     const affectedIds = affectedIdsOf(op);
     set({
       pendingProposal: null,
@@ -839,7 +915,18 @@ export const useAppStore = create<AppState>((set, get) => {
           accepted: null,
           confidence: proposal.confidence,
         });
-        useStudyStore.getState().logEvent('backchannel', { kind: op.kind, confidence: proposal.confidence });
+        openProposal = { id: `prop_${++proposalSeq}`, shownAt: Date.now(), opKind: op.kind };
+        track('proposal_shown', {
+          subkind: op.kind,
+          data: {
+            proposalId: openProposal.id,
+            source: 'backchannel',
+            confidence: proposal.confidence,
+            clauses: proposal.updatedClauses.length,
+            removed: proposal.removedClauseIds.length,
+            alternatives: proposal.updatedClauses[0]?.alternatives?.length ?? 0,
+          },
+        });
         set({ pendingProposal: proposal, proposing: false });
       } catch (err) {
         logBackChannel({
@@ -878,6 +965,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // First touch of a burst: remember the world before it and add ONE undo step.
     const beforeIR = get().ir;
     set((s) => ({ history: [...s.history, snapshot(s)].slice(-50) }));
+    track('manipulation', { subkind: 'inspector', category: 'edit', data: { id } });
     pendingEdits.set(id, { beforeIR, timer: setTimeout(() => undefined, 0) });
   }
 
@@ -936,6 +1024,7 @@ export const useAppStore = create<AppState>((set, get) => {
       demoPlan: null,
       demoBusy: false,
       error: null,
+      chatLog: [],
     };
   }
 
@@ -973,6 +1062,7 @@ export const useAppStore = create<AppState>((set, get) => {
     annotations: [],
     demoPlan: null,
     demoBusy: false,
+    chatLog: [],
 
     loadSample: (id) => {
       const sample = SAMPLES.find((s) => s.id === id);
@@ -984,12 +1074,14 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     },
 
-    newBlank: () =>
+    newBlank: () => {
+      flushOpenProposals('abandoned');
       set({
         ir: emptyIR(),
         prompt: emptyPrompt(),
         ...resetTransients(),
-      }),
+      });
+    },
 
     selectNode: (selectedNodeId) =>
       set({ selectedNodeId, selectedNodeIds: selectedNodeId ? [selectedNodeId] : [] }),
@@ -1008,6 +1100,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     promoteToAbsolute: (id, bounds) =>
       set((s) => {
+        if (locked()) return {};
         const node = s.ir.nodes.find((n) => n.id === id);
         const rootId = defaultParentId(s.ir);
         if (!node || id === rootId) return {};
@@ -1107,7 +1200,11 @@ export const useAppStore = create<AppState>((set, get) => {
         get().chooseComponent(inf.nodeId, cand.label);
         return;
       }
-      if (applyClauseTextDeterministically(clauseId, text, { origin: 'explicit' })) return;
+      if (applyClauseTextDeterministically(clauseId, text, { origin: 'explicit' })) {
+        track('spec_edit', { subkind: 'alternative', data: { clauseId, llm: false } });
+        return;
+      }
+      track('spec_edit', { subkind: 'alternative', data: { clauseId, llm: true } });
       set((s) => ({
         prompt: {
           clauses: s.prompt.clauses.map((c) =>
@@ -1125,6 +1222,8 @@ export const useAppStore = create<AppState>((set, get) => {
     restoreVersion: (id) => {
       const v = get().versions.find((entry) => entry.id === id);
       if (!v) return;
+      resolveOpenProposal('undone');
+      track('version_restore', { data: { versionId: id, label: v.label } });
       set((s) => ({
         history: [...s.history, snapshot(s)].slice(-50),
         ir: v.ir,
@@ -1150,6 +1249,18 @@ export const useAppStore = create<AppState>((set, get) => {
       // composed (typed vs. dragged/extracted/scoped/recipe). Logged up front so
       // even an errored send is counted as an attempted gesture.
       const signals = gestureSignals({ scopeNodeIds, refs, viaRecipe: opts.viaRecipe });
+      const source = opts.source ?? (opts.viaRecipe ? 'recipe' : 'composer');
+      track('prompt_submit', {
+        subkind: source,
+        data: {
+          words: wordCount(text),
+          chars: text.length,
+          provenance: primaryProvenance(signals),
+          chips: refs.length,
+          scoped: scopeNodeIds.length > 0,
+        },
+      });
+      set((s) => ({ chatLog: [...s.chatLog, { role: 'user', text, ts: Date.now() }] }));
       logComposeGesture({
         timestamp: Date.now(),
         provenance: primaryProvenance(signals),
@@ -1163,7 +1274,24 @@ export const useAppStore = create<AppState>((set, get) => {
       void (async () => {
         try {
           const { ir, prompt } = get();
-          const result = await composeFromInstruction(ir, prompt, text, { scopeNodeIds, refs });
+          const callType = source === 'annotation' ? 'annotation' : source === 'recipe' ? 'recipe' : 'compose';
+          const result = await composeFromInstruction(ir, prompt, text, { scopeNodeIds, refs }, callType);
+          // What a chat tool would answer: the clauses it wrote, as one reply.
+          const reply = result.updatedClauses.length
+            ? `Updated the UI: ${result.updatedClauses.map((c) => c.text).join('; ')}.`
+            : result.removedClauseIds.length
+              ? `Removed ${result.removedClauseIds.length} part${result.removedClauseIds.length > 1 ? 's' : ''} of the UI.`
+              : 'Done.';
+          track('compose_result', {
+            subkind: callType,
+            data: {
+              assistantWords: wordCount(reply),
+              updated: result.updatedClauses.length,
+              removed: result.removedClauseIds.length,
+              ops: result.ops.length,
+              nodesBefore: ir.nodes.length,
+            },
+          });
           set((s) => ({
             history: [...s.history, snapshot(s)].slice(-50),
             prompt: mergeClauses(s.prompt, result.updatedClauses, result.removedClauseIds),
@@ -1177,12 +1305,17 @@ export const useAppStore = create<AppState>((set, get) => {
             // expanded recipe text (with {selection} collapsed to literal prose).
             lastSent: opts.viaRecipe ? s.lastSent : text,
             generating: false,
+            chatLog: [...s.chatLog, { role: 'assistant', text: reply, ts: Date.now() }],
           }));
           syncClauseIcons(result.updatedClauses.map((c) => c.id));
           recordVersion(text.length > 40 ? `${text.slice(0, 40).trim()}…` : text);
           opts.onSettled?.(true);
         } catch (err) {
+          track('error', { subkind: 'compose', data: { message: err instanceof Error ? err.message.slice(0, 200) : 'error' } });
           handleLLMError(set, err, 'generating');
+          set((s) => ({
+            chatLog: [...s.chatLog, { role: 'assistant', text: 'Something went wrong — try again.', ts: Date.now(), error: true }],
+          }));
           opts.onSettled?.(false);
         }
       })();
@@ -1225,11 +1358,18 @@ export const useAppStore = create<AppState>((set, get) => {
         recipes: s.recipes.map((r) => (r.id === recipeId ? { ...r, uses: r.uses + 1 } : r)),
       }));
       const text = recipe.instruction.replace(/\{selection\}/g, 'the selection');
-      get().instruct(text, { scopeNodeIds: selectedNodeIds, viaRecipe: true });
+      get().instruct(text, { scopeNodeIds: selectedNodeIds, viaRecipe: true, source: 'recipe' });
     },
 
     editClause: (id, text) => {
-      if (applyClauseTextDeterministically(id, text)) return;
+      if (get().prompt.clauses.find((c) => c.id === id)?.status === 'pending') resolveInference(id, 'rephrased');
+      if (applyClauseTextDeterministically(id, text)) {
+        track('spec_edit', { subkind: 'edit', data: { clauseId: id, llm: false, words: wordCount(text) } });
+        return;
+      }
+      // A typed clause edit the model must realise is a language instruction.
+      track('spec_edit', { subkind: 'edit', data: { clauseId: id, llm: true, words: wordCount(text) } });
+      track('prompt_submit', { subkind: 'spec_edit', data: { words: wordCount(text), chars: text.length, provenance: 'typed', chips: 0, scoped: false } });
       set((s) => ({
         // Editing a pending clause's wording also confirms it.
         prompt: { clauses: s.prompt.clauses.map((c) => (c.id === id ? { ...c, text, status: undefined } : c)) },
@@ -1239,6 +1379,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     removeClause: (id) => {
+      track('spec_edit', { subkind: 'remove', data: { clauseId: id, llm: true } });
       set((s) => ({ prompt: { clauses: s.prompt.clauses.filter((c) => c.id !== id) } }));
       scheduleCallA([id]);
     },
@@ -1246,6 +1387,7 @@ export const useAppStore = create<AppState>((set, get) => {
     regenerate: () => void runCallA([]),
 
     manipulate: (op) => {
+      if (locked()) return;
       const prevIR = get().ir;
       const { ir: nextIR, affectedIds } = applyManipulation(prevIR, op);
       set((s) => {
@@ -1270,11 +1412,15 @@ export const useAppStore = create<AppState>((set, get) => {
               : s.selectedNodeIds,
         };
       });
-      useStudyStore.getState().logEvent('manipulation', { kind: op.kind });
+      trackManipulation(op);
       maybePropose(op, prevIR);
     },
 
-    proposeManipulation: (op, prevIR) => maybePropose(op, prevIR),
+    proposeManipulation: (op, prevIR) => {
+      if (locked()) return;
+      trackManipulation(op);
+      maybePropose(op, prevIR);
+    },
 
     settleDragMove: (op, prevIR) => {
       const s = get();
@@ -1293,13 +1439,15 @@ export const useAppStore = create<AppState>((set, get) => {
           ? s.history
           : [...s.history, { ir: prevIR, prompt: s.prompt, inferences: s.inferences }].slice(-50),
       });
-      useStudyStore.getState().logEvent('manipulation', { kind: op.kind });
+      trackManipulation(op);
       maybePropose(op, prevIR);
     },
 
-    acceptProposal: (overrideText) => {
+    acceptProposal: (overrideText, via) => {
       const { pendingProposal } = get();
       if (!pendingProposal) return;
+      const override = !!(overrideText && overrideText.trim());
+      resolveOpenProposal(!override ? 'accepted' : via === 'alternative' ? 'alternative' : 'rephrased');
       // When the user rephrases or picks an alternative, the new wording lands on
       // the FIRST updated clause (the one the manipulation primarily changed).
       let clauses = pendingProposal.updatedClauses;
@@ -1320,6 +1468,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!get().pendingProposal) return;
       // Drop the proposed spec wording without folding it in. The IR edit it
       // describes is already applied; the user chose not to record it now.
+      resolveOpenProposal('dismissed');
       set({ pendingProposal: null, pendingAffectedIds: [] });
       setLastDecision(true);
     },
@@ -1343,7 +1492,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
     pasteClipboard: () => {
       const { clipboard } = get();
-      if (!clipboard || clipboard.length === 0) return;
+      if (!clipboard || clipboard.length === 0 || locked()) return;
+      track('manipulation', { subkind: 'paste', category: 'structure' });
       set((s) => {
         const present = new Set(s.ir.nodes.map((n) => n.id));
         // Re-parent roots to their original parent if it still exists, else the
@@ -1362,8 +1512,10 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     duplicateNode: (id) => {
+      if (locked()) return null;
       const subtree = collectSubtrees(get().ir, [id]);
       if (subtree.length === 0) return null;
+      track('manipulation', { subkind: 'duplicate', category: 'structure' });
       let newId: string | null = null;
       set((s) => {
         const node = s.ir.nodes.find((n) => n.id === id);
@@ -1403,9 +1555,14 @@ export const useAppStore = create<AppState>((set, get) => {
     setComputedStyle: (style) => set({ computedStyle: style }),
 
     setClauseParam: (clauseId, span, value, original) => {
+      if (locked()) return;
       const state = get();
       const clause = state.prompt.clauses.find((c) => c.id === clauseId);
       if (!clause) return;
+      // One widget edit per burst (a slider drag counts once); zero LLM calls.
+      if (paramBurstKey !== `${clauseId}:${span.id}`) {
+        track('manipulation', { subkind: span.kind, category: 'widget', data: { clauseId } });
+      }
 
       // 1. Deterministic IR write, preserving provenance (NOT diverged: a forward
       //    param edit keeps the node described by — linked to — its clause).
@@ -1462,6 +1619,8 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     bindClauseParam: (clauseId, start, end, kind) => {
+      if (locked()) return;
+      track('manipulation', { subkind: `bind:${kind}`, category: 'widget', data: { clauseId } });
       set((s) => {
         const clause = s.prompt.clauses.find((c) => c.id === clauseId);
         if (!clause || start >= end || end > clause.text.length) return {};
@@ -1483,6 +1642,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     createShape: ({ role, x, y, w, h, parentId, points }) => {
+      if (locked()) return '';
       const parent = parentId !== undefined ? parentId : defaultParentId(get().ir);
       let newId = '';
       set((s) => {
@@ -1508,25 +1668,31 @@ export const useAppStore = create<AppState>((set, get) => {
       set((s) => ({ ir: updateNodeLayout(s.ir, id, patch), recentIds: [id] })),
 
     editStyle: (id, patch) => {
+      if (locked()) return;
       beginEdit(id);
       set((s) => ({ ir: updateNodeStyle(s.ir, id, patch), recentIds: [id] }));
       settleEdit(id);
     },
 
     editLayout: (id, patch) => {
+      if (locked()) return;
       beginEdit(id);
       set((s) => ({ ir: updateNodeLayout(s.ir, id, patch), recentIds: [id] }));
       settleEdit(id);
     },
 
     editContent: (id, content) => {
+      if (locked()) return;
       beginEdit(id);
       set((s) => ({ ir: updateNodeContent(s.ir, id, content), recentIds: [id] }));
       settleEdit(id);
     },
 
-    toggleHidden: (id) =>
-      set((s) => ({ ir: toggleHidden(s.ir, id), recentIds: [id] })),
+    toggleHidden: (id) => {
+      if (locked()) return;
+      track('manipulation', { subkind: 'toggleHidden', category: 'structure' });
+      set((s) => ({ ir: toggleHidden(s.ir, id), recentIds: [id] }));
+    },
 
     // --- Component inference (draw a shape → semantic component + wireframe) ---
 
@@ -1538,6 +1704,13 @@ export const useAppStore = create<AppState>((set, get) => {
       if (candidates.length === 0) return;
       const clauseId = nextClauseId(s.prompt.clauses.map((c) => c.id));
       const top = candidates[0];
+      track('manipulation', { subkind: 'draw', category: 'draw', data: { role: node.role } });
+      const pid = `inf_${++proposalSeq}`;
+      openInferences.set(clauseId, { id: pid, shownAt: Date.now() });
+      track('proposal_shown', {
+        subkind: 'draw',
+        data: { proposalId: pid, source: 'inference', clauseId, alternatives: candidates.length - 1 },
+      });
       const clause: PromptClause = {
         id: clauseId,
         text: top.label,
@@ -1570,6 +1743,11 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     chooseComponent: (nodeId, label, fillArg) => {
+      const inf0 = get().inferences[nodeId];
+      if (inf0) {
+        track('manipulation', { subkind: fillArg ? `fill:${fillArg}` : 'component', category: 'component', data: { label } });
+        resolveInference(inf0.clauseId, inf0.candidates[0]?.label === label ? 'accepted' : 'alternative');
+      }
       set((st) => {
         const inf = st.inferences[nodeId];
         const found = st.ir.nodes.find((n) => n.id === nodeId);
@@ -1627,6 +1805,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     revertWireframe: (nodeId) => {
+      track('manipulation', { subkind: 'fill:empty', category: 'component' });
       set((st) => {
         const inf = st.inferences[nodeId];
         if (!inf) return {};
@@ -1646,6 +1825,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     fillWireframePlaceholders: (nodeId) => {
+      track('manipulation', { subkind: 'fill:placeholder', category: 'component' });
       set((st) => {
         const inf = st.inferences[nodeId];
         if (!inf || !inf.chosen) return {};
@@ -1681,6 +1861,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     acceptClauses: (ids) =>
       set((st) => {
+        ids.forEach((id) => resolveInference(id, 'accepted'));
         const want = new Set(ids);
         if (!st.prompt.clauses.some((c) => want.has(c.id) && c.status === 'pending')) return {};
         return {
@@ -1696,6 +1877,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     dismissClauses: (ids) =>
       set((st) => {
+        ids.forEach((id) => resolveInference(id, 'dismissed'));
         const gone = new Set(
           st.prompt.clauses.filter((c) => ids.includes(c.id) && c.status === 'pending').map((c) => c.id),
         );
@@ -1721,7 +1903,11 @@ export const useAppStore = create<AppState>((set, get) => {
 
     // --- Annotations / prompt-by-demonstration ---
 
-    addAnnotation: (a) => set((st) => ({ annotations: [...st.annotations, a] })),
+    addAnnotation: (a) => {
+      if (locked()) return;
+      track('manipulation', { subkind: a.kind, category: 'annotation' });
+      set((st) => ({ annotations: [...st.annotations, a] }));
+    },
     updateAnnotation: (id, patch) =>
       set((st) => ({ annotations: st.annotations.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
     removeAnnotation: (id) =>
@@ -1759,8 +1945,17 @@ export const useAppStore = create<AppState>((set, get) => {
       // A step that cannot be applied (error) is skipped and its markup kept.
       const blocked = plan.filter((p) => p.error);
       const local = plan.filter((p) => !p.error && p.intent && p.intent.kind !== 'fill');
-      for (const item of local) {
-        for (const op of intentOps(item.intent!, get().ir)) get().manipulate(op);
+      track('annotation_apply', {
+        data: { steps: plan.length, local: local.length, remote: plan.length - local.length - blocked.length },
+      });
+      // Recognised marks (cross-out, arrow move, swap) are applied without the model.
+      manipSource = 'gesture';
+      try {
+        for (const item of local) {
+          for (const op of intentOps(item.intent!, get().ir)) get().manipulate(op);
+        }
+      } finally {
+        manipSource = null;
       }
       const notes = attachedNotes(s.annotations);
       const keep = new Set(blocked.flatMap((p) => [p.annotationId, ...(notes.get(p.annotationId) ?? []).map((c) => c.id)]));
@@ -1824,6 +2019,7 @@ export const useAppStore = create<AppState>((set, get) => {
       // button so the same annotations can't be dispatched twice concurrently.
       set({ demoPlan: null, demoBusy: true });
       get().instruct(message, {
+        source: 'annotation',
         scopeNodeIds: scopeNodeIds.length ? scopeNodeIds : undefined,
         refs: refs.length ? refs : undefined,
         onSettled: (ok) => set(ok ? { annotations: [], demoBusy: false } : { demoBusy: false }),
@@ -1834,6 +2030,8 @@ export const useAppStore = create<AppState>((set, get) => {
       set((s) => {
         const prev = s.history[s.history.length - 1];
         if (!prev) return s;
+        resolveOpenProposal('undone');
+        track('undo', { data: { depth: s.history.length } });
         pendingEdits.forEach((p) => clearTimeout(p.timer));
         pendingEdits.clear();
         return {

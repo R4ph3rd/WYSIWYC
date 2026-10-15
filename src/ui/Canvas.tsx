@@ -836,8 +836,9 @@ export function Canvas() {
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
-      {/* Sync mode toggle: bottom-right, horizontal, aligned with the tool palette. */}
-      <div
+      {/* Sync mode toggle: bottom-right, horizontal, aligned with the tool palette.
+          Hidden in the chat-only baseline, which has no back-channel to sync. */}
+      {!chatOnly && <div
         className="absolute bottom-4 right-3 z-20 flex flex-row rounded-md border border-slate-200 bg-white/95 p-0.5 text-[10px] shadow-sm backdrop-blur"
         title="How canvas edits update the spec"
       >
@@ -853,7 +854,7 @@ export function Canvas() {
             {m}
           </button>
         ))}
-      </div>
+      </div>}
 
       {/* Floating tool palette (bottom center) */}
       <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
@@ -1257,6 +1258,9 @@ function HeroComposer() {
   const instruct = useAppStore((s) => s.instruct);
   const generating = useAppStore((s) => s.generating);
   const loadSample = useAppStore((s) => s.loadSample);
+  // Study sessions start blank: no sample shortcuts toward the targets.
+  const inStudy = useStudyStore((s) => s.isStudyMode);
+  const chatOnly = useStudyStore((s) => s.condition === 'chat_only');
   // The empty-state hero keeps its OWN draft: there are no canvas elements to
   // refer to yet, so it must not mirror the populated PromptPane's store value.
   const [composer, setComposer] = useState<ComposerValue>(emptyComposer());
@@ -1274,7 +1278,9 @@ function HeroComposer() {
           What do you want to build?
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Describe a UI in plain words. Then edit it directly — the prompt keeps itself in sync.
+          {chatOnly
+            ? 'Describe a UI in plain words, then ask for changes in the chat.'
+            : 'Describe a UI in plain words. Then edit it directly — the prompt keeps itself in sync.'}
         </p>
 
         <div className="mt-5 text-left">
@@ -1289,7 +1295,7 @@ function HeroComposer() {
           />
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
+        {!inStudy && <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
           <span className="text-[11px] text-slate-500">Try:</span>
           {SAMPLES.map((s) => (
             <button
@@ -1301,7 +1307,7 @@ function HeroComposer() {
               {s.title}
             </button>
           ))}
-        </div>
+        </div>}
       </div>
     </div>
   );
