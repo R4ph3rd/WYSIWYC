@@ -1,16 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, Sparkles, Keyboard, X } from 'lucide-react';
-import { useAppStore, toolToRole, type ComputedNodeStyle } from '@/store/appStore';
+import { Loader2, Sparkles, Keyboard, X, Send } from 'lucide-react';
+import { useAppStore, toolToRole, isAnnotTool, type ComputedNodeStyle } from '@/store/appStore';
 import { Renderer } from '@/render/Renderer';
 import { siblingsOf } from '@/ir/tree';
-import type { ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
+import { pickDropTarget, type DropTarget } from '@/ir/layoutFit';
+import type { Annotation, ComposerValue, IR, IRNode, PathPoint } from '@/ir/types';
 import { SAMPLES } from '@/ir/samples';
 import { composerIsEmpty, composerRefs, emptyComposer, removeRef, serializeComposer } from '@/lib/composer';
 import { cn } from '@/lib/utils';
 import { ToolPalette } from './ToolPalette';
 import { RefComposer } from './RefComposer';
 import { PromptTargetOverlay } from './PromptTargetOverlay';
+import { InferenceOverlay } from './InferenceOverlay';
+import { AI, ANNOTATION_INK } from './tokens';
+import { AnnotationLayer } from './AnnotationLayer';
+import { ModificationPlan } from './ModificationPlan';
 import { useStudyStore } from '@/store/studyStore';
+import { scribbleStrokes } from '@/annot/resolve';
+import { strokeJoinsScribble } from '@/annot/gesture';
 
 type Bounds = { x: number; y: number; w: number; h: number };
 
@@ -104,7 +111,6 @@ export function Canvas() {
   const promoteToAbsolute = useAppStore((s) => s.promoteToAbsolute);
   const addComposerNodeRef = useAppStore((s) => s.addComposerNodeRef);
   const addComposerLocationRef = useAppStore((s) => s.addComposerLocationRef);
-  const setTool = useAppStore((s) => s.setTool);
   const requestFocus = useAppStore((s) => s.requestFocus);
   const focusRequest = useAppStore((s) => s.focusRequest);
   const editContent = useAppStore((s) => s.editContent);
@@ -135,18 +141,40 @@ export function Canvas() {
   const setComputedStyle = useAppStore((s) => s.setComputedStyle);
   const manipulate = useAppStore((s) => s.manipulate);
   const proposeManipulation = useAppStore((s) => s.proposeManipulation);
+  const settleDragMove = useAppStore((s) => s.settleDragMove);
   const createShape = useAppStore((s) => s.createShape);
   const updateLayout = useAppStore((s) => s.updateLayout);
+  const inferDrawnShape = useAppStore((s) => s.inferDrawnShape);
+  const annotations = useAppStore((s) => s.annotations);
+  const addAnnotation = useAppStore((s) => s.addAnnotation);
+  const updateAnnotation = useAppStore((s) => s.updateAnnotation);
+  const buildDemoPlan = useAppStore((s) => s.buildDemoPlan);
+  const demoPlan = useAppStore((s) => s.demoPlan);
+  const demoBusy = useAppStore((s) => s.demoBusy);
 
   const stageRef = useRef<HTMLDivElement>(null);
   // Set when a move/resize drag actually moved, to swallow the synthetic click
   // the browser fires afterwards (which would otherwise add a stray ref chip).
   const draggedRef = useRef(false);
   const [drag, setDrag] = useState<DragState | null>(null);
+  // Where a dragged flow node would land in a layout (insertion line preview);
+  // mirrored in a ref so the mouseup handler reads the latest value.
+  const [dropTarget, setDropTargetState] = useState<DropTarget | null>(null);
+  const dropTargetRef = useRef<DropTarget | null>(null);
+  const setDropTarget = (t: DropTarget | null) => {
+    dropTargetRef.current = t;
+    setDropTargetState(t);
+  };
   // Stage-relative bounds of a selected FLOW node, so resize handles can be shown
   // for LLM-authored components before they are promoted to absolute positioning.
   const [flowBounds, setFlowBounds] = useState<Bounds | null>(null);
   const [pen, setPen] = useState<PenState | null>(null);
+  // In-progress annotation drag (prompt-by-demonstration drawings).
+  const [annotDraft, setAnnotDraft] = useState<
+    | { kind: 'box' | 'arrow'; startX: number; startY: number; curX: number; curY: number }
+    | { kind: 'scribble'; points: PathPoint[] }
+    | null
+  >(null);
   const [penCursor, setPenCursor] = useState<PathPoint | null>(null);
   // Inline canvas text editing (double-click a text node). Holds the node id
   // plus its measured box (relative to the stage) for the overlay textarea.
@@ -156,6 +184,16 @@ export function Canvas() {
   // Mirror for event listeners (keydown) that outlive a render's closure.
   const penRef = useRef<PenState | null>(null);
   penRef.current = pen;
+  // The scribble annotation the current scribble session appends strokes to.
+  // Every stroke drawn while the scribble tool stays active merges into it;
+  // picking any other tool closes the session.
+  const scribbleIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    scribbleIdRef.current = null;
+    // Leaving the pen mid-path keeps what was drawn so far (as Enter would).
+    if (tool !== 'path' && penRef.current) commitPen(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool]);
 
   // Canvas hand-off: a double-click mid-draft pulls focus back to the canvas
   // (blurring the composer). Element/location clicks request 'composer' focus,
@@ -223,7 +261,8 @@ export function Canvas() {
   }, [unknownShortcutAt]);
 
   const role = toolToRole(tool);
-  const drawing = Boolean(role) || tool === 'path';
+  const annotating = isAnnotTool(tool);
+  const drawing = Boolean(role) || tool === 'path' || annotating;
   // The Lovable-style hero greets an empty project — but steps aside the
   // moment a drawing tool is picked, so starting by hand is always possible.
   const isEmpty = ir.nodes.length === 0 && prompt.clauses.length === 0 && !drawing;
@@ -273,6 +312,83 @@ export function Canvas() {
     };
   }
 
+  /** Stage-relative boxes for every rendered node (for annotation target resolution). */
+  function allNodeBoxes(): Record<string, { x: number; y: number; w: number; h: number }> {
+    const stage = stageRef.current;
+    const out: Record<string, { x: number; y: number; w: number; h: number }> = {};
+    if (!stage) return out;
+    const sr = stage.getBoundingClientRect();
+    stage.querySelectorAll<HTMLElement>('[data-node-id]').forEach((el) => {
+      const id = el.dataset.nodeId;
+      if (!id) return;
+      const r = el.getBoundingClientRect();
+      out[id] = {
+        x: Math.round(r.left - sr.left),
+        y: Math.round(r.top - sr.top),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+      };
+    });
+    return out;
+  }
+
+  /**
+   * The layout slot under the pointer for a dragged flow node: the innermost
+   * rendered node under the cursor outside the dragged subtree, resolved to a
+   * container + insertion index by ir/layoutFit.ts.
+   */
+  function findDropTarget(dragId: string, clientX: number, clientY: number, p: PathPoint): DropTarget | null {
+    const stage = stageRef.current;
+    if (!stage) return null;
+    const nodes = useAppStore.getState().ir.nodes;
+    const banned = new Set([dragId]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const n of nodes) {
+        if (n.parentId && banned.has(n.parentId) && !banned.has(n.id)) { banned.add(n.id); grew = true; }
+      }
+    }
+    let hitId: string | null = null;
+    for (const el of document.elementsFromPoint(clientX, clientY)) {
+      if (!stage.contains(el)) continue;
+      const id = el.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId;
+      if (id && !banned.has(id)) { hitId = id; break; }
+    }
+    return pickDropTarget({
+      nodes,
+      draggedId: dragId,
+      hitId,
+      point: p,
+      boxOf: (id) => stageRelativeBounds(id) ?? undefined,
+    });
+  }
+
+  /** The op that lands a dragged flow node at `target`, relative to the pre-drag IR (null = no change). */
+  function dropOp(id: string, target: DropTarget, prevIR: IR) {
+    const before = prevIR.nodes.find((n) => n.id === id);
+    if (!before) return null;
+    if (before.parentId === target.parentId) {
+      const from = siblingsOf(prevIR, id).findIndex((n) => n.id === id);
+      return from === target.index
+        ? null
+        : { kind: 'reorder' as const, id, parentId: before.parentId, from, to: target.index };
+    }
+    return {
+      kind: 'reparent' as const,
+      id,
+      fromParentId: before.parentId,
+      toParentId: target.parentId,
+      toIndex: target.index,
+      fit: { containerWidth: Math.round(target.container.w) },
+    };
+  }
+
+  /** A locally-unique annotation id. */
+  function newAnnotId(): string {
+    return `annot_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  }
+
   /** The rendered node whose center is closest to a stage point (for here/there). */
   function nearestNodeId(p: PathPoint): string | undefined {
     const stage = stageRef.current;
@@ -299,7 +415,7 @@ export function Canvas() {
     const current = penRef.current;
     setPen(null);
     setPenCursor(null);
-    setTool('pointer');
+    // The pen stays active: the next click starts a fresh path.
     if (cancel || !current || current.points.length < 2) return;
     // Drop duplicate anchors left by the double-click that commits.
     const pts = current.points.filter(
@@ -320,22 +436,39 @@ export function Canvas() {
     proposeManipulation({ kind: 'draw', id, role: 'path', layout: { x, y, w, h } }, current.prevIR);
   }
 
+  // Tools stay active after each gesture. Enter commits an in-progress pen
+  // path; Escape cancels it, and with nothing in progress Escape drops back to
+  // the pointer (App's global handler only deselects while on the pointer).
   useEffect(() => {
-    if (!pen) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') commitPen(false);
-      if (e.key === 'Escape') commitPen(true);
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+      // A dialog/popover that consumed Escape (Radix preventDefaults it) wins.
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (penRef.current) {
+        if (e.key === 'Enter') commitPen(false);
+        if (e.key === 'Escape') commitPen(true);
+        return;
+      }
+      if (e.key !== 'Escape') return;
+      const st = useAppStore.getState();
+      if (st.shortcutsOpen || st.tool === 'pointer') return;
+      setAnnotDraft(null);
+      st.setTool('pointer');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pen !== null]);
+  }, []);
 
   // --- Stage mouse handling -------------------------------------------------
 
   function onStageMouseDown(e: React.MouseEvent) {
     const p = relativePoint(e);
     if (!p) return;
+    // While the modification plan is open the canvas is modal: clicks only
+    // (de)select target elements for the plan (handled in ModificationPlan).
+    if (demoPlan) return;
     // In chat_only mode the canvas is a read-only preview; only allow selection.
     if (chatOnly && tool !== 'pointer') return;
     // Every fresh press starts a clean gesture; a real move will re-arm this.
@@ -354,10 +487,34 @@ export function Canvas() {
     if (role) {
       e.preventDefault();
       e.stopPropagation();
+      // The text tool edits an existing text-bearing node in place instead of
+      // stacking a new one on top of it (so it can stay active between texts).
+      if (role === 'text') {
+        const hitId = (e.target as HTMLElement).closest('[data-node-id]')?.getAttribute('data-node-id');
+        const hit = hitId ? nodeById(hitId) : undefined;
+        if (hit && TEXT_EDIT_ROLES.includes(hit.role)) {
+          startTextEdit(hit.id);
+          return;
+        }
+      }
       const prevIR = useAppStore.getState().ir;
       const defaultSize = role === 'text' ? { w: 120, h: 28 } : { w: 2, h: 2 };
       const id = createShape({ role, x: p.x, y: p.y, ...defaultSize });
       setDrag({ mode: 'draw', id, role, startX: p.x, startY: p.y, prevIR });
+      return;
+    }
+
+    // Annotation tools (prompt by demonstration): produce annotations, not nodes.
+    if (isAnnotTool(tool)) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (tool === 'comment') {
+        addAnnotation({ id: newAnnotId(), kind: 'comment', anchor: p, text: '', createdAt: Date.now() });
+        draggedRef.current = true;
+        return;
+      }
+      if (tool === 'scribble') setAnnotDraft({ kind: 'scribble', points: [p] });
+      else setAnnotDraft({ kind: tool as 'box' | 'arrow', startX: p.x, startY: p.y, curX: p.x, curY: p.y });
       return;
     }
 
@@ -432,6 +589,11 @@ export function Canvas() {
     const p = relativePoint(e);
     if (!p) return;
     if (pen) setPenCursor(p);
+    if (annotDraft) {
+      if (annotDraft.kind === 'scribble') setAnnotDraft({ kind: 'scribble', points: [...annotDraft.points, p] });
+      else setAnnotDraft({ ...annotDraft, curX: p.x, curY: p.y });
+      return;
+    }
     if (!drag) return;
 
     if (drag.mode === 'marquee') {
@@ -448,12 +610,20 @@ export function Canvas() {
     } else if (drag.mode === 'move') {
       const dx = p.x - drag.startX;
       const dy = p.y - drag.startY;
-      if (!drag.moved && Math.hypot(dx, dy) > 3) {
+      if (!drag.moved) {
+        // Sub-threshold jitter is still a click: leave the layout untouched
+        // (writing x/y here would pin a flow node absolutely in place).
+        if (Math.hypot(dx, dy) <= 3) return;
         // First real movement: an LLM node becomes absolute here so it can float.
         if (drag.promote) promoteToAbsolute(drag.id, drag.promote);
         setDrag({ ...drag, moved: true });
       }
       updateLayout(drag.id, { x: Math.round(drag.origX + dx), y: Math.round(drag.origY + dy) });
+      // A flow node being dragged previews where it would join a layout;
+      // holding Ctrl/⌘ floats it freely instead.
+      if (drag.promote) {
+        setDropTarget(e.ctrlKey || e.metaKey ? null : findDropTarget(drag.id, e.clientX, e.clientY, p));
+      }
     } else {
       const dx = p.x - drag.startX;
       const dy = p.y - drag.startY;
@@ -472,6 +642,51 @@ export function Canvas() {
   }
 
   function onStageMouseUp() {
+    if (annotDraft) {
+      const d = annotDraft;
+      setAnnotDraft(null);
+      draggedRef.current = true;
+      if (d.kind === 'scribble') {
+        if (d.points.length < 2) return;
+        // Merge into the session's scribble while it still exists (it may
+        // have been removed or applied meanwhile); otherwise open a new one.
+        const current = scribbleIdRef.current
+          ? useAppStore.getState().annotations.find((a) => a.id === scribbleIdRef.current)
+          : undefined;
+        // A stroke far from the session's scribble starts a new gesture (so two
+        // separate cross-outs stay two annotations); nearby strokes merge.
+        if (current && strokeJoinsScribble(scribbleStrokes(current), d.points)) {
+          updateAnnotation(current.id, { strokes: [...scribbleStrokes(current), d.points], points: undefined });
+        } else {
+          const id = newAnnotId();
+          scribbleIdRef.current = id;
+          addAnnotation({ id, kind: 'scribble', strokes: [d.points], createdAt: Date.now() });
+        }
+      } else {
+        const dx = Math.abs(d.curX - d.startX);
+        const dy = Math.abs(d.curY - d.startY);
+        if (dx >= 4 || dy >= 4) {
+          if (d.kind === 'arrow') {
+            // The selection at draw time is the arrow's move source when the
+            // arrow starts on it (annot/resolve.ts `resolveArrowMove`).
+            const sel = useAppStore.getState().selectedNodeIds;
+            addAnnotation({
+              id: newAnnotId(), kind: 'arrow',
+              points: [{ x: d.startX, y: d.startY }, { x: d.curX, y: d.curY }],
+              ...(sel.length ? { selectedIds: [...sel] } : {}),
+              createdAt: Date.now(),
+            });
+          } else {
+            addAnnotation({
+              id: newAnnotId(), kind: 'box',
+              rect: { x: Math.min(d.startX, d.curX), y: Math.min(d.startY, d.curY), w: dx, h: dy },
+              createdAt: Date.now(),
+            });
+          }
+        }
+      }
+      return;
+    }
     if (!drag) return;
 
     if (drag.mode === 'marquee') {
@@ -511,7 +726,7 @@ export function Canvas() {
     setDrag(null);
 
     if (drag.mode === 'draw') {
-      setTool('pointer');
+      // The draw tool stays active; each gesture creates its own node.
       if (!node) return;
       let layout = node.layout ?? {};
       // A click without a drag: give the shape a sensible default footprint.
@@ -520,12 +735,24 @@ export function Canvas() {
         updateLayout(drag.id, clickSize);
         layout = { ...layout, ...clickSize };
       }
-      proposeManipulation(
-        { kind: 'draw', id: drag.id, role: drag.role, layout },
-        drag.prevIR,
-      );
+      // Box-like shapes infer a UI component (semantic) instead of a technical
+      // shape clause; other primitives keep the plain Call B back-channel.
+      if (drag.role === 'rectangle' || drag.role === 'circle') {
+        inferDrawnShape(drag.id, drag.prevIR);
+      } else {
+        proposeManipulation(
+          { kind: 'draw', id: drag.id, role: drag.role, layout },
+          drag.prevIR,
+        );
+      }
     } else if (drag.mode === 'move') {
+      const target = dropTargetRef.current;
+      setDropTarget(null);
       if (!node || !drag.moved) return;
+      if (drag.promote && target) {
+        settleDragMove(dropOp(drag.id, target, drag.prevIR), drag.prevIR);
+        return;
+      }
       proposeManipulation(
         {
           kind: 'move',
@@ -609,8 +836,9 @@ export function Canvas() {
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[var(--workbench-bg)]">
-      {/* Sync mode toggle: bottom-right, horizontal, aligned with the tool palette. */}
-      <div
+      {/* Sync mode toggle: bottom-right, horizontal, aligned with the tool palette.
+          Hidden in the chat-only baseline, which has no back-channel to sync. */}
+      {!chatOnly && <div
         className="absolute bottom-4 right-3 z-20 flex flex-row rounded-md border border-slate-200 bg-white/95 p-0.5 text-[10px] shadow-sm backdrop-blur"
         title="How canvas edits update the spec"
       >
@@ -626,7 +854,7 @@ export function Canvas() {
             {m}
           </button>
         ))}
-      </div>
+      </div>}
 
       {/* Floating tool palette (bottom center) */}
       <div className="pointer-events-none absolute bottom-4 left-1/2 z-20 -translate-x-1/2">
@@ -634,6 +862,20 @@ export function Canvas() {
           <ToolPalette />
         </div>
       </div>
+
+      {/* Send-from-annotations button, floating above the toolbar. */}
+      {!chatOnly && annotations.length > 0 && !demoPlan && !demoBusy && (
+        <button
+          onClick={() => buildDemoPlan(allNodeBoxes())}
+          className={`absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold shadow-lg transition-colors ${AI.fill} ${AI.focus}`}
+        >
+          <Send className="h-3.5 w-3.5" />
+          Apply {annotations.length} annotation{annotations.length === 1 ? '' : 's'}
+        </button>
+      )}
+
+      {/* Guardrail: reviewable modification plan built from the annotations. */}
+      <ModificationPlan stageRef={stageRef} />
 
       {/* Unbound-shortcut hint: click to open the full shortcut sheet. */}
       {hintVisible && !shortcutsOpen && (
@@ -649,7 +891,13 @@ export function Canvas() {
       <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {generating && !isEmpty && (
-        <div className="absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full bg-white/90 px-3 py-1 text-xs text-slate-600 shadow">
+        // In-flight prompt call: amber AI-accent pill with the shared halo
+        // (same as the prompt send button while busy).
+        <div
+          role="status"
+          aria-live="polite"
+          className="wysiwyc-ai-halo absolute left-3 top-3 z-20 flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold"
+        >
           <Loader2 className="h-3.5 w-3.5 animate-spin" /> Composing…
         </div>
       )}
@@ -675,7 +923,7 @@ export function Canvas() {
             cursor: drawing ? 'crosshair' : 'default',
           }}
           onClick={(e) => {
-            if (e.target !== e.currentTarget || drawing) return;
+            if (e.target !== e.currentTarget || drawing || demoPlan) return;
             // A marquee/move drag ends in a click on empty space — swallow it so
             // the just-made selection isn't immediately cleared.
             if (draggedRef.current) { draggedRef.current = false; return; }
@@ -722,7 +970,7 @@ export function Canvas() {
             paramNodeIds={hoveredParamNodeIds}
             recentIds={recentIds}
             onSelect={
-              drawing
+              drawing || demoPlan
                 ? undefined
                 : (id, additive) => {
                     // Ignore the synthetic click that follows a reposition drag.
@@ -743,6 +991,64 @@ export function Canvas() {
             }
             onReorder={drawing ? undefined : onReorder}
           />
+
+          {/* Drop preview while dragging a flow node into a layout. */}
+          {dropTarget && (
+            <div className="pointer-events-none absolute inset-0 z-20" data-testid="drop-indicator">
+              <div
+                className="absolute rounded-md border-2 border-dashed border-indigo-400/70 bg-indigo-500/[0.04]"
+                style={{
+                  left: dropTarget.container.x - 2,
+                  top: dropTarget.container.y - 2,
+                  width: dropTarget.container.w + 4,
+                  height: dropTarget.container.h + 4,
+                }}
+              />
+              <div
+                data-testid="drop-line"
+                className="absolute rounded-full bg-indigo-600 shadow-[0_0_0_2px_rgba(255,255,255,0.9)]"
+                style={{
+                  left: dropTarget.line.x,
+                  top: dropTarget.line.y,
+                  width: dropTarget.line.w,
+                  height: dropTarget.line.h,
+                }}
+              />
+            </div>
+          )}
+
+          {/* Component-inference bubbles + wireframe controls for drawn shapes. */}
+          <InferenceOverlay stageRef={stageRef} />
+
+          {/* Prompt-by-demonstration annotations (comments + drawings). */}
+          <AnnotationLayer stageRef={stageRef} />
+
+          {/* In-progress annotation draft preview. */}
+          {annotDraft && (
+            <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+              {annotDraft.kind === 'box' && (
+                <rect
+                  x={Math.min(annotDraft.startX, annotDraft.curX)}
+                  y={Math.min(annotDraft.startY, annotDraft.curY)}
+                  width={Math.abs(annotDraft.curX - annotDraft.startX)}
+                  height={Math.abs(annotDraft.curY - annotDraft.startY)}
+                  fill={ANNOTATION_INK} fillOpacity={0.08} stroke={ANNOTATION_INK} strokeWidth={2} strokeDasharray="6 4" rx={6}
+                />
+              )}
+              {annotDraft.kind === 'arrow' && (
+                <line
+                  x1={annotDraft.startX} y1={annotDraft.startY} x2={annotDraft.curX} y2={annotDraft.curY}
+                  stroke={ANNOTATION_INK} strokeWidth={2.5} strokeLinecap="round"
+                />
+              )}
+              {annotDraft.kind === 'scribble' && (
+                <polyline
+                  points={annotDraft.points.map((p) => `${p.x},${p.y}`).join(' ')}
+                  fill="none" stroke={ANNOTATION_INK} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"
+                />
+              )}
+            </svg>
+          )}
 
           {/* Labeled borders on elements referred to by the prompt + here/there pins. */}
           <PromptTargetOverlay
@@ -878,6 +1184,12 @@ function ShortcutsSheet({ open, onClose }: { open: boolean; onClose: () => void 
       ],
     },
     {
+      title: 'Markup',
+      items: [
+        ['C', 'Comment'], ['A', 'Arrow'], ['B', 'Surround'], ['S', 'Scribble'],
+      ],
+    },
+    {
       title: 'Edit',
       items: [
         [`${mod} Z`, 'Undo'],
@@ -894,7 +1206,7 @@ function ShortcutsSheet({ open, onClose }: { open: boolean; onClose: () => void 
         ['Double-click', 'Edit text'],
         ['Shift-click', 'Add to selection'],
         ['Drag corner', 'Resize'],
-        ['Esc', 'Deselect'],
+        ['Esc', 'Deselect / exit tool'],
         ['?', 'This sheet'],
       ],
     },
@@ -946,6 +1258,9 @@ function HeroComposer() {
   const instruct = useAppStore((s) => s.instruct);
   const generating = useAppStore((s) => s.generating);
   const loadSample = useAppStore((s) => s.loadSample);
+  // Study sessions start blank: no sample shortcuts toward the targets.
+  const inStudy = useStudyStore((s) => s.isStudyMode);
+  const chatOnly = useStudyStore((s) => s.condition === 'chat_only');
   // The empty-state hero keeps its OWN draft: there are no canvas elements to
   // refer to yet, so it must not mirror the populated PromptPane's store value.
   const [composer, setComposer] = useState<ComposerValue>(emptyComposer());
@@ -963,7 +1278,9 @@ function HeroComposer() {
           What do you want to build?
         </h1>
         <p className="mt-1 text-sm text-slate-500">
-          Describe a UI in plain words. Then edit it directly — the prompt keeps itself in sync.
+          {chatOnly
+            ? 'Describe a UI in plain words, then ask for changes in the chat.'
+            : 'Describe a UI in plain words. Then edit it directly — the prompt keeps itself in sync.'}
         </p>
 
         <div className="mt-5 text-left">
@@ -978,7 +1295,7 @@ function HeroComposer() {
           />
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
+        {!inStudy && <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5">
           <span className="text-[11px] text-slate-500">Try:</span>
           {SAMPLES.map((s) => (
             <button
@@ -990,7 +1307,7 @@ function HeroComposer() {
               {s.title}
             </button>
           ))}
-        </div>
+        </div>}
       </div>
     </div>
   );

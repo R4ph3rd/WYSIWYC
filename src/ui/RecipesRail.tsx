@@ -39,7 +39,7 @@ export function RecipesRail() {
           className={cn(
             'group inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 transition-colors',
             hasSelection
-              ? 'bg-white text-slate-700 ring-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:ring-indigo-200'
+              ? 'bg-white text-slate-700 ring-slate-200 hover:bg-amber-50 hover:text-amber-800 hover:ring-amber-300'
               : 'cursor-not-allowed bg-slate-50 text-slate-500 ring-slate-100',
           )}
         >
@@ -52,7 +52,7 @@ export function RecipesRail() {
         <button
           onClick={() => lastSent && addRecipe(lastSent)}
           title={`Save the last instruction as a reusable recipe — “${lastSent}”`}
-          className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 transition-colors hover:border-indigo-300 hover:text-indigo-600"
+          className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-[11px] font-medium text-slate-500 transition-colors hover:border-amber-400 hover:text-amber-700"
         >
           <Plus className="h-3 w-3" /> Save as recipe
         </button>

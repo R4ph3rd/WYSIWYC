@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { X, RefreshCw } from 'lucide-react';
+import { X, RefreshCw, Sparkles, Check, CheckCheck } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import { CLAUSE_CATEGORIES, type ClauseCategory, type IRNode, type ParamKind, type ParamSpan, type PromptClause } from '@/ir/types';
 import { cn } from '@/lib/utils';
@@ -10,6 +10,7 @@ import { AlternativesMenu } from './AlternativesMenu';
 import { ParamPopover } from './ParamPopover';
 import { DiffRibbon } from './DiffRibbon';
 import { VersionRail } from './VersionRail';
+import { AI } from './tokens';
 
 /**
  * The prompt is a LIVING SPEC with two views the user can switch between:
@@ -78,6 +79,8 @@ export function PromptPane() {
   const chooseAlternative = useAppStore((s) => s.chooseAlternative);
   const acceptProposal = useAppStore((s) => s.acceptProposal);
   const discardProposal = useAppStore((s) => s.discardProposal);
+  const acceptClauses = useAppStore((s) => s.acceptClauses);
+  const dismissClauses = useAppStore((s) => s.dismissClauses);
   const setClauseParam = useAppStore((s) => s.setClauseParam);
   const selectNode = useAppStore((s) => s.selectNode);
   const irNodes = useAppStore((s) => s.ir.nodes);
@@ -114,7 +117,16 @@ export function PromptPane() {
     }
     return m;
   }, [irNodes]);
-  const spansFor = (c: PromptClause): ParamSpan[] => paramsForClause(c, ownedByClause.get(c.id) ?? []);
+  // Clauses the app added on its own (inferred from a drawn shape) that still
+  // await the user's accept/dismiss.
+  const suggestedIds = clauses.filter((c) => c.status === 'pending').map((c) => c.id);
+  // Binding context: the whole IR (descendants / layout parents of owned
+  // nodes) and other clauses' text (to match subjects like "page title").
+  const lexCtx = useMemo(() => {
+    const textById = new Map(clauses.map((c) => [c.id, c.text]));
+    return { nodes: irNodes, clauseText: (id: string) => textById.get(id) };
+  }, [irNodes, clauses]);
+  const spansFor = (c: PromptClause): ParamSpan[] => paramsForClause(c, ownedByClause.get(c.id) ?? [], lexCtx);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [altMenu, setAltMenu] = useState<{ clauseId: string; x: number; y: number; pending?: boolean } | null>(null);
@@ -179,7 +191,7 @@ export function PromptPane() {
   // rephrases, or discards it.
   const onDonePendingEdit = (c: PromptClause) => (text: string | null) => {
     setEditingId(null);
-    if (text !== null && text.trim() && text.trim() !== c.text.trim()) acceptProposal(text);
+    if (text !== null && text.trim() && text.trim() !== c.text.trim()) acceptProposal(text, 'rephrase');
   };
   // Proposed (pending) clauses expose no param tokens (their value isn't in the
   // store yet), but ARE interactive: single click opens alternatives, double
@@ -192,6 +204,9 @@ export function PromptPane() {
     onParamHover: hoverParam,
     selectedNodeSet,
     onAccept: pending ? () => acceptProposal() : undefined,
+    suggested: !pending && c.status === 'pending',
+    onAcceptSuggested: () => acceptClauses([c.id]),
+    onDismissSuggested: () => dismissClauses([c.id]),
     onOpenMenu: (x: number, y: number) => setAltMenu({ clauseId: c.id, x, y, pending }),
     onEdit: () => setEditingId(c.id),
     onRemove: pending ? () => discardProposal() : () => removeClause(c.id),
@@ -239,6 +254,28 @@ export function PromptPane() {
         onClick={(e) => { if (e.target === e.currentTarget) selectNode(null); }}
         onMouseUp={onSpecMouseUp}
       >
+        {suggestedIds.length > 1 && (
+          <div
+            role="group"
+            aria-label="Suggested clauses"
+            className={cn('mb-3 flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[11px] text-amber-900', AI.tint)}
+          >
+            <Sparkles className="h-3 w-3 shrink-0 text-amber-500" />
+            <span className="min-w-0 flex-1">{suggestedIds.length} suggested clauses to review</span>
+            <button
+              onClick={() => dismissClauses(suggestedIds)}
+              className="rounded-md px-1.5 py-0.5 font-medium text-amber-900/70 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+            >
+              Dismiss all
+            </button>
+            <button
+              onClick={() => acceptClauses(suggestedIds)}
+              className={cn('flex items-center gap-1 rounded-md px-1.5 py-0.5 font-semibold shadow-sm transition-colors', AI.fill, AI.focus)}
+            >
+              <CheckCheck className="h-3 w-3" /> Accept all
+            </button>
+          </div>
+        )}
         {displayClauses.length === 0 ? (
           <p className="px-1 py-6 text-center text-xs text-slate-500">
             Nothing here yet — describe what you want below, or pick an example.
@@ -334,7 +371,7 @@ export function PromptPane() {
             x={altMenu.x}
             y={altMenu.y}
             onPick={(text) => {
-              if (altMenu.pending) acceptProposal(text);
+              if (altMenu.pending) acceptProposal(text, 'alternative');
               else chooseAlternative(clause.id, text);
               setAltMenu(null);
             }}
@@ -439,7 +476,8 @@ function ClauseContent({
 
 const PARAM_LABEL: Record<ParamSpan['kind'], string> = {
   color: 'color', length: 'size', fontFamily: 'font', fontWeight: 'weight', shadow: 'shadow',
-  radius: 'corners', opacity: 'opacity', align: 'alignment', enum: 'option', shape: 'shape', text: 'value',
+  radius: 'corners', opacity: 'opacity', align: 'alignment', enum: 'option', shape: 'shape',
+  position: 'position', icon: 'icon', text: 'value',
 };
 
 /**
@@ -499,6 +537,9 @@ function ClauseItem({
   spans,
   onHover,
   onAccept,
+  suggested,
+  onAcceptSuggested,
+  onDismissSuggested,
   onOpenMenu,
   onEdit,
   onRemove,
@@ -513,6 +554,9 @@ function ClauseItem({
   spans: ParamSpan[];
   onHover: (id: string | null) => void;
   onAccept?: () => void;
+  suggested?: boolean;
+  onAcceptSuggested?: () => void;
+  onDismissSuggested?: () => void;
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -549,11 +593,13 @@ function ClauseItem({
         }
         onEdit();
       }}
-      title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
+      title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : suggested ? 'Suggested from your drawing — accept to add it to the spec, or dismiss' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
         'group flex items-start gap-2 rounded-md border px-2 py-1.5 text-[13px] transition-colors',
         pending
-          ? 'cursor-pointer border-dashed border-amber-300 bg-amber-50/60 text-amber-900'
+          ? 'cursor-pointer border-amber-300 bg-amber-100/70 text-amber-950'
+          : suggested
+            ? cn('cursor-pointer italic text-slate-700', AI.tint)
           : selected
             ? 'cursor-pointer border-slate-200 bg-slate-100 text-slate-900'
             : 'cursor-pointer border-transparent text-slate-600 hover:bg-slate-50',
@@ -563,9 +609,10 @@ function ClauseItem({
       <span
         className={cn(
           'mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full',
-          pending ? 'bg-amber-500' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
+          pending ? 'bg-amber-500' : suggested ? 'border border-dashed border-amber-500 bg-white' : inferred ? 'bg-amber-400 ring-2 ring-amber-100' : 'bg-slate-200',
         )}
       />
+      <ClauseInferenceIcon clauseId={clause.id} />
       {/* IR items wrap freely so the whole sentence is visible; only the
           interactive param tokens inside stay on one line (see ParamToken). */}
       <span data-clause-text className="min-w-0 flex-1 break-words">
@@ -575,11 +622,13 @@ function ClauseItem({
         <button
           onClick={(e) => { e.stopPropagation(); onAccept?.(); }}
           title="Accept this change"
-          className="mt-px flex w-16 shrink-0 items-center justify-center rounded-full bg-amber-100 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700 transition-colors group-hover:bg-amber-400 group-hover:text-amber-950"
+          className={cn('mt-px flex w-16 shrink-0 items-center justify-center rounded-full bg-amber-400 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-950 transition-colors group-hover:bg-amber-500', AI.focus)}
         >
           <span className="group-hover:hidden">Proposed</span>
           <span className="hidden group-hover:inline">Accept</span>
         </button>
+      ) : suggested ? (
+        <SuggestedActions onAccept={onAcceptSuggested} onDismiss={onDismissSuggested} />
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(); }}
@@ -602,6 +651,9 @@ function ClauseInline({
   spans,
   onHover,
   onAccept,
+  suggested,
+  onAcceptSuggested,
+  onDismissSuggested,
   onOpenMenu,
   onEdit,
   onRemove,
@@ -615,6 +667,9 @@ function ClauseInline({
   pending?: boolean;
   onHover: (id: string | null) => void;
   onAccept?: () => void;
+  suggested?: boolean;
+  onAcceptSuggested?: () => void;
+  onDismissSuggested?: () => void;
   onOpenMenu: (x: number, y: number) => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -648,12 +703,14 @@ function ClauseInline({
         }
         onEdit();
       }}
-      title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
+      title={pending ? 'Proposed change — click for alternatives, double-click to rephrase' : suggested ? 'Suggested from your drawing — accept to add it to the spec, or dismiss' : inferred ? 'Inferred — click for alternatives, double-click to edit' : 'Click for alternatives · double-click to edit'}
       className={cn(
         'group -mx-0.5 cursor-pointer rounded px-0.5 underline decoration-2 underline-offset-4 transition-colors',
         CATEGORY_META[clause.category].underline,
         pending
-          ? 'bg-amber-50 text-amber-900 decoration-dashed'
+          ? 'bg-amber-100 text-amber-950'
+          : suggested
+            ? 'bg-amber-500/10 italic text-slate-700 decoration-dashed'
           : selected ? 'bg-slate-100 text-slate-900' : 'hover:bg-slate-50',
         flash && 'wysiwyc-flash',
       )}
@@ -661,7 +718,10 @@ function ClauseInline({
       {pending && (
         <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-500 align-middle" aria-label="proposed" />
       )}
-      {!pending && inferred && (
+      {suggested && (
+        <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full border border-dashed border-amber-500 bg-white align-middle" aria-label="suggested" />
+      )}
+      {!pending && !suggested && inferred && (
         <span
           className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 align-middle ring-2 ring-amber-100"
           aria-label="inferred"
@@ -678,6 +738,8 @@ function ClauseInline({
         >
           Accept
         </button>
+      ) : suggested ? (
+        <SuggestedActions inline onAccept={onAcceptSuggested} onDismiss={onDismissSuggested} />
       ) : (
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(); }}
@@ -691,6 +753,57 @@ function ClauseInline({
   );
 }
 
+/**
+ * Accept / dismiss controls for a suggested (pending) clause. Always visible
+ * (not hover-only) so the review step is obvious and reachable by keyboard.
+ */
+function SuggestedActions({
+  onAccept,
+  onDismiss,
+  inline,
+}: {
+  onAccept?: () => void;
+  onDismiss?: () => void;
+  inline?: boolean;
+}) {
+  const stop = (fn?: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    fn?.();
+  };
+  return (
+    <span
+      onDoubleClick={(e) => e.stopPropagation()}
+      className={cn('not-italic no-underline', inline ? 'ml-1 inline-flex gap-0.5 align-middle' : 'flex shrink-0 items-center gap-0.5')}
+    >
+      {!inline && (
+        <span className="mr-1 text-[9px] font-semibold uppercase tracking-wide text-amber-800">Suggested</span>
+      )}
+      <button
+        onClick={stop(onAccept)}
+        title="Accept — add this clause to the spec"
+        aria-label="Accept suggested clause"
+        className={cn(
+          'flex items-center gap-0.5 rounded-md font-semibold not-italic shadow-sm transition-colors',
+          inline ? 'h-[18px] px-1 text-[10px]' : 'px-1.5 py-0.5 text-[10px]',
+          AI.fill,
+          AI.focus,
+        )}
+      >
+        <Check className="h-3 w-3" />
+        {!inline && 'Accept'}
+      </button>
+      <button
+        onClick={stop(onDismiss)}
+        title="Dismiss — remove this suggestion (the shape stays)"
+        aria-label="Dismiss suggested clause"
+        className="grid h-[22px] w-[22px] place-items-center rounded-md text-slate-500 transition-colors hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </span>
+  );
+}
+
 /** Widget kinds offered when manually binding a selected text span. */
 const BIND_KINDS: { kind: ParamKind; label: string }[] = [
   { kind: 'color', label: 'Color' },
@@ -699,6 +812,8 @@ const BIND_KINDS: { kind: ParamKind; label: string }[] = [
   { kind: 'radius', label: 'Corners' },
   { kind: 'shape', label: 'Shape' },
   { kind: 'align', label: 'Align' },
+  { kind: 'position', label: 'Position' },
+  { kind: 'icon', label: 'Icon' },
   { kind: 'shadow', label: 'Shadow' },
   { kind: 'text', label: 'Value' },
 ];
@@ -788,5 +903,80 @@ function ClauseEditor({
       rows={2}
       className="my-0.5 w-full resize-none rounded-md border border-slate-200 bg-slate-50/40 px-1.5 py-1 text-xs leading-snug text-slate-800 outline-none focus:ring-2 focus:ring-slate-100"
     />
+  );
+}
+
+/**
+ * A spark icon on an inferred-component clause. Clicking it reveals the other
+ * candidate UI components (part A of prompt-by-demonstration); picking one
+ * rewrites the clause and rebuilds the wireframe on the canvas. Once a component
+ * is chosen this is the place to change it (the canvas bubble is gone).
+ */
+function ClauseInferenceIcon({ clauseId }: { clauseId: string }) {
+  const inferences = useAppStore((s) => s.inferences);
+  const chooseComponent = useAppStore((s) => s.chooseComponent);
+  const selectNode = useAppStore((s) => s.selectNode);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  const inf = Object.values(inferences).find(
+    (i) => i.clauseId === clauseId && i.status !== 'dismissed',
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  if (!inf) return null;
+
+  return (
+    <span ref={ref} className="relative mt-[2px] shrink-0">
+      <button
+        onClick={(e) => { e.stopPropagation(); selectNode(inf.nodeId); setOpen((v) => !v); }}
+        title={inf.chosen ? `Component: ${inf.chosen} — click to change` : 'Suggested components — click to choose'}
+        className="flex h-4 w-4 items-center justify-center rounded text-amber-500 transition-colors hover:bg-amber-100"
+      >
+        <Sparkles className="h-3 w-3" />
+      </button>
+      {open && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute left-0 top-5 z-50 w-52 rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-lg ring-1 ring-black/5"
+        >
+          <div className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            Looks like…
+          </div>
+          {inf.candidates.map((c) => {
+            const chosen = inf.chosen === c.label;
+            return (
+              <button
+                key={c.label}
+                onClick={(e) => { e.stopPropagation(); chooseComponent(inf.nodeId, c.label); setOpen(false); }}
+                className={
+                  'flex w-full items-start gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors ' +
+                  (chosen ? 'bg-amber-50' : 'hover:bg-slate-50')
+                }
+              >
+                <span className="mt-0.5 h-3 w-3 shrink-0 text-amber-500">{chosen && <Check className="h-3 w-3" />}</span>
+                <span className="min-w-0">
+                  <span className="block text-[12px] font-semibold text-slate-800">{c.label}</span>
+                  <span className="block truncate text-[10px] text-slate-500">{c.description}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </span>
   );
 }

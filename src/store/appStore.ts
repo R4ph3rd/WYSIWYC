@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import type {
+  Annotation,
+  ComponentInference,
   ComposerValue,
+  DemoIntent,
+  DemoPlanItem,
   IR,
   IRNode,
   IRPatch,
@@ -10,13 +14,19 @@ import type {
   ParamKind,
   ParamSpan,
   PathPoint,
+  PromptClause,
   PromptRef,
   PromptUpdateProposal,
   Recipe,
   StructuredPrompt,
+  WireframeFill,
 } from '@/ir/types';
 import { setAlignment, setUtility } from '@/ir/tailwindEdit';
-import { COLOR_NAMES, createManualSpan } from '@/ir/paramLexer';
+import { createManualSpan, paramsForClause, type LexContext } from '@/ir/paramLexer';
+import { nearestColorName } from '@/ir/colors';
+import { writeGradientStop, writePosition, type GradientStop } from '@/ir/bindings';
+import { iconWord } from '@/ir/icons';
+import { diffParamEdit, reconcilePositionProse, syncIconsToClauses } from '@/ir/clauseEdit';
 import { familyFromStack } from '@/lib/fonts';
 import { loadGoogleFont } from '@/lib/loadFont';
 import {
@@ -27,6 +37,7 @@ import {
   nextComposerRefId,
 } from '@/lib/composer';
 import { applyPatch } from '@/ir/applyPatch';
+import { siblingsOf } from '@/ir/tree';
 import {
   applyManipulation,
   cloneNodes,
@@ -38,6 +49,10 @@ import {
   updateNodeStyle,
 } from '@/ir/manipulate';
 import { SAMPLES, emptyIR, emptyPrompt } from '@/ir/samples';
+import { inferComponentCandidates } from '@/ir/componentInfer';
+import { wireframeChildren, fillComponent, wireframeBackdrop } from '@/ir/wireframe';
+import { derivePalette } from '@/ir/uiPalette';
+import { attachedNotes, buildDemoPlan as buildDemoPlanPure, isPureMoveText, nodeLabel } from '@/annot/resolve';
 import {
   composeFromInstruction,
   generatePatch,
@@ -51,8 +66,10 @@ import {
   setLastDecision,
   type GestureProvenance,
 } from '@/lib/log';
-import { useStudyStore } from '@/store/studyStore';
-import { nextRecipeId } from '@/ir/ids';
+import { track, useStudyStore } from '@/store/studyStore';
+import type { DmCategory, ProposalOutcome } from '@/study/schema';
+import { wordCount } from '@/study/metrics';
+import { nextClauseId, nextRecipeId } from '@/ir/ids';
 
 /** Options for a compose send (DirectGPT scope + reference chips + recipe). */
 export interface InstructOptions {
@@ -60,6 +77,76 @@ export interface InstructOptions {
   refs?: PromptRef[];
   /** True when this send was triggered by re-applying a Recipe. */
   viaRecipe?: boolean;
+  /** Called once the compose settles (true = applied, false = failed). */
+  onSettled?: (ok: boolean) => void;
+  /** Where the instruction came from (study log). */
+  source?: 'composer' | 'annotation' | 'recipe';
+}
+
+/** One turn of the chat-only baseline's transcript. */
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  ts: number;
+  error?: boolean;
+}
+
+// --- Study instrumentation helpers ------------------------------------------
+
+/** The baseline condition: canvas, widgets and back-channel are locked. */
+function locked(): boolean {
+  return useStudyStore.getState().condition === 'chat_only';
+}
+
+const OP_CATEGORY: Record<ManipulationOp['kind'], DmCategory> = {
+  move: 'drag',
+  reorder: 'drag',
+  reparent: 'drag',
+  swap: 'drag',
+  resize: 'resize',
+  draw: 'draw',
+  delete: 'structure',
+  align: 'structure',
+  recolor: 'edit',
+  restyle: 'edit',
+  recipe: 'gesture',
+};
+
+/** Set while confirmDemoPlan applies recognised scribble/arrow gestures. */
+let manipSource: DmCategory | null = null;
+
+function trackManipulation(op: ManipulationOp, category?: DmCategory): void {
+  track('manipulation', { subkind: op.kind, category: category ?? manipSource ?? OP_CATEGORY[op.kind] });
+}
+
+// Proposal lifecycle (back-channel proposals and inferred-clause suggestions).
+let proposalSeq = 0;
+let openProposal: { id: string; shownAt: number; opKind: string } | null = null;
+const openInferences = new Map<string, { id: string; shownAt: number }>();
+
+function resolveOpenProposal(outcome: ProposalOutcome): void {
+  if (!openProposal) return;
+  track('proposal_resolved', {
+    subkind: outcome,
+    data: { proposalId: openProposal.id, source: 'backchannel', opKind: openProposal.opKind, latencyMs: Date.now() - openProposal.shownAt },
+  });
+  openProposal = null;
+}
+
+function resolveInference(clauseId: string, outcome: ProposalOutcome): void {
+  const p = openInferences.get(clauseId);
+  if (!p) return;
+  track('proposal_resolved', {
+    subkind: outcome,
+    data: { proposalId: p.id, source: 'inference', clauseId, latencyMs: Date.now() - p.shownAt },
+  });
+  openInferences.delete(clauseId);
+}
+
+/** Close every open proposal (block end / reset) so none is left unresolved in the log. */
+export function flushOpenProposals(outcome: ProposalOutcome = 'abandoned'): void {
+  resolveOpenProposal(outcome);
+  for (const id of [...openInferences.keys()]) resolveInference(id, outcome);
 }
 
 /** Derive the gesture-provenance signals present in a compose send (study log). */
@@ -93,9 +180,24 @@ function deriveRecipeLabel(instruction: string): string {
   return label ? label[0].toUpperCase() + label.slice(1) : 'Saved command';
 }
 
-/** Tool palette modes (deterministic drawing). */
-export type Tool = 'pointer' | 'rectangle' | 'circle' | 'line' | 'path' | 'text';
+/** Tool palette modes (deterministic drawing + annotation). */
+export type Tool =
+  | 'pointer'
+  | 'rectangle'
+  | 'circle'
+  | 'line'
+  | 'path'
+  | 'text'
+  | 'comment'
+  | 'arrow'
+  | 'box'
+  | 'scribble';
 export const DRAWING_TOOLS: Tool[] = ['rectangle', 'circle', 'line', 'path', 'text'];
+/** Annotation ("prompt by demonstration") tools — produce annotations, not IR nodes. */
+export const ANNOT_TOOLS: Tool[] = ['comment', 'arrow', 'box', 'scribble'];
+export function isAnnotTool(t: Tool): boolean {
+  return (ANNOT_TOOLS as string[]).includes(t);
+}
 export function toolToRole(tool: Tool): NodeRole | null {
   switch (tool) {
     case 'rectangle': return 'rectangle';
@@ -110,6 +212,8 @@ export function toolToRole(tool: Tool): NodeRole | null {
 interface Snapshot {
   ir: IR;
   prompt: StructuredPrompt;
+  /** Component inferences travel with the scene so undo/restore stay consistent. */
+  inferences: Record<string, ComponentInference>;
 }
 
 /**
@@ -125,6 +229,7 @@ export interface SpecVersion {
   label: string;
   ir: IR;
   prompt: StructuredPrompt;
+  inferences: Record<string, ComponentInference>;
 }
 
 /** Resolved visual style read from the DOM for the Properties panel fallback. */
@@ -205,10 +310,23 @@ interface AppState {
    */
   computedStyle: ComputedNodeStyle | null;
 
+  /** Chat-only baseline transcript (user prompts + short assistant replies). */
+  chatLog: ChatMessage[];
+
   generating: boolean; // Compose / Call A in flight
   proposing: boolean; // Call B in flight
   error: string | null;
   needsConnect: boolean;
+
+  // --- Prompt-by-demonstration ---
+  /** Component guesses for drawn shapes, keyed by node id. */
+  inferences: Record<string, ComponentInference>;
+  /** Canvas annotations (comments + draft drawings) awaiting a demo send. */
+  annotations: Annotation[];
+  /** The reviewable modification plan built from annotations (guardrail), or null. */
+  demoPlan: DemoPlanItem[] | null;
+  /** True while a demo plan is being built or applied. */
+  demoBusy: boolean;
 
   loadSample: (id: string) => void;
   newBlank: () => void;
@@ -263,12 +381,18 @@ interface AppState {
    */
   proposeManipulation: (op: ManipulationOp, prevIR: IR) => void;
   /**
+   * Finish a canvas drag of a flow node into a layout: replace the live drag
+   * preview with `op` applied to `prevIR` (the IR before the drag) as ONE undo
+   * step. A null op (dropped back where it was) just restores `prevIR`.
+   */
+  settleDragMove: (op: ManipulationOp | null, prevIR: IR) => void;
+  /**
    * Resolve the pending back-channel proposal by folding it into the prompt.
    * `overrideText` replaces the primary edited clause's text (used when the
    * user rephrases it or picks one of the proposed alternatives). There is no
    * "reject" — a substantial IR change must be described in the spec.
    */
-  acceptProposal: (overrideText?: string) => void;
+  acceptProposal: (overrideText?: string, via?: 'alternative' | 'rephrase') => void;
   /** Discard a pending proposal's spec wording without folding it in. */
   discardProposal: () => void;
 
@@ -330,6 +454,42 @@ interface AppState {
   editContent: (id: string, content: string) => void;
   toggleHidden: (id: string) => void;
 
+  // --- Component inference (draw a shape → semantic component + wireframe) ---
+  /** Run component inference on a freshly drawn shape and add its inferred clause. */
+  inferDrawnShape: (nodeId: string, prevIR: IR) => void;
+  /**
+   * Pick one of the candidate components: writes the clause and rebuilds the
+   * host's generated children. Switching variations keeps the current fill mode
+   * (wireframe / placeholders / empty) unless `fill` is given explicitly.
+   */
+  chooseComponent: (nodeId: string, label: string, fill?: WireframeFill) => void;
+  /** Strip the generated wireframe children, leaving the host empty. */
+  revertWireframe: (nodeId: string) => void;
+  /** Convert the grey wireframe into neutral placeholder content/images. */
+  fillWireframePlaceholders: (nodeId: string) => void;
+  /** Hide the suggestion (icon + canvas bubble) without changing the scene. */
+  dismissInference: (nodeId: string) => void;
+  /** Confirm pending (auto-inferred) clauses: they become regular clauses. One undo step. */
+  acceptClauses: (ids: string[]) => void;
+  /**
+   * Reject pending clauses: removes them from the spec, unlinks the nodes they
+   * described and drops their canvas suggestion. Drawn shapes stay. One undo step.
+   */
+  dismissClauses: (ids: string[]) => void;
+
+  // --- Annotations / prompt-by-demonstration ---
+  addAnnotation: (a: Annotation) => void;
+  updateAnnotation: (id: string, patch: Partial<Annotation>) => void;
+  removeAnnotation: (id: string) => void;
+  clearAnnotations: () => void;
+  /** Build the reviewable plan from the current annotations (boxes = DOM-measured node rects). */
+  buildDemoPlan: (boxes: Record<string, { x: number; y: number; w: number; h: number }>) => void;
+  updateDemoPlanItem: (id: string, patch: Partial<DemoPlanItem>) => void;
+  removeDemoPlanItem: (id: string) => void;
+  cancelDemoPlan: () => void;
+  /** Apply the confirmed plan: synthesize an instruction and run compose, then clear. */
+  confirmDemoPlan: () => void;
+
   undo: () => void;
   dismissError: () => void;
 }
@@ -347,18 +507,146 @@ let versionSeq = 0;
 const MAX_VERSIONS = 24;
 
 function snapshot(s: AppState): Snapshot {
-  return { ir: s.ir, prompt: s.prompt };
+  return { ir: s.ir, prompt: s.prompt, inferences: s.inferences };
 }
 
 function patchedIds(patch: IRPatch): string[] {
   return patch.ops.map((op) => (op.type === 'add' ? op.node.id : op.id));
 }
 
+/**
+ * The deterministic IR ops that realise a recognised scribble intent (delete,
+ * move, swap) on the current IR; [] for intents that need the model (fill) or
+ * whose nodes are gone. A same-parent move is a plain reorder (or an x/y move
+ * for an absolutely positioned node); anything else is a reparent.
+ */
+function intentOps(intent: DemoIntent, ir: IR): ManipulationOp[] {
+  const byId = new Map(ir.nodes.map((n) => [n.id, n]));
+  switch (intent.kind) {
+    case 'delete': {
+      const ids = new Set(intent.ids.filter((id) => byId.get(id)?.parentId));
+      // Skip ids inside another deleted subtree: removing the ancestor covers them.
+      const covered = (id: string): boolean => {
+        for (let p = byId.get(id)?.parentId ?? null; p; p = byId.get(p)?.parentId ?? null) {
+          if (ids.has(p)) return true;
+        }
+        return false;
+      };
+      return [...ids].filter((id) => !covered(id)).map((id) => ({ kind: 'delete' as const, id }));
+    }
+    case 'move': {
+      const node = byId.get(intent.id);
+      if (!node || !byId.has(intent.toParentId)) return [];
+      if (node.parentId !== intent.toParentId) {
+        const op: ManipulationOp = {
+          kind: 'reparent', id: node.id, fromParentId: node.parentId,
+          toParentId: intent.toParentId, toIndex: intent.toIndex, layout: intent.layout,
+        };
+        // A flow node joins the target's layout (sizing, columns) in the same step.
+        const flow = node.layout?.x === undefined && node.layout?.y === undefined && !intent.layout;
+        if (flow) op.fit = intent.targetWidth !== undefined ? { containerWidth: intent.targetWidth } : {};
+        return [op];
+      }
+      if (intent.layout) {
+        return [{ kind: 'move', id: node.id, from: { ...node.layout }, to: { ...node.layout, ...intent.layout } }];
+      }
+      const from = siblingsOf(ir, node.id).findIndex((n) => n.id === node.id);
+      return from === intent.toIndex
+        ? []
+        : [{ kind: 'reorder', id: node.id, parentId: node.parentId, from, to: intent.toIndex }];
+    }
+    case 'swap':
+      return intent.ids.every((id) => byId.has(id)) ? [{ kind: 'swap', id: intent.ids[0], otherId: intent.ids[1] }] : [];
+    case 'fill':
+      return [];
+  }
+}
+
+/**
+ * Apply a user edit to a plan row. Rewording the instruction drops the
+ * recognised intent (the user's text now goes to the model). Re-picking the
+ * targets keeps a delete / fill intent pointed at the new nodes; a move or swap
+ * is only exact for the nodes it was resolved on, so it is dropped too.
+ */
+function withEditedIntent(item: DemoPlanItem, patch: Partial<DemoPlanItem>): DemoPlanItem {
+  const next = { ...item, ...patch };
+  const intent = item.intent;
+  if (!intent || 'intent' in patch) return next;
+  if (patch.instruction !== undefined && patch.instruction !== item.instruction) {
+    // An arrow's move stays exact; what the user typed beyond "move it" rides
+    // along to the model as a follow-up.
+    if (intent.kind === 'move' && intent.source) {
+      const text = patch.instruction.trim();
+      return { ...next, followUp: text && !isPureMoveText(text) ? text : undefined };
+    }
+    return { ...next, intent: undefined };
+  }
+  if (patch.targetNodeIds) {
+    if (intent.kind === 'delete' || intent.kind === 'fill') return { ...next, intent: { ...intent, ids: patch.targetNodeIds } };
+    return { ...next, intent: undefined };
+  }
+  return next;
+}
+
 function affectedIdsOf(op: ManipulationOp): string[] {
-  return op.kind === 'align' ? op.ids : [op.id];
+  if (op.kind === 'align') return op.ids;
+  if (op.kind === 'swap') return [op.id, op.otherId];
+  return [op.id];
 }
 
 /** Frame nodes get drawn-shape children; falls back to root-level. */
+// --- Placeholder fill helpers (component inference) ------------------------
+
+function replaceNodes(ir: IR, byId: Map<string, IRNode>): IR {
+  return { ...ir, nodes: ir.nodes.map((n) => byId.get(n.id) ?? n) };
+}
+
+/** The host as drawn, before placeholders resized / restyled it (x/y kept). */
+function restoreHost(host: IRNode, inf: ComponentInference): IRNode {
+  const pre = inf.preFill;
+  if (!pre) return host;
+  return {
+    ...host,
+    layout: { ...host.layout, w: pre.w ?? host.layout?.w, h: pre.h ?? host.layout?.h },
+    style: pre.style ? { ...pre.style } : undefined,
+  };
+}
+
+/**
+ * Room a host may grow into: its parent's explicit box, or the canvas when it
+ * sits on the root frame (or the canvas itself). Unbounded inside flow parents.
+ */
+function hostRoom(ir: IR, host: IRNode): { maxW?: number; maxH?: number } {
+  const x = host.layout?.x ?? 0;
+  const y = host.layout?.y ?? 0;
+  const parent = host.parentId ? ir.nodes.find((n) => n.id === host.parentId) : undefined;
+  if (parent?.layout?.w !== undefined && parent.layout.h !== undefined) {
+    return { maxW: parent.layout.w - x, maxH: parent.layout.h - y };
+  }
+  if (!parent || parent.parentId === null) {
+    return { maxW: ir.canvas.w - x, maxH: ir.canvas.h - y };
+  }
+  return {};
+}
+
+/** Theme + fit a host's wireframe children with the surrounding UI's palette. */
+function fillHost(
+  ir: IR,
+  host: IRNode,
+  children: IRNode[],
+  label: string,
+): { children: IRNode[]; host: IRNode; preFill: NonNullable<ComponentInference['preFill']> } {
+  const backdrop = wireframeBackdrop(ir, host);
+  const exclude = new Set([host.id, ...children.map((c) => c.id)]);
+  const palette = derivePalette(ir, backdrop, exclude);
+  const result = fillComponent(children, label, host, backdrop, { palette, ...hostRoom(ir, host) });
+  return {
+    children: result.children,
+    host: result.host ?? host,
+    preFill: { w: host.layout?.w, h: host.layout?.h, style: host.style ? { ...host.style } : undefined },
+  };
+}
+
 function defaultParentId(ir: IR): string | null {
   const frame = ir.nodes.find((n) => n.role === 'frame' && n.parentId === null);
   return frame?.id ?? null;
@@ -384,6 +672,18 @@ const SHAPE_RADIUS: Record<string, number> = { round: 9999, circular: 9999, roun
 
 /** Write one parameter's value onto a node by its ParamSpan path. Deterministic. */
 function writeParam(ir: IR, node: IRNode, span: ParamSpan, value: string): IR {
+  // Gradient stop: edit only that stop, keep the gradient (never a solid fill).
+  if (span.path.startsWith('gradient:')) {
+    return writeGradientStop(ir, node.id, span.path.slice('gradient:'.length) as GradientStop, value);
+  }
+  // Position: move the subject to that side of its layout container.
+  if (span.kind === 'position' || span.path.startsWith('position')) {
+    return writePosition(ir, node.id, value);
+  }
+  // Icon: the node draws the chosen lucide icon (content = icon name).
+  if (span.kind === 'icon' || span.path === 'icon') {
+    return updateNodeContent(ir, node.id, value);
+  }
   if (span.kind === 'align' || span.path === 'align') {
     const cls = value === 'left' ? 'text-left' : value === 'right' ? 'text-right' : 'text-center';
     return setNodeTailwindOnly(ir, node.id, setAlignment(node.tailwind, cls));
@@ -424,29 +724,6 @@ function nearestShapeWord(borderRadius: number): string {
   return 'square';
 }
 
-/** Map a 6-digit hex color back to the closest named color in the lexer palette. */
-function nearestColorName(hex: string): string {
-  const lc = hex.toLowerCase();
-  // Exact match: avoid a distance search when the picker lands on a palette color.
-  const exact = Object.keys(COLOR_NAMES).find((name) => COLOR_NAMES[name].toLowerCase() === lc);
-  if (exact) return exact;
-  // Nearest by RGB Euclidean distance.
-  if (!/^#[0-9a-f]{6}$/.test(lc)) return hex; // not a 6-char hex — return as-is
-  const r1 = parseInt(lc.slice(1, 3), 16);
-  const g1 = parseInt(lc.slice(3, 5), 16);
-  const b1 = parseInt(lc.slice(5, 7), 16);
-  let best = 'blue';
-  let bestDist = Infinity;
-  for (const [name, namedHex] of Object.entries(COLOR_NAMES)) {
-    const r2 = parseInt(namedHex.slice(1, 3), 16);
-    const g2 = parseInt(namedHex.slice(3, 5), 16);
-    const b2 = parseInt(namedHex.slice(5, 7), 16);
-    const dist = (r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2;
-    if (dist < bestDist) { bestDist = dist; best = name; }
-  }
-  return best;
-}
-
 /** The human-readable prose form of a value (null = leave the clause token unchanged). */
 function humanParamValue(span: ParamSpan, value: string): string | null {
   switch (span.kind) {
@@ -462,9 +739,41 @@ function humanParamValue(span: ParamSpan, value: string): string | null {
     case 'color':
       // Color picker emits hex; keep the prose readable with a named color.
       return value.startsWith('#') ? nearestColorName(value) : value;
+    case 'icon':
+      return iconWord(value); // "Bell" → "notification"
+    case 'position':
+      return value;
     default:
       return value; // font family, weight, align word, enum, free text
   }
+}
+
+/** Binding context for the lexer: whole IR + other clauses' text. */
+function lexContext(ir: IR, prompt: StructuredPrompt): LexContext {
+  const textById = new Map(prompt.clauses.map((c) => [c.id, c.text]));
+  return { nodes: ir.nodes, clauseText: (id) => textById.get(id) };
+}
+
+/** Write a param value onto every node it binds, preserving each node's provenance. */
+function applySpanValue(ir: IR, clauseId: string, span: ParamSpan, value: string): IR {
+  // A size/spacing slider the model left "prose only" (no bound nodes) still
+  // ought to move the UI: fall back to the nodes this clause describes so the
+  // change is visible on the canvas, not just in the sentence.
+  const targetIds =
+    span.nodeIds.length > 0
+      ? span.nodeIds
+      : span.kind === 'length' || span.kind === 'radius'
+        ? ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId).map((n) => n.id)
+        : [];
+  let next = ir;
+  for (const nodeId of targetIds) {
+    const before = next.nodes.find((n) => n.id === nodeId);
+    if (!before) continue;
+    const prov = before.provenance;
+    next = writeParam(next, before, span, value);
+    next = { ...next, nodes: next.nodes.map((n) => (n.id === nodeId ? { ...n, provenance: prov } : n)) };
+  }
+  return next;
 }
 
 export const useAppStore = create<AppState>((set, get) => {
@@ -473,7 +782,7 @@ export const useAppStore = create<AppState>((set, get) => {
     set((s) => ({
       versions: [
         ...s.versions,
-        { id: `ver_${++versionSeq}`, ts: Date.now(), label, ir: s.ir, prompt: s.prompt },
+        { id: `ver_${++versionSeq}`, ts: Date.now(), label, ir: s.ir, prompt: s.prompt, inferences: s.inferences },
       ].slice(-MAX_VERSIONS),
     }));
   }
@@ -493,10 +802,67 @@ export const useAppStore = create<AppState>((set, get) => {
         recentIds: patchedIds(patch),
         generating: false,
       }));
+      // The model sometimes leaves an icon slot empty or emits a word / emoji
+      // that is not the icon the clause names: reconcile deterministically.
+      syncClauseIcons(changedClauseIds);
       recordVersion('Spec edit');
     } catch (err) {
       handleLLMError(set, err, 'generating');
     }
+  }
+
+  /**
+   * A free-text clause edit that only changes parameter tokens ("calendar" →
+   * "notification", "green" → "teal", "left" → "right") is applied straight to
+   * the IR through the known token bindings — no LLM call. Returns false when
+   * the edit is structural (then the caller falls back to Call A).
+   */
+  function applyClauseTextDeterministically(
+    clauseId: string,
+    text: string,
+    extra: Partial<PromptClause> = {},
+  ): boolean {
+    const s = get();
+    const clause = s.prompt.clauses.find((c) => c.id === clauseId);
+    if (!clause || clause.text === text) return false;
+    const ctx = lexContext(s.ir, s.prompt);
+    const owned = s.ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId);
+    const spans = paramsForClause(clause, owned, ctx);
+    const diff = diffParamEdit(clause.text, text, spans);
+    if (!diff || diff.changes.length === 0) return false;
+    let ir = s.ir;
+    for (const ch of diff.changes) {
+      ir = applySpanValue(ir, clauseId, ch.span, ch.value);
+      if (ch.span.kind === 'fontFamily') loadGoogleFont(familyFromStack(ch.value) || ch.value);
+    }
+    // Persisted (model/manual) spans move with the edit; lexed ones re-derive.
+    const params = clause.params
+      ?.filter((p) => !p.id.startsWith('lex_'))
+      .map((p) => {
+        const off = diff.offsets.get(p.id);
+        const ch = diff.changes.find((c) => c.span.id === p.id);
+        return off ? { ...p, start: off[0], end: off[1], ...(ch ? { value: ch.value } : {}) } : p;
+      });
+    let nextClause: PromptClause = { ...clause, ...extra, text, params };
+    if (diff.changes.some((c) => c.span.kind === 'position') && !params?.some((p) => p.kind === 'position')) {
+      nextClause = { ...nextClause, text: reconcilePositionProse(nextClause, ir, lexContext(ir, s.prompt)) };
+    }
+    set((st) => ({
+      history: [...st.history, snapshot(st)].slice(-50),
+      ir,
+      prompt: { clauses: st.prompt.clauses.map((c) => (c.id === clauseId ? nextClause : c)) },
+      recentIds: [clauseId, ...diff.changes.flatMap((c) => c.span.nodeIds)],
+    }));
+    recordVersion('Spec edit');
+    return true;
+  }
+
+  /** Make the given clauses' icon nodes draw the icon their prose names (deterministic). */
+  function syncClauseIcons(clauseIds: string[]): void {
+    const { ir, prompt } = get();
+    const clauses = prompt.clauses.filter((c) => clauseIds.length === 0 || clauseIds.includes(c.id));
+    const next = syncIconsToClauses(ir, clauses, lexContext(ir, prompt));
+    if (next !== ir) set({ ir: next });
   }
 
   function scheduleCallA(changedClauseIds: string[]): void {
@@ -527,6 +893,9 @@ export const useAppStore = create<AppState>((set, get) => {
    * proposal for the user to accept/reject. NEVER auto-applies.
    */
   function propose(op: ManipulationOp, prevIR: IR): void {
+    if (locked()) return;
+    // A new edit replaces a proposal that was never resolved.
+    resolveOpenProposal('superseded');
     const affectedIds = affectedIdsOf(op);
     set({
       pendingProposal: null,
@@ -546,7 +915,18 @@ export const useAppStore = create<AppState>((set, get) => {
           accepted: null,
           confidence: proposal.confidence,
         });
-        useStudyStore.getState().logEvent('backchannel', { kind: op.kind, confidence: proposal.confidence });
+        openProposal = { id: `prop_${++proposalSeq}`, shownAt: Date.now(), opKind: op.kind };
+        track('proposal_shown', {
+          subkind: op.kind,
+          data: {
+            proposalId: openProposal.id,
+            source: 'backchannel',
+            confidence: proposal.confidence,
+            clauses: proposal.updatedClauses.length,
+            removed: proposal.removedClauseIds.length,
+            alternatives: proposal.updatedClauses[0]?.alternatives?.length ?? 0,
+          },
+        });
         set({ pendingProposal: proposal, proposing: false });
       } catch (err) {
         logBackChannel({
@@ -585,6 +965,7 @@ export const useAppStore = create<AppState>((set, get) => {
     // First touch of a burst: remember the world before it and add ONE undo step.
     const beforeIR = get().ir;
     set((s) => ({ history: [...s.history, snapshot(s)].slice(-50) }));
+    track('manipulation', { subkind: 'inspector', category: 'edit', data: { id } });
     pendingEdits.set(id, { beforeIR, timer: setTimeout(() => undefined, 0) });
   }
 
@@ -638,7 +1019,12 @@ export const useAppStore = create<AppState>((set, get) => {
       shortcutsOpen: false,
       unknownShortcutAt: null,
       pendingSync: null,
+      inferences: {},
+      annotations: [],
+      demoPlan: null,
+      demoBusy: false,
       error: null,
+      chatLog: [],
     };
   }
 
@@ -672,6 +1058,12 @@ export const useAppStore = create<AppState>((set, get) => {
     error: null,
     needsConnect: false,
 
+    inferences: {},
+    annotations: [],
+    demoPlan: null,
+    demoBusy: false,
+    chatLog: [],
+
     loadSample: (id) => {
       const sample = SAMPLES.find((s) => s.id === id);
       if (!sample) return;
@@ -682,12 +1074,14 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     },
 
-    newBlank: () =>
+    newBlank: () => {
+      flushOpenProposals('abandoned');
       set({
         ir: emptyIR(),
         prompt: emptyPrompt(),
         ...resetTransients(),
-      }),
+      });
+    },
 
     selectNode: (selectedNodeId) =>
       set({ selectedNodeId, selectedNodeIds: selectedNodeId ? [selectedNodeId] : [] }),
@@ -706,6 +1100,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     promoteToAbsolute: (id, bounds) =>
       set((s) => {
+        if (locked()) return {};
         const node = s.ir.nodes.find((n) => n.id === id);
         const rootId = defaultParentId(s.ir);
         if (!node || id === rootId) return {};
@@ -793,13 +1188,31 @@ export const useAppStore = create<AppState>((set, get) => {
       }),
 
     chooseAlternative: (clauseId, text) => {
+      // A clause that describes a live component inference: picking one of the
+      // other candidates is a deterministic component swap (wireframe rebuild),
+      // not a re-realization through Call A.
+      const s0 = get();
+      const inf = Object.values(s0.inferences).find(
+        (i) => i.clauseId === clauseId && i.status !== 'dismissed' && s0.ir.nodes.some((n) => n.id === i.nodeId),
+      );
+      const cand = inf?.candidates.find((c) => c.label.trim().toLowerCase() === text.trim().toLowerCase());
+      if (inf && cand) {
+        get().chooseComponent(inf.nodeId, cand.label);
+        return;
+      }
+      if (applyClauseTextDeterministically(clauseId, text, { origin: 'explicit' })) {
+        track('spec_edit', { subkind: 'alternative', data: { clauseId, llm: false } });
+        return;
+      }
+      track('spec_edit', { subkind: 'alternative', data: { clauseId, llm: true } });
       set((s) => ({
         prompt: {
           clauses: s.prompt.clauses.map((c) =>
-            c.id === clauseId ? { ...c, text, origin: 'explicit' } : c,
+            c.id === clauseId ? { ...c, text, origin: 'explicit', status: undefined } : c,
           ),
         },
       }));
+      syncClauseIcons([clauseId]);
       scheduleCallA([clauseId]);
     },
 
@@ -809,10 +1222,13 @@ export const useAppStore = create<AppState>((set, get) => {
     restoreVersion: (id) => {
       const v = get().versions.find((entry) => entry.id === id);
       if (!v) return;
+      resolveOpenProposal('undone');
+      track('version_restore', { data: { versionId: id, label: v.label } });
       set((s) => ({
         history: [...s.history, snapshot(s)].slice(-50),
         ir: v.ir,
         prompt: v.prompt,
+        inferences: v.inferences ?? {},
         pendingProposal: null,
         pendingAffectedIds: [],
         pendingSync: null,
@@ -833,6 +1249,18 @@ export const useAppStore = create<AppState>((set, get) => {
       // composed (typed vs. dragged/extracted/scoped/recipe). Logged up front so
       // even an errored send is counted as an attempted gesture.
       const signals = gestureSignals({ scopeNodeIds, refs, viaRecipe: opts.viaRecipe });
+      const source = opts.source ?? (opts.viaRecipe ? 'recipe' : 'composer');
+      track('prompt_submit', {
+        subkind: source,
+        data: {
+          words: wordCount(text),
+          chars: text.length,
+          provenance: primaryProvenance(signals),
+          chips: refs.length,
+          scoped: scopeNodeIds.length > 0,
+        },
+      });
+      set((s) => ({ chatLog: [...s.chatLog, { role: 'user', text, ts: Date.now() }] }));
       logComposeGesture({
         timestamp: Date.now(),
         provenance: primaryProvenance(signals),
@@ -846,7 +1274,24 @@ export const useAppStore = create<AppState>((set, get) => {
       void (async () => {
         try {
           const { ir, prompt } = get();
-          const result = await composeFromInstruction(ir, prompt, text, { scopeNodeIds, refs });
+          const callType = source === 'annotation' ? 'annotation' : source === 'recipe' ? 'recipe' : 'compose';
+          const result = await composeFromInstruction(ir, prompt, text, { scopeNodeIds, refs }, callType);
+          // What a chat tool would answer: the clauses it wrote, as one reply.
+          const reply = result.updatedClauses.length
+            ? `Updated the UI: ${result.updatedClauses.map((c) => c.text).join('; ')}.`
+            : result.removedClauseIds.length
+              ? `Removed ${result.removedClauseIds.length} part${result.removedClauseIds.length > 1 ? 's' : ''} of the UI.`
+              : 'Done.';
+          track('compose_result', {
+            subkind: callType,
+            data: {
+              assistantWords: wordCount(reply),
+              updated: result.updatedClauses.length,
+              removed: result.removedClauseIds.length,
+              ops: result.ops.length,
+              nodesBefore: ir.nodes.length,
+            },
+          });
           set((s) => ({
             history: [...s.history, snapshot(s)].slice(-50),
             prompt: mergeClauses(s.prompt, result.updatedClauses, result.removedClauseIds),
@@ -860,10 +1305,18 @@ export const useAppStore = create<AppState>((set, get) => {
             // expanded recipe text (with {selection} collapsed to literal prose).
             lastSent: opts.viaRecipe ? s.lastSent : text,
             generating: false,
+            chatLog: [...s.chatLog, { role: 'assistant', text: reply, ts: Date.now() }],
           }));
+          syncClauseIcons(result.updatedClauses.map((c) => c.id));
           recordVersion(text.length > 40 ? `${text.slice(0, 40).trim()}…` : text);
+          opts.onSettled?.(true);
         } catch (err) {
+          track('error', { subkind: 'compose', data: { message: err instanceof Error ? err.message.slice(0, 200) : 'error' } });
           handleLLMError(set, err, 'generating');
+          set((s) => ({
+            chatLog: [...s.chatLog, { role: 'assistant', text: 'Something went wrong — try again.', ts: Date.now(), error: true }],
+          }));
+          opts.onSettled?.(false);
         }
       })();
     },
@@ -905,17 +1358,28 @@ export const useAppStore = create<AppState>((set, get) => {
         recipes: s.recipes.map((r) => (r.id === recipeId ? { ...r, uses: r.uses + 1 } : r)),
       }));
       const text = recipe.instruction.replace(/\{selection\}/g, 'the selection');
-      get().instruct(text, { scopeNodeIds: selectedNodeIds, viaRecipe: true });
+      get().instruct(text, { scopeNodeIds: selectedNodeIds, viaRecipe: true, source: 'recipe' });
     },
 
     editClause: (id, text) => {
+      if (get().prompt.clauses.find((c) => c.id === id)?.status === 'pending') resolveInference(id, 'rephrased');
+      if (applyClauseTextDeterministically(id, text)) {
+        track('spec_edit', { subkind: 'edit', data: { clauseId: id, llm: false, words: wordCount(text) } });
+        return;
+      }
+      // A typed clause edit the model must realise is a language instruction.
+      track('spec_edit', { subkind: 'edit', data: { clauseId: id, llm: true, words: wordCount(text) } });
+      track('prompt_submit', { subkind: 'spec_edit', data: { words: wordCount(text), chars: text.length, provenance: 'typed', chips: 0, scoped: false } });
       set((s) => ({
-        prompt: { clauses: s.prompt.clauses.map((c) => (c.id === id ? { ...c, text } : c)) },
+        // Editing a pending clause's wording also confirms it.
+        prompt: { clauses: s.prompt.clauses.map((c) => (c.id === id ? { ...c, text, status: undefined } : c)) },
       }));
+      syncClauseIcons([id]);
       scheduleCallA([id]);
     },
 
     removeClause: (id) => {
+      track('spec_edit', { subkind: 'remove', data: { clauseId: id, llm: true } });
       set((s) => ({ prompt: { clauses: s.prompt.clauses.filter((c) => c.id !== id) } }));
       scheduleCallA([id]);
     },
@@ -923,27 +1387,67 @@ export const useAppStore = create<AppState>((set, get) => {
     regenerate: () => void runCallA([]),
 
     manipulate: (op) => {
+      if (locked()) return;
       const prevIR = get().ir;
       const { ir: nextIR, affectedIds } = applyManipulation(prevIR, op);
-      set((s) => ({
-        history: [...s.history, snapshot(s)].slice(-50),
-        ir: nextIR,
-        recentIds: affectedIds,
-        selectedNodeId: op.kind === 'delete' ? null : s.selectedNodeId,
-        selectedNodeIds:
-          op.kind === 'delete'
-            ? s.selectedNodeIds.filter((id) => !affectedIds.includes(id))
-            : s.selectedNodeIds,
-      }));
-      useStudyStore.getState().logEvent('manipulation', { kind: op.kind });
+      set((s) => {
+        // Drop inferences whose host node was deleted (keep the map bounded).
+        let inferences = s.inferences;
+        if (op.kind === 'delete') {
+          const live = new Set(nextIR.nodes.map((n) => n.id));
+          const pruned = Object.fromEntries(
+            Object.entries(s.inferences).filter(([nodeId]) => live.has(nodeId)),
+          );
+          if (Object.keys(pruned).length !== Object.keys(s.inferences).length) inferences = pruned;
+        }
+        return {
+          history: [...s.history, snapshot(s)].slice(-50),
+          ir: nextIR,
+          inferences,
+          recentIds: affectedIds,
+          selectedNodeId: op.kind === 'delete' ? null : s.selectedNodeId,
+          selectedNodeIds:
+            op.kind === 'delete'
+              ? s.selectedNodeIds.filter((id) => !affectedIds.includes(id))
+              : s.selectedNodeIds,
+        };
+      });
+      trackManipulation(op);
       maybePropose(op, prevIR);
     },
 
-    proposeManipulation: (op, prevIR) => maybePropose(op, prevIR),
+    proposeManipulation: (op, prevIR) => {
+      if (locked()) return;
+      trackManipulation(op);
+      maybePropose(op, prevIR);
+    },
 
-    acceptProposal: (overrideText) => {
+    settleDragMove: (op, prevIR) => {
+      const s = get();
+      // The drag preview (promoteToAbsolute) already pushed the pre-drag snapshot.
+      const top = s.history[s.history.length - 1];
+      const stepped = top?.ir === prevIR;
+      if (!op) {
+        set({ ir: prevIR, history: stepped ? s.history.slice(0, -1) : s.history });
+        return;
+      }
+      const { ir, affectedIds } = applyManipulation(prevIR, op);
+      set({
+        ir,
+        recentIds: affectedIds,
+        history: stepped
+          ? s.history
+          : [...s.history, { ir: prevIR, prompt: s.prompt, inferences: s.inferences }].slice(-50),
+      });
+      trackManipulation(op);
+      maybePropose(op, prevIR);
+    },
+
+    acceptProposal: (overrideText, via) => {
       const { pendingProposal } = get();
       if (!pendingProposal) return;
+      const override = !!(overrideText && overrideText.trim());
+      resolveOpenProposal(!override ? 'accepted' : via === 'alternative' ? 'alternative' : 'rephrased');
       // When the user rephrases or picks an alternative, the new wording lands on
       // the FIRST updated clause (the one the manipulation primarily changed).
       let clauses = pendingProposal.updatedClauses;
@@ -964,6 +1468,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!get().pendingProposal) return;
       // Drop the proposed spec wording without folding it in. The IR edit it
       // describes is already applied; the user chose not to record it now.
+      resolveOpenProposal('dismissed');
       set({ pendingProposal: null, pendingAffectedIds: [] });
       setLastDecision(true);
     },
@@ -987,7 +1492,8 @@ export const useAppStore = create<AppState>((set, get) => {
 
     pasteClipboard: () => {
       const { clipboard } = get();
-      if (!clipboard || clipboard.length === 0) return;
+      if (!clipboard || clipboard.length === 0 || locked()) return;
+      track('manipulation', { subkind: 'paste', category: 'structure' });
       set((s) => {
         const present = new Set(s.ir.nodes.map((n) => n.id));
         // Re-parent roots to their original parent if it still exists, else the
@@ -1006,8 +1512,10 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     duplicateNode: (id) => {
+      if (locked()) return null;
       const subtree = collectSubtrees(get().ir, [id]);
       if (subtree.length === 0) return null;
+      track('manipulation', { subkind: 'duplicate', category: 'structure' });
       let newId: string | null = null;
       set((s) => {
         const node = s.ir.nodes.find((n) => n.id === id);
@@ -1047,37 +1555,28 @@ export const useAppStore = create<AppState>((set, get) => {
     setComputedStyle: (style) => set({ computedStyle: style }),
 
     setClauseParam: (clauseId, span, value, original) => {
+      if (locked()) return;
       const state = get();
       const clause = state.prompt.clauses.find((c) => c.id === clauseId);
       if (!clause) return;
+      // One widget edit per burst (a slider drag counts once); zero LLM calls.
+      if (paramBurstKey !== `${clauseId}:${span.id}`) {
+        track('manipulation', { subkind: span.kind, category: 'widget', data: { clauseId } });
+      }
 
       // 1. Deterministic IR write, preserving provenance (NOT diverged: a forward
       //    param edit keeps the node described by — linked to — its clause).
-      let ir = state.ir;
-      // A size/spacing slider the model left "prose only" (no bound nodes) still
-      // ought to move the UI: fall back to the nodes this clause describes so the
-      // change is visible on the canvas, not just in the sentence.
-      const targetIds =
-        span.nodeIds.length > 0
-          ? span.nodeIds
-          : span.kind === 'length' || span.kind === 'radius'
-            ? ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId).map((n) => n.id)
-            : [];
-      for (const nodeId of targetIds) {
-        const before = ir.nodes.find((n) => n.id === nodeId);
-        if (!before) continue;
-        const prov = before.provenance;
-        ir = writeParam(ir, before, span, value);
-        ir = { ...ir, nodes: ir.nodes.map((n) => (n.id === nodeId ? { ...n, provenance: prov } : n)) };
-      }
+      const ir = applySpanValue(state.ir, clauseId, span, value);
       if (span.kind === 'fontFamily') loadGoogleFont(familyFromStack(value) || value);
 
       // 2. Rewrite the parameter token in the clause prose; shift later spans.
       const baseText = original?.text ?? clause.text;
-      const baseParams = original?.params ?? clause.params;
+      // Lexer-derived spans are re-derived from text + IR on read; only
+      // model-emitted / manually bound spans are persisted on the clause.
+      const baseParams = (original?.params ?? clause.params)?.filter((p) => !p.id.startsWith('lex_'));
       const human = humanParamValue(span, value);
       let newText = clause.text;
-      let newParams = clause.params;
+      let newParams = clause.params?.filter((p) => !p.id.startsWith('lex_'));
       if (human !== null) {
         newText = baseText.slice(0, span.start) + human + baseText.slice(span.end);
         const delta = human.length - (span.end - span.start);
@@ -1090,6 +1589,10 @@ export const useAppStore = create<AppState>((set, get) => {
         }
       } else if (baseParams) {
         newParams = baseParams.map((p) => (p.id === span.id ? { ...p, value } : p));
+      }
+      // A move changes the sides of the other subjects in the same clause too.
+      if (span.kind === 'position' && !newParams?.some((p) => p.kind === 'position')) {
+        newText = reconcilePositionProse({ ...clause, text: newText, params: newParams }, ir, lexContext(ir, state.prompt));
       }
 
       // 3. One undo step per burst; flash; NO scheduleCallA, NO propose.
@@ -1116,11 +1619,13 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     bindClauseParam: (clauseId, start, end, kind) => {
+      if (locked()) return;
+      track('manipulation', { subkind: `bind:${kind}`, category: 'widget', data: { clauseId } });
       set((s) => {
         const clause = s.prompt.clauses.find((c) => c.id === clauseId);
         if (!clause || start >= end || end > clause.text.length) return {};
         const owned = s.ir.nodes.filter((n) => n.provenance.promptClauseId === clauseId);
-        const span = createManualSpan(clause, owned, start, end, kind);
+        const span = createManualSpan(clause, owned, start, end, kind, lexContext(s.ir, s.prompt));
         // Replace any model-emitted spans the new range overlaps — rebinding a
         // token to a different widget type is an explicit user gesture.
         const kept = (clause.params ?? []).filter((p) => p.end <= start || p.start >= end);
@@ -1137,6 +1642,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     createShape: ({ role, x, y, w, h, parentId, points }) => {
+      if (locked()) return '';
       const parent = parentId !== undefined ? parentId : defaultParentId(get().ir);
       let newId = '';
       set((s) => {
@@ -1162,35 +1668,376 @@ export const useAppStore = create<AppState>((set, get) => {
       set((s) => ({ ir: updateNodeLayout(s.ir, id, patch), recentIds: [id] })),
 
     editStyle: (id, patch) => {
+      if (locked()) return;
       beginEdit(id);
       set((s) => ({ ir: updateNodeStyle(s.ir, id, patch), recentIds: [id] }));
       settleEdit(id);
     },
 
     editLayout: (id, patch) => {
+      if (locked()) return;
       beginEdit(id);
       set((s) => ({ ir: updateNodeLayout(s.ir, id, patch), recentIds: [id] }));
       settleEdit(id);
     },
 
     editContent: (id, content) => {
+      if (locked()) return;
       beginEdit(id);
       set((s) => ({ ir: updateNodeContent(s.ir, id, content), recentIds: [id] }));
       settleEdit(id);
     },
 
-    toggleHidden: (id) =>
-      set((s) => ({ ir: toggleHidden(s.ir, id), recentIds: [id] })),
+    toggleHidden: (id) => {
+      if (locked()) return;
+      track('manipulation', { subkind: 'toggleHidden', category: 'structure' });
+      set((s) => ({ ir: toggleHidden(s.ir, id), recentIds: [id] }));
+    },
+
+    // --- Component inference (draw a shape → semantic component + wireframe) ---
+
+    inferDrawnShape: (nodeId, _prevIR) => {
+      const s = get();
+      const node = s.ir.nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const candidates = inferComponentCandidates(node, s.ir);
+      if (candidates.length === 0) return;
+      const clauseId = nextClauseId(s.prompt.clauses.map((c) => c.id));
+      const top = candidates[0];
+      track('manipulation', { subkind: 'draw', category: 'draw', data: { role: node.role } });
+      const pid = `inf_${++proposalSeq}`;
+      openInferences.set(clauseId, { id: pid, shownAt: Date.now() });
+      track('proposal_shown', {
+        subkind: 'draw',
+        data: { proposalId: pid, source: 'inference', clauseId, alternatives: candidates.length - 1 },
+      });
+      const clause: PromptClause = {
+        id: clauseId,
+        text: top.label,
+        category: 'component',
+        origin: 'inferred',
+        alternatives: candidates.slice(1).map((c) => c.label),
+        // Shown as a suggestion until the user accepts it (or picks a component).
+        status: 'pending',
+      };
+      set((st) => ({
+        // No history push here: createShape already snapshotted the pre-draw
+        // state on mousedown, so the shape + its inferred clause undo as one step.
+        prompt: { clauses: [...st.prompt.clauses, clause] },
+        ir: {
+          ...st.ir,
+          nodes: st.ir.nodes.map((n) =>
+            n.id === nodeId
+              ? { ...n, provenance: { ...n.provenance, promptClauseId: clauseId } }
+              : n,
+          ),
+        },
+        inferences: {
+          ...st.inferences,
+          [nodeId]: { nodeId, clauseId, candidates, status: 'suggested', fill: 'empty' },
+        },
+        selectedNodeId: nodeId,
+        selectedNodeIds: [nodeId],
+        recentIds: [nodeId],
+      }));
+    },
+
+    chooseComponent: (nodeId, label, fillArg) => {
+      const inf0 = get().inferences[nodeId];
+      if (inf0) {
+        track('manipulation', { subkind: fillArg ? `fill:${fillArg}` : 'component', category: 'component', data: { label } });
+        resolveInference(inf0.clauseId, inf0.candidates[0]?.label === label ? 'accepted' : 'alternative');
+      }
+      set((st) => {
+        const inf = st.inferences[nodeId];
+        const found = st.ir.nodes.find((n) => n.id === nodeId);
+        if (!inf || !found) return {};
+        // Placeholders may have resized/restyled the host: rebuild from the drawn shape.
+        const host = restoreHost(found, inf);
+        const baseIR: IR = host === found ? st.ir : replaceNodes(st.ir, new Map([[host.id, host]]));
+        // First pick → grey wireframe; switching variation → keep the user's fill
+        // mode. An atomic component (no inner parts) reads as 'empty' without the
+        // user asking for it, so that doesn't carry over to the next variation.
+        const ids = baseIR.nodes.map((n) => n.id);
+        const forcedEmpty =
+          inf.fill === 'empty' && !!inf.chosen && wireframeChildren(host, inf.chosen, ids).length === 0;
+        const want: WireframeFill =
+          fillArg ?? (inf.status === 'chosen' && !forcedEmpty ? inf.fill : 'wireframe');
+        const backdrop = wireframeBackdrop(baseIR, host);
+        let children = want === 'empty' ? [] : wireframeChildren(host, label, ids, backdrop);
+        let nextHost = host;
+        let preFill: ComponentInference['preFill'];
+        if (want === 'placeholder' && children.length) {
+          const filled = fillHost(baseIR, host, children, label);
+          children = filled.children;
+          nextHost = filled.host;
+          preFill = filled.preFill;
+        }
+        // Replace any previously-generated children of the host with the new ones.
+        const removed = new Set(baseIR.nodes.filter((n) => n.parentId === nodeId).map((n) => n.id));
+        const others = baseIR.nodes
+          .filter((n) => !removed.has(n.id))
+          .map((n) => (n.id === nodeId ? nextHost : n));
+        // Keep the AlternativesMenu offering the other variations.
+        const alternatives = inf.candidates.map((c) => c.label).filter((l) => l !== label);
+        const selectionGone =
+          st.selectedNodeIds.some((id) => removed.has(id)) ||
+          (st.selectedNodeId != null && removed.has(st.selectedNodeId));
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          ir: { ...baseIR, nodes: [...others, ...children] },
+          prompt: {
+            clauses: st.prompt.clauses.map((c) =>
+              // Picking a component is an explicit confirmation of its clause.
+              c.id === inf.clauseId
+                ? { ...c, text: label, origin: 'inferred' as const, alternatives, status: undefined }
+                : c,
+            ),
+          },
+          inferences: {
+            ...st.inferences,
+            [nodeId]: { ...inf, chosen: label, status: 'chosen', fill: children.length ? want : 'empty', preFill },
+          },
+          ...(selectionGone ? { selectedNodeId: nodeId, selectedNodeIds: [nodeId] } : {}),
+          recentIds: children.length ? children.map((c) => c.id) : [nodeId],
+        };
+      });
+    },
+
+    revertWireframe: (nodeId) => {
+      track('manipulation', { subkind: 'fill:empty', category: 'component' });
+      set((st) => {
+        const inf = st.inferences[nodeId];
+        if (!inf) return {};
+        const found = st.ir.nodes.find((n) => n.id === nodeId);
+        const host = found ? restoreHost(found, inf) : undefined;
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          ir: {
+            ...st.ir,
+            nodes: st.ir.nodes
+              .filter((n) => n.parentId !== nodeId)
+              .map((n) => (host && n.id === nodeId ? host : n)),
+          },
+          inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'empty', preFill: undefined } },
+        };
+      });
+    },
+
+    fillWireframePlaceholders: (nodeId) => {
+      track('manipulation', { subkind: 'fill:placeholder', category: 'component' });
+      set((st) => {
+        const inf = st.inferences[nodeId];
+        if (!inf || !inf.chosen) return {};
+        const children = st.ir.nodes.filter((n) => n.parentId === nodeId);
+        const host = st.ir.nodes.find((n) => n.id === nodeId);
+        if (children.length === 0 || !host) return {};
+        const filled = fillHost(st.ir, host, children, inf.chosen);
+        const byId = new Map(filled.children.map((n) => [n.id, n]));
+        byId.set(host.id, filled.host);
+        const dropped = new Set(children.filter((c) => !byId.has(c.id)).map((c) => c.id));
+        return {
+          // One history step: host resize/restyle + every child's content and box.
+          history: [...st.history, snapshot(st)].slice(-50),
+          ir: {
+            ...st.ir,
+            nodes: st.ir.nodes.filter((n) => !dropped.has(n.id)).map((n) => byId.get(n.id) ?? n),
+          },
+          inferences: {
+            ...st.inferences,
+            [nodeId]: { ...inf, fill: 'placeholder', preFill: inf.preFill ?? filled.preFill },
+          },
+          recentIds: filled.children.map((n) => n.id),
+        };
+      });
+    },
+
+    dismissInference: (nodeId) =>
+      set((st) => {
+        const inf = st.inferences[nodeId];
+        if (!inf) return {};
+        return { inferences: { ...st.inferences, [nodeId]: { ...inf, status: 'dismissed' } } };
+      }),
+
+    acceptClauses: (ids) =>
+      set((st) => {
+        ids.forEach((id) => resolveInference(id, 'accepted'));
+        const want = new Set(ids);
+        if (!st.prompt.clauses.some((c) => want.has(c.id) && c.status === 'pending')) return {};
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          prompt: {
+            clauses: st.prompt.clauses.map((c) =>
+              want.has(c.id) && c.status === 'pending' ? { ...c, status: undefined } : c,
+            ),
+          },
+          recentIds: ids,
+        };
+      }),
+
+    dismissClauses: (ids) =>
+      set((st) => {
+        ids.forEach((id) => resolveInference(id, 'dismissed'));
+        const gone = new Set(
+          st.prompt.clauses.filter((c) => ids.includes(c.id) && c.status === 'pending').map((c) => c.id),
+        );
+        if (gone.size === 0) return {};
+        const inferences = { ...st.inferences };
+        for (const inf of Object.values(st.inferences))
+          if (gone.has(inf.clauseId)) inferences[inf.nodeId] = { ...inf, status: 'dismissed' };
+        return {
+          history: [...st.history, snapshot(st)].slice(-50),
+          prompt: { clauses: st.prompt.clauses.filter((c) => !gone.has(c.id)) },
+          ir: {
+            ...st.ir,
+            nodes: st.ir.nodes.map((n) =>
+              n.provenance.promptClauseId && gone.has(n.provenance.promptClauseId)
+                ? { ...n, provenance: { ...n.provenance, promptClauseId: null } }
+                : n,
+            ),
+          },
+          inferences,
+          hoveredClauseId: st.hoveredClauseId && gone.has(st.hoveredClauseId) ? null : st.hoveredClauseId,
+        };
+      }),
+
+    // --- Annotations / prompt-by-demonstration ---
+
+    addAnnotation: (a) => {
+      if (locked()) return;
+      track('manipulation', { subkind: a.kind, category: 'annotation' });
+      set((st) => ({ annotations: [...st.annotations, a] }));
+    },
+    updateAnnotation: (id, patch) =>
+      set((st) => ({ annotations: st.annotations.map((a) => (a.id === id ? { ...a, ...patch } : a)) })),
+    removeAnnotation: (id) =>
+      set((st) => ({ annotations: st.annotations.filter((a) => a.id !== id) })),
+    clearAnnotations: () => set({ annotations: [], demoPlan: null }),
+
+    buildDemoPlan: (boxes) => {
+      const s = get();
+      const labelOf = (id: string) => nodeLabel(id, s.ir.nodes);
+      let seq = 0;
+      const plan = buildDemoPlanPure(s.annotations, boxes, labelOf, () => `plan_${++seq}`, s.ir.nodes);
+      set({ demoPlan: plan });
+    },
+
+    updateDemoPlanItem: (id, patch) =>
+      set((st) => ({
+        demoPlan: st.demoPlan
+          ? st.demoPlan.map((p) => (p.id === id ? withEditedIntent(p, patch) : p))
+          : st.demoPlan,
+      })),
+    removeDemoPlanItem: (id) =>
+      set((st) => ({ demoPlan: st.demoPlan ? st.demoPlan.filter((p) => p.id !== id) : st.demoPlan })),
+    cancelDemoPlan: () => set({ demoPlan: null }),
+
+    confirmDemoPlan: () => {
+      const s = get();
+      const plan = s.demoPlan;
+      if (!plan || plan.length === 0) {
+        set({ demoPlan: null });
+        return;
+      }
+      // Recognised gestures (cross-out, arrow moves, swap) are applied right
+      // here on the IR, one undoable manipulation each, and their markup is
+      // cleared so a later retry of the model part can never re-apply them.
+      // A step that cannot be applied (error) is skipped and its markup kept.
+      const blocked = plan.filter((p) => p.error);
+      const local = plan.filter((p) => !p.error && p.intent && p.intent.kind !== 'fill');
+      track('annotation_apply', {
+        data: { steps: plan.length, local: local.length, remote: plan.length - local.length - blocked.length },
+      });
+      // Recognised marks (cross-out, arrow move, swap) are applied without the model.
+      manipSource = 'gesture';
+      try {
+        for (const item of local) {
+          for (const op of intentOps(item.intent!, get().ir)) get().manipulate(op);
+        }
+      } finally {
+        manipSource = null;
+      }
+      const notes = attachedNotes(s.annotations);
+      const keep = new Set(blocked.flatMap((p) => [p.annotationId, ...(notes.get(p.annotationId) ?? []).map((c) => c.id)]));
+      // Notes attached to an applied arrow were folded into its step.
+      const applied = new Set(local.flatMap((p) => [p.annotationId, ...(notes.get(p.annotationId) ?? []).map((c) => c.id)]));
+      const followUps = local.filter((p) => p.followUp?.trim());
+      const remote = plan.filter((p) => !p.error && !local.includes(p));
+      if (remote.length === 0 && followUps.length === 0) {
+        set((st) => ({ demoPlan: null, annotations: st.annotations.filter((a) => keep.has(a.id)) }));
+        return;
+      }
+      if (applied.size > 0) {
+        set((st) => ({ annotations: st.annotations.filter((a) => !applied.has(a.id)) }));
+      }
+
+      const labelOf = (id: string) => {
+        const n = s.ir.nodes.find((x) => x.id === id);
+        if (!n) return id;
+        return `the ${nodeLabel(id, s.ir.nodes)}`;
+      };
+      let refSeq = 0;
+      const refs: PromptRef[] = [];
+      // Extra instructions on an applied arrow move: say what was done so the
+      // model builds on it instead of moving the element again.
+      const followLines = followUps.map((p) => {
+        const mv = p.intent as Extract<DemoIntent, { kind: 'move' }>;
+        return `- ${p.followUp!.trim()} (${labelOf(mv.id)} has ALREADY been moved into ${labelOf(mv.toParentId)} at position ${mv.toIndex + 1}; keep it there, do not move it again)`;
+      });
+      const lines = remote.map((p) => {
+        const tgt = p.targetNodeIds.length
+          ? ` (${p.targetNodeIds.map(labelOf).join(', ')})`
+          : '';
+        // An arrow's head is a concrete destination: hand it over as a location
+        // reference instead of leaving the model to guess "where it points".
+        const a = s.annotations.find((x) => x.id === p.annotationId);
+        const head = a?.kind === 'arrow' && a.points && a.points.length > 1 ? a.points[a.points.length - 1] : null;
+        let where = '';
+        if (head) {
+          const refId = `ref_${++refSeq}`;
+          refs.push({
+            kind: 'location', refId, x: head.x, y: head.y, label: 'arrow head',
+            nearNodeId: p.targetNodeIds[0],
+          });
+          where = ` [arrow points at «${refId}»]`;
+        }
+        return `- ${p.instruction}${tgt}${where}`;
+      });
+      const message = `Apply these changes I marked up on the canvas:\n${[...followLines, ...lines].join('\n')}`;
+      const scopeNodeIds = Array.from(new Set([
+        ...followUps.map((p) => (p.intent as Extract<DemoIntent, { kind: 'move' }>).id),
+        ...remote.flatMap((p) => p.targetNodeIds),
+      ]));
+      for (const p of [...followUps, ...remote]) {
+        for (const dataUrl of p.images ?? []) {
+          refs.push({ kind: 'image', refId: `ref_${++refSeq}`, label: 'comment image', dataUrl });
+        }
+      }
+      // Close the plan and mark busy, but KEEP the annotations until the compose
+      // actually succeeds, so markup (and dropped images) isn't lost if the call
+      // fails (not connected, rate-limited, network). demoBusy hides the re-send
+      // button so the same annotations can't be dispatched twice concurrently.
+      set({ demoPlan: null, demoBusy: true });
+      get().instruct(message, {
+        source: 'annotation',
+        scopeNodeIds: scopeNodeIds.length ? scopeNodeIds : undefined,
+        refs: refs.length ? refs : undefined,
+        onSettled: (ok) => set(ok ? { annotations: [], demoBusy: false } : { demoBusy: false }),
+      });
+    },
 
     undo: () =>
       set((s) => {
         const prev = s.history[s.history.length - 1];
         if (!prev) return s;
+        resolveOpenProposal('undone');
+        track('undo', { data: { depth: s.history.length } });
         pendingEdits.forEach((p) => clearTimeout(p.timer));
         pendingEdits.clear();
         return {
           ir: prev.ir,
           prompt: prev.prompt,
+          inferences: prev.inferences,
           history: s.history.slice(0, -1),
           pendingProposal: null,
           pendingAffectedIds: [],

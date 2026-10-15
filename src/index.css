@@ -76,3 +76,34 @@ body {
 .wysiwyc-flash {
   animation: wysiwyc-flash 0.9s ease-out;
 }
+
+/*
+ * AI accent halo: "the model is working". A soft glow plus a ring that pulses
+ * outward, shared by the canvas Composing… pill and the prompt send button
+ * while a call is in flight. The ring is a box-shadow spread, not a scale, so
+ * it looks the same on a wide pill and a small round button. The colour is the
+ * amber AI accent (see src/ui/tokens.ts).
+ */
+:root {
+  --ai-accent: 245 158 11; /* amber-500 */
+}
+@keyframes wysiwyc-ai-halo {
+  0% {
+    box-shadow: 0 0 0 0 rgb(var(--ai-accent) / 0.55), 0 4px 12px rgb(var(--ai-accent) / 0.35);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 9px rgb(var(--ai-accent) / 0), 0 4px 12px rgb(var(--ai-accent) / 0.35);
+  }
+}
+.wysiwyc-ai-halo {
+  background-color: #fbbf24; /* amber-400 */
+  color: #451a03; /* amber-950 */
+  animation: wysiwyc-ai-halo 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wysiwyc-ai-halo {
+    animation: none;
+    box-shadow: 0 0 0 3px rgb(var(--ai-accent) / 0.25), 0 4px 12px rgb(var(--ai-accent) / 0.35);
+  }
+}

@@ -1,6 +1,7 @@
 import { createElement, type CSSProperties, type ReactNode } from 'react';
 import type { IR, IRNode, NodeStyle } from '@/ir/types';
 import { buildTree, type IRTreeNode } from '@/ir/tree';
+import { renderNamedIcon } from './icons';
 
 export interface RendererProps {
   ir: IR;
@@ -170,7 +171,7 @@ function renderNode(tree: IRTreeNode, props: RendererProps): ReactNode {
 
   const children: ReactNode = tree.children.length
     ? tree.children.map((c) => renderNode(c, props))
-    : node.content ?? null;
+    : (node.role === 'icon' ? renderNamedIcon(node.content) : null) ?? node.content ?? null;
 
   const className = [
     node.tailwind,

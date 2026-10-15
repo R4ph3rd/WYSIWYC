@@ -100,6 +100,8 @@ export interface CallJSONResult {
   outputTokens: number;
   /** Portion of `inputTokens` served cheaply from a prompt cache (0 if none). */
   cachedInputTokens: number;
+  /** Portion of `inputTokens` written to a prompt cache (Anthropic only; 0 otherwise). */
+  cacheWriteTokens: number;
 }
 
 /** Split a `data:<mime>;base64,<data>` URL into its parts (for Anthropic blocks). */
@@ -171,16 +173,11 @@ function logApiResponse(provider: ProviderId, text: string | undefined, raw: any
 }
 
 /**
- * Extract the first balanced JSON object/array from a string, ignoring any prose
- * or extra objects the model may emit around it. Brace-matches while respecting
- * string literals, so a `{ ... }` containing braces or a trailing second object
- * (the "unexpected non-whitespace character after JSON data" case) parses cleanly.
+ * The balanced `{ ... }` starting at `start` (which must be a `{`), brace-matched
+ * while respecting string literals. `complete` is false when the text ends
+ * before the object closes (a truncated response).
  */
-function extractJSON(s: string): string {
-  const start = s.search(/[{[]/);
-  if (start < 0) return s;
-  const open = s[start];
-  const close = open === '{' ? '}' : ']';
+function balancedObject(s: string, start: number): { text: string; complete: boolean } {
   let depth = 0;
   let inStr = false;
   let esc = false;
@@ -192,38 +189,109 @@ function extractJSON(s: string): string {
       else if (c === '"') inStr = false;
     } else if (c === '"') {
       inStr = true;
-    } else if (c === open) {
+    } else if (c === '{') {
       depth++;
-    } else if (c === close) {
+    } else if (c === '}') {
       depth--;
-      if (depth === 0) return s.slice(start, i + 1);
+      if (depth === 0) return { text: s.slice(start, i + 1), complete: true };
     }
   }
-  return s.slice(start);
+  return { text: s.slice(start), complete: false };
 }
 
-function parseJSON(text: string): unknown {
-  // Strip fenced ```json blocks if a model added them despite instructions, then
-  // isolate the first JSON value so leading/trailing prose or a stray second
-  // object doesn't break the parse.
-  const stripped = extractJSON(
-    text
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/i, '')
-      .trim(),
-  );
-  try {
-    return stripNulls(JSON.parse(stripped));
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('[LLM] failed to parse model output as JSON:', err, '\nraw output:\n', text);
-    // A truncated response (max_tokens hit) is the common cause here — surface it.
-    const looksTruncated = /unterminated|Unexpected end|end of (the )?JSON/i.test((err as Error).message);
-    const hint = looksTruncated
-      ? ' The response looks truncated (the model likely hit the output token limit). Try a shorter instruction or a smaller UI.'
-      : '';
-    throw new LLMError(`Model returned invalid JSON: ${(err as Error).message}.${hint}`);
+/** Drop commas directly before a closing `}` / `]` (outside strings) — a common, unambiguous slip. */
+function stripTrailingCommas(s: string): string {
+  let out = '';
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') {
+      inStr = true;
+    } else if (c === ',' && /^\s*[}\]]/.test(s.slice(i + 1, i + 64))) {
+      continue;
+    }
+    out += c;
   }
+  return out;
+}
+
+/** Max `{` positions tried before giving up (keeps a pathological reply cheap). */
+const MAX_JSON_CANDIDATES = 40;
+
+/**
+ * Candidate JSON texts in a model reply, most likely first: the contents of
+ * any ```json fenced blocks, then every top-level balanced `{ ... }` in reading
+ * order. A balanced candidate that fails to parse is skipped as a whole (its
+ * inner objects are never offered), so a broken payload can't be "rescued" as
+ * one of its own fragments; only after an UNbalanced `{` (a stray brace in
+ * prose, or a truncated payload) does the scan resume at the next character.
+ */
+function jsonCandidates(text: string): Array<{ text: string; complete: boolean }> {
+  const out: Array<{ text: string; complete: boolean }> = [];
+  for (const m of text.matchAll(/```[a-zA-Z]*[ \t]*\n?([\s\S]*?)```/g)) {
+    const body = m[1].trim();
+    if (body.startsWith('{')) out.push(balancedObject(body, 0));
+  }
+  let i = text.indexOf('{');
+  while (i >= 0 && out.length < MAX_JSON_CANDIDATES) {
+    const c = balancedObject(text, i);
+    out.push(c);
+    i = text.indexOf('{', c.complete ? i + c.text.length : i + 1);
+  }
+  return out;
+}
+
+/**
+ * Parse a model reply as the JSON object a schema describes, tolerating what
+ * models wrap around it: markdown fences, prose before/after (including prose
+ * that itself contains braces, e.g. "move it to {x: 320, y: 180}"), a second
+ * object, and trailing commas. A candidate is only accepted when it is an
+ * object carrying at least one of the schema's top-level keys, so a stray
+ * fragment never passes for the payload. When nothing qualifies, the error of
+ * the most plausible candidate (the first fenced block, else the largest) is
+ * reported verbatim, with a truncation hint when the payload never closed.
+ */
+export function parseJSON(text: string, schema?: unknown): unknown {
+  const props = (schema as { properties?: Record<string, unknown> } | undefined)?.properties;
+  const keys = props ? Object.keys(props) : [];
+  const fits = (v: unknown): boolean =>
+    v !== null && typeof v === 'object' && !Array.isArray(v) &&
+    (keys.length === 0 || keys.some((k) => k in (v as Record<string, unknown>)));
+
+  const candidates = jsonCandidates(text);
+  let blame: { text: string; complete: boolean; error: Error } | null = null;
+  for (const c of candidates) {
+    for (const attempt of c.complete ? [c.text, stripTrailingCommas(c.text)] : [c.text]) {
+      try {
+        const value = JSON.parse(attempt);
+        if (fits(value)) return stripNulls(value);
+        break; // valid JSON, wrong shape: not the payload
+      } catch (err) {
+        if (!blame || (!blame.complete && c.complete) || (c.complete === blame.complete && c.text.length > blame.text.length)) {
+          blame = { ...c, error: err as Error };
+        }
+      }
+    }
+  }
+
+  const reason = blame
+    ? blame.error.message
+    : candidates.length > 0
+      ? 'the JSON object does not match the expected shape'
+      : 'no JSON object found in the response';
+  // eslint-disable-next-line no-console
+  console.error('[LLM] failed to parse model output as JSON:', reason, '\nraw output:\n', text);
+  // A truncated response (max_tokens hit) is the common cause here — surface it.
+  const looksTruncated = (blame && !blame.complete) || /unterminated|Unexpected end|end of (the )?JSON/i.test(reason);
+  const hint = looksTruncated
+    ? ' The response looks truncated (the model likely hit the output token limit). Try a shorter instruction or a smaller UI.'
+    : '';
+  throw new LLMError(`Model returned invalid JSON: ${reason}.${hint}`);
 }
 
 async function fetchJSON(url: string, init: RequestInit): Promise<unknown> {
@@ -295,12 +363,13 @@ async function callAnthropic(opts: CallJSONOptions): Promise<CallJSONResult> {
   const cacheRead = u.cache_read_input_tokens ?? 0;
   const cacheCreate = u.cache_creation_input_tokens ?? 0;
   return {
-    data: parseJSON(text),
+    data: parseJSON(text, opts.schema),
     // input_tokens excludes cache reads/writes on Anthropic — add them back for a
     // true total, and report the cache-read portion separately.
     inputTokens: (u.input_tokens ?? 0) + cacheRead + cacheCreate,
     outputTokens: u.output_tokens ?? 0,
     cachedInputTokens: cacheRead,
+    cacheWriteTokens: cacheCreate,
   };
 }
 
@@ -342,12 +411,13 @@ async function callOpenAI(opts: CallJSONOptions): Promise<CallJSONResult> {
   logApiResponse('openai', text, data);
   if (!text) throw new LLMError('OpenAI returned no message content.');
   return {
-    data: parseJSON(text),
+    data: parseJSON(text, opts.schema),
     // OpenAI caches prompt prefixes >=1024 tokens automatically (no config); the
     // cached portion is reported under prompt_tokens_details.cached_tokens.
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
     cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    cacheWriteTokens: 0,
   };
 }
 
@@ -381,10 +451,11 @@ async function callMistral(opts: CallJSONOptions): Promise<CallJSONResult> {
   logApiResponse('mistral', text, data);
   if (!text) throw new LLMError('Mistral returned no message content.');
   return {
-    data: parseJSON(text),
+    data: parseJSON(text, opts.schema),
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
     cachedInputTokens: 0,
+    cacheWriteTokens: 0,
   };
 }
 
@@ -419,10 +490,11 @@ async function callGroq(opts: CallJSONOptions): Promise<CallJSONResult> {
   logApiResponse('groq', text, data);
   if (!text) throw new LLMError('Groq returned no message content.');
   return {
-    data: parseJSON(text),
+    data: parseJSON(text, opts.schema),
     inputTokens: data.usage?.prompt_tokens ?? 0,
     outputTokens: data.usage?.completion_tokens ?? 0,
     cachedInputTokens: data.usage?.prompt_tokens_details?.cached_tokens ?? 0,
+    cacheWriteTokens: 0,
   };
 }
 
