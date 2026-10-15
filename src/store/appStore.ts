@@ -50,7 +50,8 @@ import {
 } from '@/ir/manipulate';
 import { SAMPLES, emptyIR, emptyPrompt } from '@/ir/samples';
 import { inferComponentCandidates } from '@/ir/componentInfer';
-import { wireframeChildren, fillPlaceholders, wireframeBackdrop } from '@/ir/wireframe';
+import { wireframeChildren, fillComponent, wireframeBackdrop } from '@/ir/wireframe';
+import { derivePalette } from '@/ir/uiPalette';
 import { buildDemoPlan as buildDemoPlanPure } from '@/annot/resolve';
 import {
   composeFromInstruction,
@@ -513,6 +514,58 @@ function affectedIdsOf(op: ManipulationOp): string[] {
 }
 
 /** Frame nodes get drawn-shape children; falls back to root-level. */
+// --- Placeholder fill helpers (component inference) ------------------------
+
+function replaceNodes(ir: IR, byId: Map<string, IRNode>): IR {
+  return { ...ir, nodes: ir.nodes.map((n) => byId.get(n.id) ?? n) };
+}
+
+/** The host as drawn, before placeholders resized / restyled it (x/y kept). */
+function restoreHost(host: IRNode, inf: ComponentInference): IRNode {
+  const pre = inf.preFill;
+  if (!pre) return host;
+  return {
+    ...host,
+    layout: { ...host.layout, w: pre.w ?? host.layout?.w, h: pre.h ?? host.layout?.h },
+    style: pre.style ? { ...pre.style } : undefined,
+  };
+}
+
+/**
+ * Room a host may grow into: its parent's explicit box, or the canvas when it
+ * sits on the root frame (or the canvas itself). Unbounded inside flow parents.
+ */
+function hostRoom(ir: IR, host: IRNode): { maxW?: number; maxH?: number } {
+  const x = host.layout?.x ?? 0;
+  const y = host.layout?.y ?? 0;
+  const parent = host.parentId ? ir.nodes.find((n) => n.id === host.parentId) : undefined;
+  if (parent?.layout?.w !== undefined && parent.layout.h !== undefined) {
+    return { maxW: parent.layout.w - x, maxH: parent.layout.h - y };
+  }
+  if (!parent || parent.parentId === null) {
+    return { maxW: ir.canvas.w - x, maxH: ir.canvas.h - y };
+  }
+  return {};
+}
+
+/** Theme + fit a host's wireframe children with the surrounding UI's palette. */
+function fillHost(
+  ir: IR,
+  host: IRNode,
+  children: IRNode[],
+  label: string,
+): { children: IRNode[]; host: IRNode; preFill: NonNullable<ComponentInference['preFill']> } {
+  const backdrop = wireframeBackdrop(ir, host);
+  const exclude = new Set([host.id, ...children.map((c) => c.id)]);
+  const palette = derivePalette(ir, backdrop, exclude);
+  const result = fillComponent(children, label, host, backdrop, { palette, ...hostRoom(ir, host) });
+  return {
+    children: result.children,
+    host: result.host ?? host,
+    preFill: { w: host.layout?.w, h: host.layout?.h, style: host.style ? { ...host.style } : undefined },
+  };
+}
+
 function defaultParentId(ir: IR): string | null {
   const frame = ir.nodes.find((n) => n.role === 'frame' && n.parentId === null);
   return frame?.id ?? null;
@@ -1511,23 +1564,34 @@ export const useAppStore = create<AppState>((set, get) => {
     chooseComponent: (nodeId, label, fillArg) => {
       set((st) => {
         const inf = st.inferences[nodeId];
-        const host = st.ir.nodes.find((n) => n.id === nodeId);
-        if (!inf || !host) return {};
+        const found = st.ir.nodes.find((n) => n.id === nodeId);
+        if (!inf || !found) return {};
+        // Placeholders may have resized/restyled the host: rebuild from the drawn shape.
+        const host = restoreHost(found, inf);
+        const baseIR: IR = host === found ? st.ir : replaceNodes(st.ir, new Map([[host.id, host]]));
         // First pick → grey wireframe; switching variation → keep the user's fill
         // mode. An atomic component (no inner parts) reads as 'empty' without the
         // user asking for it, so that doesn't carry over to the next variation.
-        const ids = st.ir.nodes.map((n) => n.id);
+        const ids = baseIR.nodes.map((n) => n.id);
         const forcedEmpty =
           inf.fill === 'empty' && !!inf.chosen && wireframeChildren(host, inf.chosen, ids).length === 0;
         const want: WireframeFill =
           fillArg ?? (inf.status === 'chosen' && !forcedEmpty ? inf.fill : 'wireframe');
-        let children =
-          want === 'empty' ? [] : wireframeChildren(host, label, ids, wireframeBackdrop(st.ir, host));
-        if (want === 'placeholder' && children.length)
-          children = fillPlaceholders(children, label, host, wireframeBackdrop(st.ir, host));
+        const backdrop = wireframeBackdrop(baseIR, host);
+        let children = want === 'empty' ? [] : wireframeChildren(host, label, ids, backdrop);
+        let nextHost = host;
+        let preFill: ComponentInference['preFill'];
+        if (want === 'placeholder' && children.length) {
+          const filled = fillHost(baseIR, host, children, label);
+          children = filled.children;
+          nextHost = filled.host;
+          preFill = filled.preFill;
+        }
         // Replace any previously-generated children of the host with the new ones.
-        const removed = new Set(st.ir.nodes.filter((n) => n.parentId === nodeId).map((n) => n.id));
-        const others = st.ir.nodes.filter((n) => !removed.has(n.id));
+        const removed = new Set(baseIR.nodes.filter((n) => n.parentId === nodeId).map((n) => n.id));
+        const others = baseIR.nodes
+          .filter((n) => !removed.has(n.id))
+          .map((n) => (n.id === nodeId ? nextHost : n));
         // Keep the AlternativesMenu offering the other variations.
         const alternatives = inf.candidates.map((c) => c.label).filter((l) => l !== label);
         const selectionGone =
@@ -1535,7 +1599,7 @@ export const useAppStore = create<AppState>((set, get) => {
           (st.selectedNodeId != null && removed.has(st.selectedNodeId));
         return {
           history: [...st.history, snapshot(st)].slice(-50),
-          ir: { ...st.ir, nodes: [...others, ...children] },
+          ir: { ...baseIR, nodes: [...others, ...children] },
           prompt: {
             clauses: st.prompt.clauses.map((c) =>
               // Picking a component is an explicit confirmation of its clause.
@@ -1546,7 +1610,7 @@ export const useAppStore = create<AppState>((set, get) => {
           },
           inferences: {
             ...st.inferences,
-            [nodeId]: { ...inf, chosen: label, status: 'chosen', fill: children.length ? want : 'empty' },
+            [nodeId]: { ...inf, chosen: label, status: 'chosen', fill: children.length ? want : 'empty', preFill },
           },
           ...(selectionGone ? { selectedNodeId: nodeId, selectedNodeIds: [nodeId] } : {}),
           recentIds: children.length ? children.map((c) => c.id) : [nodeId],
@@ -1558,10 +1622,17 @@ export const useAppStore = create<AppState>((set, get) => {
       set((st) => {
         const inf = st.inferences[nodeId];
         if (!inf) return {};
+        const found = st.ir.nodes.find((n) => n.id === nodeId);
+        const host = found ? restoreHost(found, inf) : undefined;
         return {
           history: [...st.history, snapshot(st)].slice(-50),
-          ir: { ...st.ir, nodes: st.ir.nodes.filter((n) => n.parentId !== nodeId) },
-          inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'empty' } },
+          ir: {
+            ...st.ir,
+            nodes: st.ir.nodes
+              .filter((n) => n.parentId !== nodeId)
+              .map((n) => (host && n.id === nodeId ? host : n)),
+          },
+          inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'empty', preFill: undefined } },
         };
       });
     },
@@ -1571,17 +1642,24 @@ export const useAppStore = create<AppState>((set, get) => {
         const inf = st.inferences[nodeId];
         if (!inf || !inf.chosen) return {};
         const children = st.ir.nodes.filter((n) => n.parentId === nodeId);
-        if (children.length === 0) return {};
         const host = st.ir.nodes.find((n) => n.id === nodeId);
-        const backdrop = host ? wireframeBackdrop(st.ir, host) : undefined;
-        const byId = new Map(
-          fillPlaceholders(children, inf.chosen, host, backdrop).map((n) => [n.id, n]),
-        );
+        if (children.length === 0 || !host) return {};
+        const filled = fillHost(st.ir, host, children, inf.chosen);
+        const byId = new Map(filled.children.map((n) => [n.id, n]));
+        byId.set(host.id, filled.host);
+        const dropped = new Set(children.filter((c) => !byId.has(c.id)).map((c) => c.id));
         return {
+          // One history step: host resize/restyle + every child's content and box.
           history: [...st.history, snapshot(st)].slice(-50),
-          ir: { ...st.ir, nodes: st.ir.nodes.map((n) => byId.get(n.id) ?? n) },
-          inferences: { ...st.inferences, [nodeId]: { ...inf, fill: 'placeholder' } },
-          recentIds: [...byId.keys()],
+          ir: {
+            ...st.ir,
+            nodes: st.ir.nodes.filter((n) => !dropped.has(n.id)).map((n) => byId.get(n.id) ?? n),
+          },
+          inferences: {
+            ...st.inferences,
+            [nodeId]: { ...inf, fill: 'placeholder', preFill: inf.preFill ?? filled.preFill },
+          },
+          recentIds: filled.children.map((n) => n.id),
         };
       });
     },

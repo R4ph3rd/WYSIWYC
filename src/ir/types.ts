@@ -381,6 +381,11 @@ export interface ComponentInference {
   status: InferenceStatus;
   /** How the wireframe children were filled after a choice. */
   fill: WireframeFill;
+  /**
+   * The host's size and look before placeholders themed and resized it, so
+   * going back to the wireframe (or leaving it empty) restores the drawn shape.
+   */
+  preFill?: { w?: number; h?: number; style?: NodeStyle };
 }
 
 /** Annotation layer (prompt-by-demonstration): comments + draft drawings on the canvas. */
