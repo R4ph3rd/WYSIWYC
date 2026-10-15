@@ -667,9 +667,13 @@ export function Canvas() {
         const dy = Math.abs(d.curY - d.startY);
         if (dx >= 4 || dy >= 4) {
           if (d.kind === 'arrow') {
+            // The selection at draw time is the arrow's move source when the
+            // arrow starts on it (annot/resolve.ts `resolveArrowMove`).
+            const sel = useAppStore.getState().selectedNodeIds;
             addAnnotation({
               id: newAnnotId(), kind: 'arrow',
               points: [{ x: d.startX, y: d.startY }, { x: d.curX, y: d.curY }],
+              ...(sel.length ? { selectedIds: [...sel] } : {}),
               createdAt: Date.now(),
             });
           } else {

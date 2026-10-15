@@ -27,7 +27,7 @@
 
 import type { Annotation, DemoIntent, DemoPlanItem, IRNode, ProposalConfidence } from '../ir/types';
 import { classifyGesture, type Gesture } from './gesture';
-import { pickDropTarget } from '../ir/layoutFit';
+import { flowKind, isVisualContainer, pickDropTarget } from '../ir/layoutFit';
 
 /** A node's box in stage (canvas) coordinates, as measured from the DOM by the caller. */
 export interface NodeBox { x: number; y: number; w: number; h: number }
@@ -356,7 +356,7 @@ export function resolveTargets(a: Annotation, boxes: Record<string, NodeBox>): {
 // ---------------------------------------------------------------------------
 
 /** The IR facts intent resolution needs about each node. */
-export type IntentNode = Pick<IRNode, 'id' | 'parentId' | 'order' | 'role' | 'layout'> & { tailwind?: string };
+export type IntentNode = Pick<IRNode, 'id' | 'parentId' | 'order' | 'role' | 'layout'> & { tailwind?: string; content?: string };
 
 /** A recognised scribble gesture and what it resolves to on the scene. */
 export interface ScribbleIntent {
@@ -464,7 +464,7 @@ export function resolveScribbleIntent(
       }
       const moved = nodeAt(from);
       if (!moved) return none;
-      return resolveMove(gesture, moved, to, boxes, nodes, entries, byId);
+      return { gesture, intent: moveIntent(moved, to, boxes, nodes, entries, byId) };
     }
     case 'fill': {
       const { ids } = resolveScribble(a, boxes);
@@ -476,16 +476,15 @@ export function resolveScribbleIntent(
 }
 
 /** Where an arrow drop point lands: inside a container, or before/after a sibling. */
-function resolveMove(
-  gesture: Gesture,
+function moveIntent(
   movedId: string,
   to: Point,
   boxes: Record<string, NodeBox>,
   nodes: IntentNode[],
   entries: Array<[string, NodeBox]>,
   byId: Map<string, IntentNode>,
-): ScribbleIntent {
-  const none: ScribbleIntent = { gesture, intent: null };
+): DemoIntent | null {
+  const none = null;
   const moved = byId.get(movedId)!;
   const movedBox = boxes[movedId];
   const banned = subtreeIds(nodes, movedId);
@@ -504,7 +503,7 @@ function resolveMove(
         targetWidth: Math.round(t.container.w),
       };
       if (t.nextToId) intent.nextToId = t.nextToId;
-      return { gesture, intent };
+      return intent;
     }
   }
 
@@ -559,7 +558,192 @@ function resolveMove(
   const intent: DemoIntent = { kind: 'move', id: movedId, toParentId, toIndex, placement };
   if (nextToId) intent.nextToId = nextToId;
   if (layout) intent.layout = layout;
-  return { gesture, intent };
+  return intent;
+}
+
+// ---------------------------------------------------------------------------
+// Arrow tool: deterministic, layout-aware moves
+// ---------------------------------------------------------------------------
+
+/** Roles that are a component on their own: an arrow from one moves just it. */
+const SELF_COMPONENT_ROLES = new Set<IRNode['role']>(['button', 'input']);
+/** A "component" never covers more than this share of the root frame (else it is a page section). */
+const COMPONENT_MAX_SHARE = 0.5;
+/** An attached note sits within this distance of the arrow's line. */
+const NOTE_ATTACH_PX = 32;
+
+/** What an Arrow-tool annotation resolves to. */
+export interface ArrowMove {
+  /** The node that moves (with its subtree), or null when the tail hits nothing. */
+  sourceId: string | null;
+  source: 'selection' | 'tail' | null;
+  /** The exact move, or null when it needs the model (no source / no destination). */
+  intent: DemoIntent | null;
+  /** Set when the move is impossible (into its own subtree): nothing is applied. */
+  error?: string;
+  /** The destination container and insertion line (flow moves), for the canvas preview. */
+  preview?: { container: NodeBox; line: NodeBox };
+}
+
+/**
+ * The component a point on `leafId` stands for: a card rather than its label.
+ * Climbs to the innermost visually-styled container (border, background,
+ * padding…) that is not a page-sized section; buttons / inputs are
+ * components themselves. Falls back to the hit node.
+ */
+export function componentAt(leafId: string, nodes: IntentNode[], boxes: Record<string, NodeBox>): string {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const leaf = byId.get(leafId);
+  if (!leaf || SELF_COMPONENT_ROLES.has(leaf.role)) return leafId;
+  const root = nodes.find((n) => n.parentId === null && boxes[n.id]);
+  const rootArea = root ? boxArea(boxes[root.id]) : 0;
+  for (let cur: IntentNode | undefined = leaf; cur && cur.parentId; cur = byId.get(cur.parentId)) {
+    const b = boxes[cur.id];
+    if (b && rootArea > 0 && boxArea(b) > COMPONENT_MAX_SHARE * rootArea) break;
+    if (isVisualContainer(cur)) return cur.id;
+  }
+  return leafId;
+}
+
+/**
+ * Resolve an Arrow-tool annotation into an exact move, the same way a canvas
+ * drag lands (ir/layoutFit.ts `pickDropTarget`): container under the arrow
+ * head + insertion index among its items.
+ *
+ * Source: the selected component when the arrow starts on (or within
+ * {@link ARROW_NEAR_PX} of) it — even on one of its children; otherwise the
+ * component under the tail ({@link componentAt}). Destination: the innermost
+ * node under the head outside the moved subtree. Pointing into the moved
+ * node's own subtree is an error; no source, or a head on bare canvas / the
+ * root frame, leaves `intent` null so the model interprets the arrow.
+ */
+export function resolveArrowMove(a: Annotation, boxes: Record<string, NodeBox>, nodes: IntentNode[]): ArrowMove {
+  const none: ArrowMove = { sourceId: null, source: null, intent: null };
+  const pts = a.points ?? [];
+  if (a.kind !== 'arrow' || pts.length < 2) return none;
+  const tail = pts[0];
+  const head = pts[pts.length - 1];
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const entries = validEntries(boxes).filter(([id]) => byId.has(id));
+  const editable = entries.filter(([id]) => byId.get(id)!.parentId !== null);
+
+  let sourceId: string | null = null;
+  let source: ArrowMove['source'] = null;
+  const selected = (a.selectedIds ?? [])
+    .filter((id) => byId.get(id)?.parentId && boxes[id])
+    .map((id) => ({ id, d: distanceToBox(tail, boxes[id]), area: boxArea(boxes[id]) }))
+    .filter((c) => c.d <= ARROW_NEAR_PX)
+    .sort((p, q) => p.d - q.d || p.area - q.area);
+  if (selected.length) {
+    sourceId = selected[0].id;
+    source = 'selection';
+  } else {
+    const hit = nearestNodeToPoint(tail, Object.fromEntries(editable));
+    if (hit && hit.distance <= GESTURE_END_PX) {
+      sourceId = componentAt(hit.id, nodes, boxes);
+      source = 'tail';
+    }
+  }
+  if (!sourceId) return none;
+  const base: ArrowMove = { sourceId, source, intent: null };
+
+  const banned = subtreeIds(nodes, sourceId);
+  const under = entries.filter(([, b]) => pointInBox(head, b)).sort((p, q) => boxArea(p[1]) - boxArea(q[1]));
+  if (under.length === 0) return base;
+  if (banned.has(under[0][0])) {
+    const label = nodeLabel(sourceId, nodes);
+    return {
+      ...base,
+      error: under[0][0] === sourceId
+        ? `Can't move ${label} into itself — point the arrow outside it.`
+        : `Can't move ${label} into ${nodeLabel(under[0][0], nodes)}: that is inside it.`,
+    };
+  }
+
+  const moved = byId.get(sourceId)!;
+  if (isAbsolute(moved)) {
+    const intent = moveIntent(sourceId, head, boxes, nodes, entries, byId);
+    return intent?.kind === 'move' ? { ...base, intent: { ...intent, source: source! } } : base;
+  }
+  const t = pickDropTarget({ nodes, draggedId: sourceId, hitId: under[0][0], point: head, boxOf: (id) => boxes[id] });
+  if (!t) return base;
+  const intent: DemoIntent = {
+    kind: 'move', id: sourceId, toParentId: t.parentId, toIndex: t.index, placement: t.placement,
+    targetWidth: Math.round(t.container.w), source: source!,
+  };
+  if (t.nextToId) intent.nextToId = t.nextToId;
+  return { ...base, intent, preview: { container: t.container, line: t.line } };
+}
+
+/** Distance from a point to the segment a–b. */
+function distanceToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+  return dist(p, { x: a.x + t * dx, y: a.y + t * dy });
+}
+
+/** Ids of the comment annotations pinned on (near) each arrow, by arrow id. */
+export function attachedNotes(annotations: Annotation[]): Map<string, Annotation[]> {
+  const out = new Map<string, Annotation[]>();
+  const arrows = annotations.filter((a) => a.kind === 'arrow' && (a.points?.length ?? 0) >= 2);
+  for (const c of annotations) {
+    if (c.kind !== 'comment' || !c.anchor) continue;
+    let best: { id: string; d: number } | null = null;
+    for (const a of arrows) {
+      const pts = a.points!;
+      const d = distanceToSegment(c.anchor, pts[0], pts[pts.length - 1]);
+      if (d <= NOTE_ATTACH_PX && (!best || d < best.d)) best = { id: a.id, d };
+    }
+    if (best) out.set(best.id, [...(out.get(best.id) ?? []), c]);
+  }
+  return out;
+}
+
+const MOVE_WORDS = new Set([
+  'move', 'moving', 'moved', 'put', 'place', 'drag', 'drop', 'it', 'this', 'that', 'these', 'here', 'there',
+  'to', 'into', 'in', 'inside', 'the', 'a', 'card', 'element', 'component', 'item', 'block', 'over', 'please',
+  'row', 'next', 'beside', 'between', 'before', 'after', 'up', 'down', 'left', 'right', 'one', 'of',
+]);
+
+/** True when a note only restates the move ("move this here"), adding nothing for the model. */
+export function isPureMoveText(text: string): boolean {
+  const words = text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => MOVE_WORDS.has(w));
+}
+
+/**
+ * A short, human label for a node: `Card ‘Revenue’`, `Row`, `Grid`,
+ * `Button ‘New report’`. Cards borrow their first text so they can be told
+ * apart; pure layout containers are named by how they arrange children.
+ */
+export function nodeLabel(id: string, nodes: IntentNode[]): string {
+  const n = nodes.find((x) => x.id === id);
+  if (!n) return id;
+  const firstText = (pid: string): string | undefined => {
+    const kids = nodes.filter((k) => k.parentId === pid).sort((p, q) => p.order - q.order);
+    for (const k of kids) {
+      const t = k.role !== 'icon' ? k.content?.trim() : undefined;
+      if (t) return t;
+      const deeper = firstText(k.id);
+      if (deeper) return deeper;
+    }
+    return undefined;
+  };
+  let kind: string;
+  let text = n.role === 'icon' ? undefined : n.content?.trim();
+  if (n.role === 'frame') kind = n.parentId === null ? 'Page' : 'Frame';
+  else if (n.role === 'container') {
+    if (isVisualContainer(n) && (n.tailwind ?? '').split(/\s+/).some((u) => /^(?:bg-(?!transparent)|border(?:$|-(?![trblxy]-))|shadow|ring-|rounded)/.test(u))) {
+      kind = 'Card';
+      text = text || firstText(n.id);
+    } else {
+      const fk = flowKind(n.tailwind);
+      kind = fk === 'row' ? 'Row' : fk === 'grid' ? 'Grid' : fk === 'col' ? 'Column' : 'Group';
+    }
+  } else kind = n.role.charAt(0).toUpperCase() + n.role.slice(1);
+  return text ? `${kind} ‘${truncate(text, 20)}’` : kind;
 }
 
 /**
@@ -572,9 +756,8 @@ export function intentLabel(intent: DemoIntent | null, labelOf: (id: string) => 
     case 'delete':
       return intent.ids.length > 1 ? `Delete ${intent.ids.length}` : 'Delete';
     case 'move':
-      return intent.placement === 'inside'
-        ? `Move into ${truncate(labelOf(intent.toParentId), 24)}`
-        : `Move ${intent.placement} ${truncate(labelOf(intent.nextToId ?? intent.toParentId), 24)}`;
+      return `Move ${truncate(labelOf(intent.id), 28)} → into ${truncate(labelOf(intent.toParentId), 24)}${
+        intent.layout ? '' : `, position ${intent.toIndex + 1}`}`;
     case 'swap':
       return 'Swap';
     case 'fill':
@@ -583,16 +766,15 @@ export function intentLabel(intent: DemoIntent | null, labelOf: (id: string) => 
 }
 
 /** The plain-English instruction for an intent (plan row text and model fallback). */
-function intentInstruction(intent: DemoIntent, labelOf: (id: string) => string): string {
+export function intentInstruction(intent: DemoIntent, labelOf: (id: string) => string): string {
   const the = (id: string) => `the ${labelOf(id)}`;
   switch (intent.kind) {
     case 'delete':
       return compose(`Delete the crossed-out element${intent.ids.length > 1 ? 's' : ''}.`, [targetSuffix(intent.ids.map(labelOf))]);
     case 'move': {
-      const where = intent.placement === 'inside'
-        ? `into ${the(intent.toParentId)}`
-        : `${intent.placement} ${the(intent.nextToId ?? intent.toParentId)}`;
-      return `Move ${the(intent.id)} ${where}.`;
+      const near = intent.nextToId && intent.placement !== 'inside' ? `, ${intent.placement} ${the(intent.nextToId)}` : '';
+      const pos = intent.layout ? '' : ` at position ${intent.toIndex + 1}`;
+      return `Move ${the(intent.id)} into ${the(intent.toParentId)}${pos}${near}.`;
     }
     case 'swap':
       return `Swap the positions of ${the(intent.ids[0])} and ${the(intent.ids[1])}.`;
@@ -708,7 +890,38 @@ export function buildDemoPlan(
   nodes: IntentNode[] = [],
 ): DemoPlanItem[] {
   const plan: DemoPlanItem[] = [];
-  for (const a of annotations) {
+  // Notes pinned on an arrow belong to it: one step, not two.
+  const notes = nodes.length > 0 ? attachedNotes(annotations) : new Map<string, Annotation[]>();
+  const attached = new Set([...notes.values()].flat().map((c) => c.id));
+  for (const original of annotations) {
+    let a = original;
+    if (attached.has(a.id)) continue;
+    if (a.kind === 'arrow' && nodes.length > 0) {
+      const extra = [a.text, ...(notes.get(a.id) ?? []).map((c) => c.text)]
+        .map((t) => t?.trim()).filter(Boolean).join(' ');
+      const images = [...(a.images ?? []), ...(notes.get(a.id) ?? []).flatMap((c) => c.images ?? [])];
+      const mv = resolveArrowMove(a, boxes, nodes);
+      if (mv.error || mv.intent) {
+        const item: DemoPlanItem = {
+          id: nextId(),
+          annotationId: a.id,
+          source: SOURCE_LABEL[a.kind],
+          targetNodeIds: mv.intent ? intentTargets(mv.intent) : [mv.sourceId!],
+          instruction: mv.intent ? intentInstruction(mv.intent, labelOf) : mv.error!,
+          confidence: mv.intent ? 'high' : 'low',
+        };
+        if (mv.intent) item.intent = mv.intent;
+        if (mv.error) item.error = mv.error;
+        if (extra && !isPureMoveText(extra)) item.followUp = extra;
+        if (images.length) item.images = images;
+        plan.push(item);
+        continue;
+      }
+      if (extra || images.length) {
+        // The model interprets the arrow: hand it the attached note as well.
+        a = { ...a, text: extra || a.text, images: images.length ? images : a.images };
+      }
+    }
     // A recognised scribble gesture becomes a precise, deterministic step.
     const recognised = a.kind === 'scribble' && !a.text?.trim() && nodes.length > 0
       ? resolveScribbleIntent(a, boxes, nodes).intent

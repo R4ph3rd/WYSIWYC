@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Send, X, MapPin, Pencil, Check, AlertTriangle } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { DemoPlanItem } from '@/ir/types';
-import { intentLabel } from '@/annot/resolve';
+import { intentLabel, nodeLabel } from '@/annot/resolve';
 import { AI, AI_ACCENT, AI_ACCENT_FILL } from './tokens';
 
 type Box = { x: number; y: number; w: number; h: number };
@@ -110,12 +110,7 @@ export function ModificationPlan({ stageRef }: { stageRef: React.RefObject<HTMLD
                 onPick={() => setPicking((id) => (id === item.id ? null : item.id))}
                 onText={(t) => updateDemoPlanItem(item.id, { instruction: t })}
                 onRemove={() => removeDemoPlanItem(item.id)}
-                labelOf={(id) => {
-                  const n = ir.nodes.find((x) => x.id === id);
-                  if (!n) return id;
-                  const t = n.content?.trim();
-                  return t ? `${n.role} "${t.slice(0, 16)}"` : n.role;
-                }}
+                labelOf={(id) => nodeLabel(id, ir.nodes)}
               />
             ))}
           </div>
@@ -152,6 +147,28 @@ function PlanRow({
   labelOf: (id: string) => string;
 }) {
   const low = item.confidence !== 'high' || item.targetNodeIds.length === 0;
+  if (item.error) {
+    return (
+      <div data-plan-error className="rounded-xl border border-rose-200 bg-rose-50/50 p-2">
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-500">
+            {item.source}
+          </span>
+          <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-semibold text-rose-700">Skipped</span>
+          <button
+            onClick={onRemove}
+            className="ml-auto rounded p-0.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500"
+            title="Drop this change"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+        <p className="mt-1 flex items-start gap-1 text-[12px] text-rose-700">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {item.error}
+        </p>
+      </div>
+    );
+  }
   return (
     <div className={'rounded-xl border p-2 ' + (low ? 'border-orange-200 bg-orange-50/40' : 'border-slate-200')}>
       <div className="mb-1 flex items-center gap-1.5">
@@ -168,6 +185,11 @@ function PlanRow({
             title={item.intent.kind === 'fill' ? 'Recognised gesture: sent to the model' : 'Recognised gesture: applied directly, without a model call'}
           >
             {intentLabel(item.intent, labelOf)}
+          </span>
+        )}
+        {item.intent?.kind === 'move' && item.intent.source && (
+          <span className="text-[9px] text-slate-400" data-move-source={item.intent.source}>
+            {item.intent.source === 'selection' ? 'from selection' : 'from arrow tail'}
           </span>
         )}
         <button
@@ -206,6 +228,11 @@ function PlanRow({
           className={`w-full resize-none rounded-md border border-slate-200 px-2 py-1 text-[12px] outline-none ${AI.fieldFocus}`}
         />
       </div>
+      {item.followUp && (
+        <p className="mt-1 text-[10px] text-slate-500">
+          Moved directly, then sent to the model: <span className="italic">“{item.followUp}”</span>
+        </p>
+      )}
       {(item.images?.length ?? 0) > 0 && (
         <div className="mt-1 flex gap-1">
           {item.images!.map((src, i) => (

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { MessageSquare, Trash2, X, ImagePlus } from 'lucide-react';
 import { useAppStore } from '@/store/appStore';
 import type { Annotation, IR } from '@/ir/types';
-import { intentLabel, resolveScribbleIntent, scribbleStrokes, type NodeBox } from '@/annot/resolve';
+import { intentLabel, nodeLabel, resolveArrowMove, resolveScribbleIntent, scribbleStrokes, type NodeBox } from '@/annot/resolve';
 import { AI, ANNOTATION_INK } from './tokens';
 
 /**
@@ -74,6 +74,11 @@ export function AnnotationLayer({ stageRef }: { stageRef: React.RefObject<HTMLDi
         const b = shapeBounds(a);
         return b ? <IntentChip key={`intent-${a.id}`} a={a} at={{ x: b.x + b.w + 6, y: b.y - 10 }} boxes={boxes} ir={ir} /> : null;
       })}
+
+      {/* Arrow-tool moves: the resolved source, where it lands, and a chip. */}
+      {drawings.filter((a) => a.kind === 'arrow').map((a) => (
+        <ArrowMovePreview key={`move-${a.id}`} a={a} boxes={boxes} ir={ir} stageW={stageW} />
+      ))}
 
       {comments.map((a) => (
         <CommentBubble
@@ -159,12 +164,7 @@ function useNodeBoxes(stageRef: React.RefObject<HTMLDivElement | null>, deps: un
  */
 function IntentChip({ a, at, boxes, ir }: { a: Annotation; at: { x: number; y: number }; boxes: Record<string, NodeBox>; ir: IR }) {
   const { gesture, intent } = resolveScribbleIntent(a, boxes, ir.nodes);
-  const labelOf = (id: string) => {
-    const n = ir.nodes.find((x) => x.id === id);
-    if (!n) return id;
-    const t = n.content?.trim();
-    return t ? `"${t.slice(0, 16)}"` : n.role;
-  };
+  const labelOf = (id: string) => nodeLabel(id, ir.nodes);
   const tone = !intent
     ? 'border-slate-200 bg-white text-slate-500'
     : intent.kind === 'delete'
@@ -184,6 +184,71 @@ function IntentChip({ a, at, boxes, ir }: { a: Annotation; at: { x: number; y: n
     >
       {intentLabel(intent, labelOf)}
     </span>
+  );
+}
+
+/**
+ * What an Arrow-tool annotation will do: the component that moves (outlined,
+ * with all its children), the destination container + insertion line, and a
+ * chip at the arrow head ("Move Card ‘Revenue’ → into Grid, position 3").
+ * A rejected move (into its own subtree) shows why; an unresolved one says
+ * the model will interpret it.
+ */
+function ArrowMovePreview({ a, boxes, ir, stageW }: { a: Annotation; boxes: Record<string, NodeBox>; ir: IR; stageW: number }) {
+  const pts = a.points ?? [];
+  if (pts.length < 2) return null;
+  const mv = resolveArrowMove(a, boxes, ir.nodes);
+  const head = pts[pts.length - 1];
+  const src = mv.sourceId ? boxes[mv.sourceId] : undefined;
+  const labelOf = (id: string) => nodeLabel(id, ir.nodes);
+  const state = mv.error ? 'blocked' : mv.intent ? 'move' : 'model';
+  const text = mv.error
+    ? mv.error
+    : mv.intent
+      ? intentLabel(mv.intent, labelOf)
+      : mv.sourceId
+        ? `Move ${labelOf(mv.sourceId)} — the model will place it`
+        : 'The model will interpret this arrow';
+  const tone = state === 'blocked'
+    ? 'border-rose-200 bg-rose-50 text-rose-600'
+    : state === 'move' ? AI.chip : 'border-slate-200 bg-white text-slate-500';
+  return (
+    <>
+      {src && (
+        <div
+          data-testid="arrow-source"
+          data-source-id={mv.sourceId ?? undefined}
+          data-source={mv.source ?? undefined}
+          className="pointer-events-none absolute z-20 rounded-md outline-dashed outline-2 outline-amber-500"
+          style={{ left: src.x, top: src.y, width: src.w, height: src.h, outlineOffset: 2 }}
+        />
+      )}
+      {mv.preview && (
+        <>
+          <div
+            className="pointer-events-none absolute z-20 rounded-md border border-dashed border-amber-400/70 bg-amber-400/[0.04]"
+            style={{ left: mv.preview.container.x - 3, top: mv.preview.container.y - 3, width: mv.preview.container.w + 6, height: mv.preview.container.h + 6 }}
+          />
+          <div
+            data-testid="arrow-drop-line"
+            className="pointer-events-none absolute z-20 rounded-full bg-amber-500"
+            style={{ left: mv.preview.line.x, top: mv.preview.line.y, width: mv.preview.line.w, height: mv.preview.line.h }}
+          />
+        </>
+      )}
+      <span
+        data-testid="arrow-chip"
+        data-intent={state}
+        title={state === 'move' ? 'Applied directly (no model call) when you apply the annotations' : undefined}
+        className={`pointer-events-none absolute z-30 max-w-[280px] rounded-xl border px-1.5 py-0.5 text-[10px] font-semibold leading-snug shadow-sm ${tone}`}
+        // Near the right edge the chip opens to the left of the arrow head.
+        style={head.x + 290 > stageW
+          ? { right: Math.max(4, stageW - head.x + 8), top: head.y + 6, width: 'max-content' }
+          : { left: head.x + 8, top: head.y + 6, width: 'max-content' }}
+      >
+        {text}
+      </span>
+    </>
   );
 }
 
