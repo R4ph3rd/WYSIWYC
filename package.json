@@ -1,5 +1,5 @@
 {
-  "name": "wisiwic",
+  "name": "wysiwyc",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@observablehq/plot": "^0.6.17",
@@ -27,11 +29,13 @@
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.68.0",
+    "@playwright/test": "^1.65.0",
     "@types/node": "^20.19.41",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "typescript": "^5.4.0",
-    "vite": "^5.0.0"
+    "vite": "^5.0.0",
+    "vitest": "^2.1.9"
   }
 }
