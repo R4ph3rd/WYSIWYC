@@ -5,6 +5,8 @@ import {
   ColorField, OpacityField, ShadowEditor, Slider, ToggleButton,
 } from './primitives/fields';
 import { FontPicker } from './FontPicker';
+import { ICON_CHOICES, resolveIconName } from '@/ir/icons';
+import { ICONS } from '@/render/icons';
 
 /**
  * A small anchored popover holding the right widget for a clicked parameter
@@ -103,6 +105,8 @@ const LABELS: Record<ParamKind, string> = {
   align: 'Align',
   enum: 'Option',
   shape: 'Shape',
+  position: 'Position',
+  icon: 'Icon',
   text: 'Value',
 };
 
@@ -183,6 +187,22 @@ function Widget({
       );
     }
 
+    case 'position': {
+      const opts = span.options?.length ? span.options : ['left', 'center', 'right'];
+      return (
+        <div className="flex gap-1">
+          {opts.map((o) => (
+            <ToggleButton key={o} active={span.value === o} onClick={() => onCommitClose(o)}>
+              {o[0].toUpperCase() + o.slice(1)}
+            </ToggleButton>
+          ))}
+        </div>
+      );
+    }
+
+    case 'icon':
+      return <IconPicker value={span.value} onPick={onCommitClose} />;
+
     case 'fontFamily':
       return <FontPicker value={span.value} onChange={(f) => onCommitClose(f)} />;
 
@@ -203,5 +223,50 @@ function TextInput({ value, onChange }: { value: string; onChange: (v: string) =
       onChange={(e) => { setDraft(e.target.value); onChange(e.target.value); }}
       className="w-full rounded border border-slate-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-50"
     />
+  );
+}
+
+/**
+ * Icon chooser: a filterable grid of real icons. Typing any word resolves it
+ * through the icon vocabulary ("notification" → Bell); Enter picks it.
+ */
+function IconPicker({ value, onPick }: { value: string; onPick: (name: string) => void }) {
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const typed = q ? resolveIconName(q) : null;
+  const shown = ICON_CHOICES.filter((c) => !q || c.word.includes(q) || c.name.toLowerCase().includes(q) || c.name === typed);
+  if (typed && !shown.some((c) => c.name === typed)) shown.unshift({ name: typed, word: q });
+  return (
+    <div className="flex flex-col gap-1.5">
+      <input
+        autoFocus
+        value={query}
+        placeholder="Search icons (e.g. calendar)"
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && (typed || shown[0])) onPick(typed ?? shown[0].name); }}
+        className="w-full rounded border border-slate-200 px-2 py-1 text-[11px] outline-none focus:border-indigo-300 focus:ring-2 focus:ring-indigo-50"
+      />
+      <div className="grid max-h-40 grid-cols-6 gap-1 overflow-auto">
+        {shown.map(({ name, word }) => {
+          const Icon = ICONS[name];
+          if (!Icon) return null;
+          return (
+            <button
+              key={name}
+              type="button"
+              title={word}
+              data-icon-choice={name}
+              onClick={() => onPick(name)}
+              className={
+                'grid h-8 place-items-center rounded-md border transition-colors ' +
+                (name === value ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50')
+              }
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

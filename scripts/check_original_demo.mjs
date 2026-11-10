@@ -1,0 +1,858 @@
+// src/study/schema.ts
+var SCHEMA_VERSION = 2;
+var TOOL_NAMES = ["v0", "Lovable", "Bolt", "Cursor", "Figma", "ChatGPT/Claude for UI"];
+
+// src/study/tasks.ts
+var TASKS = [
+  {
+    id: "task_1",
+    title: "Sign-in card",
+    goal: "Rebuild the \u201CNorthwind\u201D sign-in card on an indigo-tinted page.",
+    accent: "#4f46e5",
+    criteria: [
+      "Centered white card on a light indigo background, brand mark + \u201CNorthwind\u201D at the top",
+      "\u201CWelcome back\u201D heading with the one-line subtitle under it",
+      "Labelled Email and Password fields; \u201CForgot?\u201D link aligned right on the password label row",
+      "Checked \u201CRemember me\u201D checkbox, full-width indigo \u201CSign in\u201D button",
+      "\u201Cor\u201D divider, outlined \u201CContinue with Google\u201D button, footer \u201CNo account? Create one\u201D"
+    ]
+  },
+  {
+    id: "task_2",
+    title: "Revenue dashboard card",
+    goal: "Rebuild the dense \u201CMonthly revenue\u201D card with its weekly bar chart.",
+    accent: "#059669",
+    criteria: [
+      "Card title \u201CMonthly revenue\u201D with a \u201CLast 30 days\u201D dropdown on the right",
+      "Large \u201C$48,290\u201D, a green \u201C\u25B2 12.4%\u201D pill next to it and the comparison line below",
+      "Seven-day bar chart (Mon\u2013Sun), light green bars with the last bar solid emerald",
+      "Three label/value rows: Orders 1,204 \xB7 Avg. order value $40.10 \xB7 Refund rate 1.8% (red)",
+      "\u201CView full report \u2192\u201D link in emerald at the bottom"
+    ]
+  },
+  {
+    id: "task_3",
+    title: "Navigation & page header",
+    goal: "Rebuild the dark \u201CAcme\u201D top bar and the \u201CProjects\u201D page header with tabs.",
+    accent: "#0284c7",
+    criteria: [
+      "Dark full-width top bar: logo + \u201CAcme\u201D, links Home \xB7 Products \xB7 Pricing \xB7 Docs with Pricing active (underlined)",
+      "Search field, notification bell with a red dot, sky-blue \u201CUpgrade\u201D button on the right",
+      "\u201CProjects\u201D title with \u201C12 active projects across 3 teams\u201D and a dark \u201C+ New project\u201D button",
+      "Tabs All \xB7 Active \xB7 Archived with \u201CAll\u201D selected in sky blue",
+      "Two project rows (Website redesign, Mobile onboarding) each with an \u201CActive\u201D pill"
+    ]
+  },
+  {
+    id: "task_4",
+    title: "Profile settings form",
+    goal: "Rebuild the \u201CProfile settings\u201D form card on a rose-tinted page.",
+    accent: "#e11d48",
+    criteria: [
+      "\u201CProfile settings\u201D heading and the helper sentence under it",
+      "Avatar with initials \u201CJD\u201D and an outlined \u201CChange photo\u201D button beside it",
+      "Full name and Email inputs side by side (pre-filled), Bio textarea with a \u201C0 / 160\u201D counter",
+      "\u201CEmail notifications\u201D row with its description and a rose toggle switched on",
+      "Footer with \u201CCancel\u201D (outlined) and \u201CSave changes\u201D (rose) aligned right"
+    ]
+  }
+];
+var LATIN_SQUARE = [
+  ["task_1", "task_2", "task_4", "task_3"],
+  ["task_2", "task_3", "task_1", "task_4"],
+  ["task_3", "task_4", "task_2", "task_1"],
+  ["task_4", "task_1", "task_3", "task_2"]
+];
+function suggestAssignment(n) {
+  const idx = ((n - 1) % 8 + 8) % 8;
+  const conditionOrder = idx % 2 === 0 ? "wysiwyc-first" : "baseline-first";
+  const squareRow = Math.floor(idx / 2);
+  return buildAssignment(conditionOrder, squareRow);
+}
+function buildAssignment(conditionOrder, squareRow) {
+  const tasks = LATIN_SQUARE[squareRow];
+  const [first, second] = conditionOrder === "wysiwyc-first" ? ["wysiwyc", "baseline"] : ["baseline", "wysiwyc"];
+  return {
+    conditionOrder,
+    squareRow,
+    blocks: [
+      { condition: first, taskId: tasks[0] },
+      { condition: first, taskId: tasks[1] },
+      { condition: second, taskId: tasks[2] },
+      { condition: second, taskId: tasks[3] }
+    ]
+  };
+}
+var CONDITION_LABEL = {
+  wysiwyc: "WYSIWYC",
+  baseline: "Chat-only"
+};
+
+// src/study/questionnaires.ts
+function susScore(answers) {
+  if (answers.length !== 10 || answers.some((a) => a === null)) return null;
+  let sum = 0;
+  answers.forEach((a, i) => {
+    sum += i % 2 === 0 ? a - 1 : 5 - a;
+  });
+  return sum * 2.5;
+}
+var TLX_SCALES = [
+  { key: "mental", label: "Mental demand", question: "How mentally demanding was the task?", low: "Very low", high: "Very high" },
+  { key: "physical", label: "Physical demand", question: "How physically demanding was the task?", low: "Very low", high: "Very high" },
+  { key: "temporal", label: "Temporal demand", question: "How hurried or rushed was the pace of the task?", low: "Very low", high: "Very high" },
+  { key: "performance", label: "Performance", question: "How successful were you in accomplishing what you were asked to do?", low: "Perfect", high: "Failure" },
+  { key: "effort", label: "Effort", question: "How hard did you have to work to accomplish your level of performance?", low: "Very low", high: "Very high" },
+  { key: "frustration", label: "Frustration", question: "How insecure, discouraged, irritated, stressed and annoyed were you?", low: "Very low", high: "Very high" }
+];
+function rawTlx(a) {
+  const v = Object.values(a);
+  if (v.some((x) => x === null)) return null;
+  return v.reduce((s, x) => s + x, 0) / v.length;
+}
+
+// src/study/demoData.ts
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = a + 1831565813 >>> 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+var WORDS = "make the card wider add a subtle border use indigo for the primary button move the link under the field align the labels left".split(" ");
+function demoSessions(n = 12, seed = 7) {
+  const r = rng(seed);
+  const between = (lo, hi) => lo + (hi - lo) * r();
+  const int = (lo, hi) => Math.round(between(lo, hi));
+  const pick = (xs) => xs[Math.floor(r() * xs.length)];
+  const sessions = [];
+  for (let p = 1; p <= n; p++) {
+    const pid = `P${String(p).padStart(2, "0")}`;
+    const a = suggestAssignment(p);
+    const skill = between(0.8, 1.25);
+    const t0 = Date.UTC(2026, 8, 1 + p, 9, 0, 0);
+    const events = [];
+    const calls = [];
+    const blocks = [];
+    let clock = t0;
+    const ev = (blockIndex, start, t, kind, extra = {}) => events.push({ seq: events.length, blockIndex, t, ts: start + t, kind, ...extra });
+    const call = (blockIndex, start, t, callType, input, output, cache) => {
+      const c = {
+        callId: `call_${pid}_${calls.length}`,
+        blockIndex,
+        t,
+        ts: start + t,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        callType,
+        inputTokens: input,
+        outputTokens: output,
+        cacheReadTokens: cache,
+        cacheWriteTokens: cache ? 0 : Math.min(input, 2400),
+        latencyMs: int(1500, 9e3),
+        ok: true
+      };
+      calls.push(c);
+      ev(blockIndex, start, t, "llm_call", { subkind: callType, data: { callId: c.callId, in: input, out: output, cacheRead: cache, ok: true } });
+    };
+    a.blocks.forEach((b, i) => {
+      const start = clock;
+      const wys = b.condition === "wysiwyc";
+      const prompts = wys ? Math.max(1, Math.round(between(1.4, 3.8) * skill)) : Math.max(4, Math.round(between(6.5, 12) * skill));
+      const minutes = wys ? between(4.2, 7.2) * skill : between(7.6, 11.8) * skill;
+      const dur = Math.min(minutes, 14.5) * 6e4;
+      ev(i, start, 0, "block_start", { subkind: b.condition, data: { taskId: b.taskId, timeLimitMin: 15 } });
+      let ctx = 1200;
+      for (let k = 0; k < prompts; k++) {
+        const t = dur * (k + 0.5) / (prompts + (wys ? 3 : 0.5));
+        const words = k === 0 ? int(28, 55) : int(9, 24);
+        ev(i, start, t, "prompt_submit", { subkind: "composer", data: { words, chars: words * 6, provenance: "typed", chips: 0, scoped: false } });
+        const out = k === 0 ? int(3e3, 4200) : int(450, 900);
+        call(i, start, t + 400, "compose", 2600 + ctx, out, k === 0 ? 0 : 2600);
+        ctx += k === 0 ? int(2200, 3e3) : int(80, 240);
+        ev(i, start, t + 6e3, "compose_result", { subkind: "compose", data: { assistantWords: k === 0 ? int(110, 160) : int(70, 120), updated: int(1, 6), removed: 0, ops: int(1, 12) } });
+      }
+      if (wys) {
+        const gestures = int(4, 9);
+        for (let g = 0; g < gestures; g++) {
+          const t = dur * (0.35 + 0.6 * g / gestures);
+          const kind = pick(["move", "resize", "draw", "move", "reorder"]);
+          const cat = kind === "move" || kind === "reorder" ? "drag" : kind;
+          ev(i, start, t, "manipulation", { subkind: kind, category: cat });
+          call(i, start, t + 300, "backchannel", int(700, 1100), int(90, 180), r() < 0.7 ? 520 : 0);
+          ev(i, start, t + 2500, "proposal_shown", { subkind: kind, data: { proposalId: `prop_${g}`, source: "backchannel" } });
+          const x = r();
+          const outcome = x < 0.79 ? "accepted" : x < 0.92 ? "alternative" : x < 0.98 ? "rephrased" : "dismissed";
+          ev(i, start, t + 5e3, "proposal_resolved", { subkind: outcome, data: { proposalId: `prop_${g}`, source: "backchannel", latencyMs: int(1200, 6e3) } });
+        }
+        for (let w = 0, nw = int(2, 6); w < nw; w++) ev(i, start, dur * between(0.3, 0.95), "manipulation", { subkind: pick(["color", "length", "fontFamily"]), category: "widget" });
+        if (r() < 0.5) ev(i, start, dur * 0.6, "manipulation", { subkind: "comment", category: "annotation" });
+        if (r() < 0.4) ev(i, start, dur * 0.7, "manipulation", { subkind: "inspector", category: "edit" });
+      }
+      if (r() < 0.4) ev(i, start, dur * 0.8, "undo", { data: { depth: 3 } });
+      ev(i, start, dur, "block_end", { subkind: "done" });
+      const clauses = wys ? int(11, 16) : int(10, 15);
+      const finalSpec = Array.from({ length: clauses }, () => Array.from({ length: int(9, 14) }, () => pick(WORDS)).join(" "));
+      const susBase = wys ? between(72, 92) : between(52, 74);
+      const lastOfCondition = i % 2 === 1;
+      const tlxBase = wys ? between(22, 42) : between(42, 66);
+      blocks.push({
+        blockIndex: i,
+        condition: b.condition,
+        taskId: b.taskId,
+        startedAt: start,
+        endedAt: start + dur,
+        pausedMs: 0,
+        endReason: "done",
+        finalSpec,
+        tlx: Object.fromEntries(TLX_SCALES.map((s) => [s.key, Math.max(0, Math.min(100, Math.round((tlxBase + between(-15, 15)) / 5) * 5))])),
+        sus: lastOfCondition ? susAnswers(susBase, r) : void 0,
+        similarity: Math.round(between(wys ? 70 : 60, 95) / 5) * 5,
+        selfMatch: int(wys ? 5 : 4, 7)
+      });
+      clock = start + dur + 4 * 6e4;
+    });
+    const prefersW = p !== 7;
+    sessions.push({
+      schemaVersion: SCHEMA_VERSION,
+      sessionId: `ses_demo_${pid}`,
+      createdAt: t0,
+      finishedAt: clock,
+      demographics: {
+        participantId: pid,
+        gender: pick(["woman", "man", "non-binary", "prefer-not"]),
+        genderSelfDescribe: "",
+        age: int(23, 44),
+        role: pick(["Product designer", "Front-end developer", "Design engineer", "Full-stack developer"]),
+        yearsUiExperience: int(2, 14),
+        toolUse: Object.fromEntries(TOOL_NAMES.map((t) => [t, pick(["monthly", "weekly", "daily"])])),
+        llmFamiliarity: int(4, 7),
+        consent: true
+      },
+      config: { conditionOrder: a.conditionOrder, squareRow: a.squareRow, overridden: false, blocks: a.blocks, timeLimitMin: 15, sheetsUrl: "", susSchedule: "per-condition" },
+      blocks,
+      events,
+      calls,
+      interview: {
+        preference: prefersW ? "wysiwyc" : "baseline",
+        preferenceStrength: prefersW ? int(5, 7) : 3,
+        reason: prefersW ? "Fixing small things by hand is faster than describing them." : "For throwaway screens chat is enough.",
+        notes: "(synthetic)"
+      },
+      appVersion: "demo"
+    });
+  }
+  return sessions;
+}
+function susAnswers(target, r) {
+  const per = target / 2.5 / 10;
+  return Array.from({ length: 10 }, (_, i) => {
+    const c = Math.max(0, Math.min(4, Math.round(per + (r() - 0.5) * 1.6)));
+    return i % 2 === 0 ? c + 1 : 5 - c;
+  });
+}
+
+// src/study/metrics.ts
+function wordCount(text) {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+function median(xs) {
+  const v = xs.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
+  if (v.length === 0) return NaN;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+var callTokens = (c) => c.inputTokens + c.outputTokens;
+var isInstructionCall = (c) => c.callType === "compose" || c.callType === "annotation" || c.callType === "recipe";
+function repromptCost(session) {
+  const corrective = [];
+  const any = [];
+  for (const b of session.blocks) {
+    const calls = session.calls.filter((c) => c.blockIndex === b.blockIndex && c.ok && isInstructionCall(c));
+    calls.forEach((c, i) => {
+      any.push(callTokens(c));
+      if (b.condition === "baseline" && i > 0) corrective.push(callTokens(c));
+    });
+  }
+  const m = corrective.length ? median(corrective) : median(any);
+  return Number.isFinite(m) ? Math.round(m) : 0;
+}
+var round = (x, d = 3) => Math.round(x * 10 ** d) / 10 ** d;
+function blockSummary(session, block, reprompt = repromptCost(session)) {
+  const ev = session.events.filter((e) => e.blockIndex === block.blockIndex);
+  const calls = session.calls.filter((c) => c.blockIndex === block.blockIndex);
+  const okCalls = calls.filter((c) => c.ok);
+  const count = (pred) => ev.filter(pred).length;
+  const sumData = (kind, key) => ev.filter((e) => e.kind === kind).reduce((s, e) => s + (Number(e.data?.[key]) || 0), 0);
+  const dm = (cat) => count((e) => e.kind === "manipulation" && e.category === cat);
+  const outcome = (o) => count((e) => e.kind === "proposal_resolved" && e.subkind === o);
+  const accepted = outcome("accepted");
+  const alternative = outcome("alternative");
+  const rephrased = outcome("rephrased");
+  const dismissed = outcome("dismissed");
+  const proposals = count((e) => e.kind === "proposal_shown");
+  const resolved = accepted + alternative + rephrased + dismissed;
+  const resolvedTotal = count((e) => e.kind === "proposal_resolved");
+  const input = okCalls.reduce((s, c) => s + c.inputTokens, 0);
+  const output = okCalls.reduce((s, c) => s + c.outputTokens, 0);
+  const cacheRead = okCalls.reduce((s, c) => s + c.cacheReadTokens, 0);
+  const cacheWrite = okCalls.reduce((s, c) => s + c.cacheWriteTokens, 0);
+  const byType = (t) => calls.filter((c) => c.callType === t).length;
+  const backchannelTokens = okCalls.filter((c) => c.callType === "backchannel").reduce((s, c) => s + callTokens(c), 0);
+  const gestureEpisodes = proposals + dm("gesture");
+  const saveGesture = Math.max(0, gestureEpisodes * reprompt - backchannelTokens);
+  const saveWidget = dm("widget") * reprompt;
+  const edits = okCalls.filter((c) => c.callType !== "backchannel");
+  const firstOut = edits[0]?.outputTokens ?? 0;
+  const savePatch = edits.slice(1).reduce((s, c) => s + Math.max(0, firstOut - c.outputTokens), 0);
+  const saveCache = Math.round(cacheRead * 0.9);
+  const durationMs = (block.endedAt ?? block.startedAt) - block.startedAt - block.pausedMs;
+  const specWords = (block.finalSpec ?? []).reduce((s, c) => s + wordCount(c), 0);
+  const chatWords = sumData("prompt_submit", "words") + sumData("compose_result", "assistantWords");
+  const position = session.blocks.filter((b) => b.condition === block.condition && b.blockIndex <= block.blockIndex).length;
+  const sus = block.sus ? susScore(block.sus) : null;
+  const tlx = block.tlx;
+  const tlxRaw = tlx ? rawTlx(tlx) : null;
+  const opt = (v) => v === null || v === void 0 ? "" : v;
+  return {
+    participant_id: session.demographics.participantId,
+    session_id: session.sessionId,
+    block_index: block.blockIndex,
+    condition: block.condition,
+    task_id: block.taskId,
+    position_in_condition: position,
+    duration_s: round(Math.max(0, durationMs) / 1e3, 1),
+    end_reason: block.endReason ?? "",
+    prompts: count((e) => e.kind === "prompt_submit"),
+    prompt_words: sumData("prompt_submit", "words"),
+    llm_calls: calls.length,
+    calls_compose: byType("compose"),
+    calls_patch: byType("patch"),
+    calls_backchannel: byType("backchannel"),
+    calls_annotation: byType("annotation"),
+    calls_recipe: byType("recipe"),
+    calls_failed: calls.filter((c) => !c.ok).length,
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: input + output,
+    cache_read_tokens: cacheRead,
+    cache_write_tokens: cacheWrite,
+    cached_share: input ? round(cacheRead / input) : 0,
+    llm_latency_s: round(okCalls.reduce((s, c) => s + c.latencyMs, 0) / 1e3, 1),
+    dm_total: count((e) => e.kind === "manipulation"),
+    dm_drag: dm("drag"),
+    dm_resize: dm("resize"),
+    dm_draw: dm("draw"),
+    dm_widget: dm("widget"),
+    dm_edit: dm("edit"),
+    dm_annotation: dm("annotation"),
+    dm_gesture: dm("gesture"),
+    dm_structure: dm("structure"),
+    dm_component: dm("component"),
+    proposals,
+    prop_accepted: accepted,
+    prop_alternative: alternative,
+    prop_rephrased: rephrased,
+    prop_dismissed: dismissed,
+    prop_other: resolvedTotal - resolved,
+    single_click_share: resolved ? round((accepted + alternative) / resolved) : "",
+    undo_count: count((e) => e.kind === "undo"),
+    version_restores: count((e) => e.kind === "version_restore"),
+    spec_words: specWords,
+    chat_words: chatWords,
+    reprompt_cost: reprompt,
+    save_gesture: saveGesture,
+    save_widget: saveWidget,
+    save_patch: savePatch,
+    save_cache: saveCache,
+    sus: opt(sus),
+    tlx_raw: tlxRaw === null ? "" : round(tlxRaw, 2),
+    tlx_mental: opt(tlx?.mental),
+    tlx_physical: opt(tlx?.physical),
+    tlx_temporal: opt(tlx?.temporal),
+    tlx_performance: opt(tlx?.performance),
+    tlx_effort: opt(tlx?.effort),
+    tlx_frustration: opt(tlx?.frustration),
+    similarity: opt(block.similarity),
+    self_match: opt(block.selfMatch)
+  };
+}
+function summaryRows(session) {
+  const reprompt = repromptCost(session);
+  return session.blocks.filter((b) => b.endedAt).map((b) => blockSummary(session, b, reprompt));
+}
+function demographicsRow(session) {
+  const d = session.demographics;
+  const c = session.config;
+  const i = session.interview;
+  return {
+    participant_id: d.participantId,
+    session_id: session.sessionId,
+    created_at: new Date(session.createdAt).toISOString(),
+    gender: d.gender === "self-describe" ? `self: ${d.genderSelfDescribe}` : d.gender,
+    age: d.age ?? "",
+    role: d.role,
+    years_ui_experience: d.yearsUiExperience ?? "",
+    llm_familiarity: d.llmFamiliarity ?? "",
+    tool_v0: d.toolUse.v0,
+    tool_lovable: d.toolUse.Lovable,
+    tool_bolt: d.toolUse.Bolt,
+    tool_cursor: d.toolUse.Cursor,
+    tool_figma: d.toolUse.Figma,
+    tool_chat_llm: d.toolUse["ChatGPT/Claude for UI"],
+    condition_order: c.conditionOrder,
+    square_row: c.squareRow,
+    assignment_overridden: c.overridden,
+    block_order: c.blocks.map((b) => `${b.condition}:${b.taskId}`).join(" | "),
+    time_limit_min: c.timeLimitMin,
+    preference: i.preference,
+    preference_strength: i.preferenceStrength ?? "",
+    preference_reason: i.reason,
+    interview_notes: i.notes,
+    consent: d.consent
+  };
+}
+function blockMeta(session, blockIndex) {
+  const b = session.blocks.find((x) => x.blockIndex === blockIndex) ?? session.config.blocks[blockIndex];
+  return { condition: b?.condition ?? "", task_id: b?.taskId ?? "" };
+}
+function eventRows(session) {
+  return session.events.map((e) => ({
+    participant_id: session.demographics.participantId,
+    session_id: session.sessionId,
+    seq: e.seq,
+    block_index: e.blockIndex,
+    ...blockMeta(session, e.blockIndex),
+    t_ms: Math.round(e.t),
+    ts_iso: new Date(e.ts).toISOString(),
+    kind: e.kind,
+    subkind: e.subkind ?? "",
+    category: e.category ?? "",
+    data_json: e.data ? JSON.stringify(e.data) : ""
+  }));
+}
+function callRows(session) {
+  return session.calls.map((c) => ({
+    participant_id: session.demographics.participantId,
+    session_id: session.sessionId,
+    call_id: c.callId,
+    block_index: c.blockIndex,
+    ...blockMeta(session, c.blockIndex),
+    t_ms: Math.round(c.t),
+    ts_iso: new Date(c.ts).toISOString(),
+    provider: c.provider,
+    model: c.model,
+    call_type: c.callType,
+    input_tokens: c.inputTokens,
+    output_tokens: c.outputTokens,
+    cache_read_tokens: c.cacheReadTokens,
+    cache_write_tokens: c.cacheWriteTokens,
+    latency_ms: Math.round(c.latencyMs),
+    ok: c.ok,
+    error: c.error ?? ""
+  }));
+}
+
+// src/study/stats.ts
+function quantile(xs, q) {
+  const v = xs.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!v.length) return NaN;
+  const pos = (v.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return v[lo] + (v[hi] - v[lo]) * (pos - lo);
+}
+function mean(xs) {
+  const v = xs.filter(Number.isFinite);
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : NaN;
+}
+function normCdf(z) {
+  const x = Math.abs(z) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * x);
+  const erf = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return z >= 0 ? 0.5 * (1 + erf) : 0.5 * (1 - erf);
+}
+function rank(values) {
+  const idx = values.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]);
+  const ranks = new Array(values.length);
+  for (let i = 0; i < idx.length; ) {
+    let j = i;
+    while (j + 1 < idx.length && idx[j + 1][0] === idx[i][0]) j++;
+    const r = (i + j) / 2 + 1;
+    for (let k = i; k <= j; k++) ranks[idx[k][1]] = r;
+    i = j + 1;
+  }
+  return ranks;
+}
+function wilcoxon(before, after) {
+  const diffs = [];
+  let zeros = 0;
+  for (let i = 0; i < before.length; i++) {
+    const d = after[i] - before[i];
+    if (!Number.isFinite(d)) continue;
+    if (d === 0) zeros++;
+    else diffs.push(d);
+  }
+  const n = diffs.length;
+  if (n === 0) return null;
+  const ranks = rank(diffs.map(Math.abs));
+  let wPlus = 0;
+  diffs.forEach((d, i) => {
+    if (d > 0) wPlus += ranks[i];
+  });
+  const total = n * (n + 1) / 2;
+  const wMinus = total - wPlus;
+  const w = Math.min(wPlus, wMinus);
+  const counts = /* @__PURE__ */ new Map();
+  ranks.forEach((r) => counts.set(r, (counts.get(r) ?? 0) + 1));
+  let tie = 0;
+  counts.forEach((t) => {
+    tie += t ** 3 - t;
+  });
+  const mu = total / 2;
+  const sigma = Math.sqrt(n * (n + 1) * (2 * n + 1) / 24 - tie / 48);
+  const zRaw = sigma > 0 ? (wPlus - mu - Math.sign(wPlus - mu) * 0.5) / sigma : 0;
+  const z = Number.isFinite(zRaw) ? zRaw : 0;
+  let p;
+  let method;
+  if (n <= 30) {
+    method = "exact";
+    const r2 = ranks.map((r) => Math.round(r * 2));
+    const max = r2.reduce((a, b) => a + b, 0);
+    let dist = new Float64Array(max + 1);
+    dist[0] = 1;
+    for (const r of r2) {
+      const next = new Float64Array(max + 1);
+      for (let s = 0; s <= max; s++) {
+        if (!dist[s]) continue;
+        next[s] += dist[s];
+        next[s + r] += dist[s];
+      }
+      dist = next;
+    }
+    const all = 2 ** n;
+    const obs = Math.round(w * 2);
+    let tail = 0;
+    for (let s = 0; s <= obs; s++) tail += dist[s];
+    p = Math.min(1, 2 * tail / all);
+  } else {
+    method = "normal";
+    p = Math.min(1, 2 * (1 - normCdf(Math.abs(z))));
+  }
+  return { n, zeros, wPlus, wMinus, w, z, p, method, r: n ? Math.abs(z) / Math.sqrt(n) : 0 };
+}
+function pctChange(a, b) {
+  return a ? (b - a) / Math.abs(a) : NaN;
+}
+function fmtPct(x, digits = 0) {
+  if (!Number.isFinite(x)) return "\u2014";
+  const v = (x * 100).toFixed(digits);
+  return `${x > 0 ? "+" : x < 0 ? "\u2212" : ""}${v.replace("-", "")}%`;
+}
+function fmtP(p) {
+  if (!Number.isFinite(p)) return "\u2014";
+  if (p < 1e-3) return "p < .001";
+  return `p = ${p.toFixed(3).replace(/^0/, "")}`;
+}
+function fmtNum(x, digits = 1) {
+  if (!Number.isFinite(x)) return "\u2014";
+  if (Math.abs(x) >= 1e3) return Math.round(x).toLocaleString("en-US");
+  return Number.isInteger(x) ? String(x) : x.toFixed(digits);
+}
+
+// src/study/analysis.ts
+function emptyData() {
+  return { participants: [], blocks: [], calls: [], events: [], sources: [] };
+}
+var TEXT_COLS = /* @__PURE__ */ new Set([
+  "participant_id",
+  "session_id",
+  "condition",
+  "task_id",
+  "end_reason",
+  "created_at",
+  "gender",
+  "role",
+  "tool_v0",
+  "tool_lovable",
+  "tool_bolt",
+  "tool_cursor",
+  "tool_figma",
+  "tool_chat_llm",
+  "condition_order",
+  "block_order",
+  "preference",
+  "preference_reason",
+  "interview_notes",
+  "call_id",
+  "ts_iso",
+  "provider",
+  "model",
+  "call_type",
+  "error",
+  "kind",
+  "subkind",
+  "category",
+  "data_json"
+]);
+function coerce(row) {
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (typeof v !== "string" || TEXT_COLS.has(k)) {
+      out[k] = v;
+      continue;
+    }
+    if (v === "") out[k] = "";
+    else if (v === "true" || v === "TRUE") out[k] = true;
+    else if (v === "false" || v === "FALSE") out[k] = false;
+    else if (!Number.isNaN(Number(v))) out[k] = Number(v);
+    else out[k] = v;
+  }
+  return out;
+}
+function addSession(data2, s) {
+  data2.participants.push(demographicsRow(s));
+  data2.blocks.push(...summaryRows(s));
+  data2.calls.push(...callRows(s));
+  data2.events.push(...eventRows(s));
+}
+function isSession(x) {
+  return !!x && typeof x === "object" && "demographics" in x && "blocks" in x && "events" in x;
+}
+function addRows(data2, rows) {
+  if (!rows.length) return "empty";
+  const keys = new Set(Object.keys(rows[0]));
+  if (keys.has("call_type")) {
+    data2.calls.push(...rows.map((r) => coerce(r)));
+    return "llm calls";
+  }
+  if (keys.has("kind") && keys.has("seq")) {
+    const ev = rows.map((r) => coerce(r));
+    data2.events.push(...ev);
+    return "events";
+  }
+  if (keys.has("total_tokens") && keys.has("block_index")) {
+    data2.blocks.push(...rows.map((r) => coerce(r)));
+    return "summary";
+  }
+  if (keys.has("years_ui_experience")) {
+    data2.participants.push(...rows.map((r) => coerce(r)));
+    return "demographics";
+  }
+  return "unknown";
+}
+function addJSON(data2, json) {
+  if (isSession(json)) {
+    addSession(data2, json);
+    return "session";
+  }
+  if (Array.isArray(json)) {
+    if (json.every(isSession)) {
+      json.forEach((s) => addSession(data2, s));
+      return `${json.length} sessions`;
+    }
+    return addRows(data2, json);
+  }
+  if (json && typeof json === "object") {
+    const o = json;
+    if (Array.isArray(o.sessions)) return addJSON(data2, o.sessions);
+    const parts = [];
+    for (const key of ["demographics", "participants", "summary", "blocks", "calls", "llm_calls", "events"]) {
+      if (Array.isArray(o[key])) parts.push(addRows(data2, o[key]));
+    }
+    if (o.logs && typeof o.logs === "object") {
+      for (const rows of Object.values(o.logs)) {
+        if (Array.isArray(rows)) parts.push(addRows(data2, rows));
+      }
+    }
+    if (o.synthetic) data2.synthetic = true;
+    if (parts.length) return parts.join(", ");
+  }
+  throw new Error("Unrecognised JSON: expected a session export, a dataset or the Sheets response.");
+}
+var num = (v) => v === "" || v === null || v === void 0 ? NaN : Number(v);
+var MEASURES = [
+  { key: "prompts", label: "Prompts to target", unit: "prompts / task", lowerBetter: true, baseline: (r) => num(r.prompts), wysiwyc: (r) => num(r.prompts) },
+  { key: "tokens", label: "Tokens per task", unit: "tokens", lowerBetter: true, baseline: (r) => num(r.total_tokens), wysiwyc: (r) => num(r.total_tokens) },
+  { key: "time", label: "Time to target", unit: "min", lowerBetter: true, baseline: (r) => num(r.duration_s) / 60, wysiwyc: (r) => num(r.duration_s) / 60 },
+  {
+    key: "specVsChat",
+    label: "Spec vs. chat words",
+    unit: "words",
+    lowerBetter: true,
+    baseline: (r) => num(r.chat_words),
+    wysiwyc: (r) => num(r.spec_words),
+    sides: ["Chat history (chat-only)", "Living spec (WYSIWYC)"]
+  },
+  { key: "calls", label: "Model calls", unit: "calls / task", lowerBetter: true, baseline: (r) => num(r.llm_calls), wysiwyc: (r) => num(r.llm_calls) },
+  { key: "dm", label: "Direct manipulations", unit: "per task", lowerBetter: false, baseline: (r) => num(r.dm_total), wysiwyc: (r) => num(r.dm_total) },
+  { key: "cachedShare", label: "Cached input share", unit: "%", lowerBetter: false, baseline: (r) => num(r.cached_share) * 100, wysiwyc: (r) => num(r.cached_share) * 100 },
+  { key: "sus", label: "SUS", unit: "0\u2013100", lowerBetter: false, baseline: (r) => num(r.sus), wysiwyc: (r) => num(r.sus) },
+  { key: "tlx", label: "Raw NASA-TLX", unit: "0\u2013100", lowerBetter: true, baseline: (r) => num(r.tlx_raw), wysiwyc: (r) => num(r.tlx_raw) },
+  { key: "selfMatch", label: "Self-rated match", unit: "1\u20137", lowerBetter: false, baseline: (r) => num(r.self_match), wysiwyc: (r) => num(r.self_match) },
+  { key: "similarity", label: "Visual similarity (rated)", unit: "0\u2013100", lowerBetter: false, baseline: (r) => num(r.similarity), wysiwyc: (r) => num(r.similarity) }
+];
+function pairsFor(blocks, m) {
+  const by = /* @__PURE__ */ new Map();
+  for (const r of blocks) {
+    const e = by.get(r.participant_id) ?? by.set(r.participant_id, { b: [], w: [] }).get(r.participant_id);
+    if (r.condition === "baseline") e.b.push(m.baseline(r));
+    else if (r.condition === "wysiwyc") e.w.push(m.wysiwyc(r));
+  }
+  const out = [];
+  for (const [pid, e] of by) {
+    const b = mean(e.b);
+    const w = mean(e.w);
+    if (Number.isFinite(b) && Number.isFinite(w)) out.push({ pid, baseline: b, wysiwyc: w });
+  }
+  return out.sort((a, b) => a.pid.localeCompare(b.pid, void 0, { numeric: true }));
+}
+function describe(m, s) {
+  const n = s.pairs.length;
+  if (!n) return "No paired data yet.";
+  const [sb, sw] = s.sides;
+  const fewer = m.lowerBetter ? s.pairs.filter((p) => p.wysiwyc < p.baseline).length : s.pairs.filter((p) => p.wysiwyc > p.baseline).length;
+  const dir = s.medWysiwyc < s.medBaseline ? "fell" : s.medWysiwyc > s.medBaseline ? "rose" : "stayed";
+  const better = m.lowerBetter ? "lower" : "higher";
+  const t = s.test;
+  const testTxt = t ? ` Wilcoxon signed-rank: W = ${fmtNum(t.w)}, ${fmtP(t.p)} (${t.method}${t.zeros ? `, ${t.zeros} tie${t.zeros > 1 ? "s" : ""} dropped` : ""}), r = ${t.r.toFixed(2)}.` : "";
+  const sig = t && t.p < 0.05 ? "" : t ? " The difference is not statistically reliable at this N." : "";
+  const lc = (x) => /[A-Z]{2}/.test(x) ? x : x.toLowerCase();
+  if (m.sides) {
+    return `Median ${lc(sb)} was ${fmtNum(s.medBaseline, 0)} ${m.unit} vs. ${fmtNum(s.medWysiwyc, 0)} for the ${sw.replace(/^Living/, "living")} (${fmtPct(s.change)}); ${fewer} of ${n} participants were ${better}.${testTxt}${sig}`;
+  }
+  return `Median ${lc(m.label)} ${dir} from ${fmtNum(s.medBaseline)} with chat-only to ${fmtNum(s.medWysiwyc)} with WYSIWYC (${fmtPct(s.change)}); ${fewer} of ${n} participants were ${better}.${testTxt}${sig}`;
+}
+function measureStats(blocks, key) {
+  const m = MEASURES.find((x) => x.key === key);
+  const pairs = pairsFor(blocks, m);
+  const b = pairs.map((p) => p.baseline);
+  const w = pairs.map((p) => p.wysiwyc);
+  const medBaseline = median(b);
+  const medWysiwyc = median(w);
+  const improvedCount = pairs.filter((p) => m.lowerBetter ? p.wysiwyc < p.baseline : p.wysiwyc > p.baseline).length;
+  const base = {
+    key,
+    label: m.label,
+    unit: m.unit,
+    sides: m.sides ?? ["Chat-only", "WYSIWYC"],
+    pairs,
+    medBaseline,
+    medWysiwyc,
+    iqrBaseline: [quantile(b, 0.25), quantile(b, 0.75)],
+    iqrWysiwyc: [quantile(w, 0.25), quantile(w, 0.75)],
+    change: pctChange(medBaseline, medWysiwyc),
+    medDiff: median(pairs.map((p) => p.wysiwyc - p.baseline)),
+    improved: improvedCount,
+    test: pairs.length ? wilcoxon(b, w) : null
+  };
+  return { ...base, text: describe(m, base) };
+}
+function perTask(blocks) {
+  const out = [];
+  for (const t of TASKS) {
+    for (const c of ["baseline", "wysiwyc"]) {
+      const rows = blocks.filter((r) => r.task_id === t.id && r.condition === c);
+      out.push({
+        task: t.id,
+        title: t.title,
+        condition: c,
+        conditionLabel: CONDITION_LABEL[c],
+        tokens: median(rows.map((r) => num(r.total_tokens))),
+        prompts: median(rows.map((r) => num(r.prompts))),
+        time: median(rows.map((r) => num(r.duration_s) / 60)),
+        n: rows.length
+      });
+    }
+  }
+  return out;
+}
+function waterfall(blocks) {
+  const tokens = pairsFor(blocks, MEASURES.find((m) => m.key === "tokens"));
+  const per = (col) => {
+    const by = /* @__PURE__ */ new Map();
+    blocks.filter((r) => r.condition === "wysiwyc").forEach((r) => (by.get(r.participant_id) ?? by.set(r.participant_id, []).get(r.participant_id)).push(num(r[col])));
+    return median([...by.values()].map(mean));
+  };
+  const baseline = median(tokens.map((p) => p.baseline));
+  const wysiwyc = median(tokens.map((p) => p.wysiwyc));
+  const observed = baseline - wysiwyc;
+  const rawGesture = per("save_gesture") || 0;
+  const rawWidget = per("save_widget") || 0;
+  const est = rawGesture + rawWidget;
+  const scaled = observed > 0 && est > observed;
+  const k = scaled ? observed / est : 1;
+  const gesture = rawGesture * k;
+  const widget = rawWidget * k;
+  const residual = observed - gesture - widget;
+  const patch = per("save_patch") || 0;
+  const cache = per("save_cache") || 0;
+  const share = (x) => observed > 0 ? `${Math.round(x / observed * 100)}%` : "\u2014";
+  const text = tokens.length ? `Per task, the median participant spent ${fmtNum(baseline, 0)} tokens with chat-only and ${fmtNum(wysiwyc, 0)} with WYSIWYC (${fmtPct(pctChange(baseline, wysiwyc))}). Of that reduction, an estimated ${share(gesture)} comes from direct manipulations that replaced a re-prompt and ${share(widget)} from widget edits that never call the model` + (scaled ? ` (raw estimates of ${fmtNum(rawGesture, 0)} and ${fmtNum(rawWidget, 0)} tokens exceed the observed difference and were scaled to it: several hand edits often stand in for one prompt).` : `; ${share(residual)} (${fmtNum(residual, 0)} tokens) is not explained by these two sources.`) + ` Outside the comparison, patching instead of regenerating saved an estimated ${fmtNum(patch, 0)} output tokens per WYSIWYC task, and prompt caching cut the billed cost of ${fmtNum(cache, 0)} input tokens.` : "No paired token data yet.";
+  return { baseline, wysiwyc, observed, gesture, widget, residual, rawGesture, rawWidget, scaled, patch, cache, n: tokens.length, text };
+}
+function proposalStats(blocks) {
+  const w = blocks.filter((r) => r.condition === "wysiwyc");
+  const s = (c) => w.reduce((a, r) => a + (num(r[c]) || 0), 0);
+  const accepted = s("prop_accepted");
+  const alternative = s("prop_alternative");
+  const rephrased = s("prop_rephrased");
+  const dismissed = s("prop_dismissed");
+  const other = s("prop_other");
+  const resolved = accepted + alternative + rephrased + dismissed;
+  const singleClick = resolved ? (accepted + alternative) / resolved : NaN;
+  const acceptedShare = resolved ? accepted / resolved : NaN;
+  const text = resolved ? `${resolved} proposals were resolved by participants: ${fmtPct(acceptedShare).replace("+", "")} accepted as-is, ${fmtPct(alternative / resolved).replace("+", "")} swapped for a generated alternative, ${fmtPct(rephrased / resolved).replace("+", "")} rephrased and ${fmtPct(dismissed / resolved).replace("+", "")} dismissed. ${fmtPct(singleClick).replace("+", "")} were resolved in a single click (accept or alternative).${other ? ` ${other} more were superseded, undone or left open at the end of a task.` : ""}` : "No proposals were resolved yet.";
+  return { accepted, alternative, rephrased, dismissed, other, shown: s("proposals"), singleClick, acceptedShare, text };
+}
+function dmByKind(blocks) {
+  const kinds = [
+    ["dm_drag", "Drag"],
+    ["dm_resize", "Resize"],
+    ["dm_draw", "Draw"],
+    ["dm_widget", "Widget edit"],
+    ["dm_edit", "Inspector / text"],
+    ["dm_annotation", "Annotation"],
+    ["dm_gesture", "Gesture"],
+    ["dm_structure", "Structure"],
+    ["dm_component", "Component"]
+  ];
+  const w = blocks.filter((r) => r.condition === "wysiwyc");
+  return kinds.map(([col, kind]) => ({ kind, condition: "wysiwyc", perTask: mean(w.map((r) => num(r[col]) || 0)) }));
+}
+function preferenceCounts(participants) {
+  const c = { wysiwyc: 0, baseline: 0, none: 0 };
+  participants.forEach((p) => {
+    if (p.preference in c) c[p.preference]++;
+  });
+  const n = c.wysiwyc + c.baseline + c.none;
+  return { ...c, n, text: n ? `${c.wysiwyc} of ${n} participants preferred WYSIWYC, ${c.baseline} chat-only, ${c.none} had no preference.` : "No preference answers yet." };
+}
+function computeStats(data2) {
+  const blocks = data2.blocks.filter((r) => r.condition === "baseline" || r.condition === "wysiwyc");
+  const measures = MEASURES.map((m) => measureStats(blocks, m.key));
+  const sv = measures.find((m) => m.key === "specVsChat");
+  return {
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    synthetic: !!data2.synthetic,
+    nParticipants: new Set(blocks.map((b) => b.participant_id)).size,
+    nBlocks: blocks.length,
+    measures,
+    perTask: perTask(blocks),
+    waterfall: waterfall(blocks),
+    proposals: proposalStats(blocks),
+    dmByKind: dmByKind(blocks),
+    preference: preferenceCounts(data2.participants),
+    specWords: { wysiwycSpec: sv.medWysiwyc, baselineChat: sv.medBaseline }
+  };
+}
+
+// scripts/check_original_demo.ts
+var data = emptyData();
+demoSessions().forEach((s) => addJSON(data, s));
+var stats = computeStats(data);
+console.log("Original demoData stats:");
+stats.measures.forEach((m) => console.log(m.label, ": Baseline =", m.medBaseline, "WYSIWYC =", m.medWysiwyc, "Change =", (m.change * 100).toFixed(1) + "%"));

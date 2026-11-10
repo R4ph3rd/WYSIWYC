@@ -63,7 +63,7 @@ export function AlternativesMenu({
       onMouseDown={(e) => e.stopPropagation()}
     >
       {clause.origin === 'inferred' && (
-        <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium text-amber-600">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-medium text-amber-700">
           <span className="h-1.5 w-1.5 rounded-full bg-amber-400 ring-2 ring-amber-100" />
           Inferred — not stated by you. Confirm or swap:
         </div>
@@ -78,9 +78,9 @@ export function AlternativesMenu({
             <button
               key={i}
               onClick={() => onPick(alt)}
-              className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-violet-50"
+              className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-amber-50"
             >
-              <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-violet-400" />
+              <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
               <span className="leading-snug">{alt}</span>
             </button>
           ))}

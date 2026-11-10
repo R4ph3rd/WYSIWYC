@@ -139,6 +139,13 @@ export const CLAUSE_CATEGORIES: ClauseCategory[] = ['layout', 'component', 'styl
  */
 export type ClauseOrigin = 'explicit' | 'inferred';
 
+/**
+ * Review state of a clause. Clauses the app adds on its own (e.g. inferred from
+ * a freshly drawn shape) start 'pending' until the user accepts or dismisses
+ * them; absent means 'accepted' (every clause the user wrote or confirmed).
+ */
+export type ClauseStatus = 'pending' | 'accepted';
+
 export interface PromptClause {
   /** Stable id, e.g. "clause_3". */
   id: string;
@@ -148,6 +155,8 @@ export interface PromptClause {
   origin?: ClauseOrigin;
   /** Up to 3 plausible alternative values/phrasings the user can swap in. */
   alternatives?: string[];
+  /** Review state; absent = 'accepted'. See ClauseStatus. */
+  status?: ClauseStatus;
   /**
    * Optional addressable parameter spans: substrings of `text` that name a
    * concrete, editable visual value bound to IR field(s) on specific node(s).
@@ -172,10 +181,12 @@ export type ParamKind =
   | 'align'       // left/center/right → Segmented
   | 'enum'        // closed set from `options` → Segmented/Select
   | 'shape'       // round/rounded/square/rectangle → maps to borderRadius → ShapeControl
+  | 'position'    // where a subject sits in its layout container (left/center/right, top/bottom) → Segmented
+  | 'icon'        // which icon an icon node draws (lucide name) → IconPicker
   | 'text';       // fallback: free text → TextInput
 
 export const PARAM_KINDS: ParamKind[] = [
-  'color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'shape', 'text',
+  'color', 'length', 'fontFamily', 'fontWeight', 'shadow', 'radius', 'opacity', 'align', 'enum', 'shape', 'position', 'icon', 'text',
 ];
 
 /**
@@ -186,6 +197,13 @@ export const PARAM_KINDS: ParamKind[] = [
  *   - "tailwind:<prefix>" → a Tailwind utility family via setUtility (e.g. "tailwind:bg-")
  *   - "align"             → text alignment via setAlignment
  *   - "content"           → the node's text content
+ *   - "gradient:<stop>"   → one gradient stop ("from" | "via" | "to"), keeping the gradient
+ *   - "position:<containerId>" → the node's side inside that layout container (reorder / x)
+ *   - "icon"              → the icon an icon node draws (content = lucide icon name, e.g. "Bell")
+ *
+ * `nodeIds` is the SUBSET of the clause's dependent nodes the token refers to
+ * (see ir/bindings.ts): "green" in "positive changes are green, negative ones
+ * red" binds only the nodes currently green / qualified as positive.
  */
 export interface ParamSpan {
   id: string;          // "param_1", unique within the clause
@@ -262,7 +280,19 @@ export type ManipulationOp =
   /** A shape/text/path hand-drawn on the canvas with the tool palette. */
   | { kind: 'draw'; id: string; role: NodeRole; layout: NodeLayout }
   /** Re-applying a saved Recipe (an abstracted prior instruction) to a selection. */
-  | { kind: 'recipe'; id: string; recipeId: string; instruction: string };
+  | { kind: 'recipe'; id: string; recipeId: string; instruction: string }
+  /** Moving a node under another parent (e.g. a scribbled arrow into a container). */
+  | {
+      kind: 'reparent'; id: string; fromParentId: string | null; toParentId: string; toIndex: number; layout?: NodeLayout;
+      /**
+       * Fit the moved flow node into the target layout (sibling sizing, grid
+       * columns, source re-balance — see ir/layoutFit.ts). `containerWidth` is
+       * the target's measured width for the overflow check.
+       */
+      fit?: { containerWidth?: number };
+    }
+  /** Exchanging the positions (parent, order, absolute x/y) of two nodes. */
+  | { kind: 'swap'; id: string; otherId: string };
 
 // --- DirectGPT interaction layer (CHI 2024, Masson et al.) ----------------
 //
@@ -315,3 +345,133 @@ export interface Recipe {
   createdFrom: string;   // the clause id or compose instruction it was abstracted from
   uses: number;          // times re-applied (study metric)
 }
+
+// --- Prompt-by-demonstration: component inference, wireframes, annotations --
+//
+// Three cooperating layers on top of the prompt⇄IR⇄render pipeline:
+//  A. Drawing a shape infers the *UI component* it most likely represents
+//     (semantic, not a shape spec), with the top guesses offered for a swap.
+//  B. Comments and rough drawings placed on the canvas become a modification
+//     prompt ("prompt by demonstration").
+//  C. Before applying, a reviewable plan pins the guessed target elements so
+//     the user can correct the target and the wording.
+
+/** One candidate UI component a drawn shape might represent (semantic, not a shape spec). */
+export interface ComponentCandidate {
+  /** Semantic component name shown to the user, e.g. "Item card", "Avatar". */
+  label: string;
+  /** One short phrase on what it is / what it contains. */
+  description: string;
+  /** The parts a completed wireframe of this component would contain, e.g. ["image","title","description","button"]. */
+  parts: string[];
+}
+
+export type InferenceStatus = 'suggested' | 'chosen' | 'dismissed';
+/** How a chosen component's children were materialized. */
+export type WireframeFill = 'empty' | 'wireframe' | 'placeholder';
+
+/** Top-N component guesses attached to a freshly drawn shape node. */
+export interface ComponentInference {
+  nodeId: string;
+  /** The inferred clause that describes this component in the spec. */
+  clauseId: string;
+  candidates: ComponentCandidate[];
+  /** The chosen candidate label, once the user picks one. */
+  chosen?: string;
+  status: InferenceStatus;
+  /** How the wireframe children were filled after a choice. */
+  fill: WireframeFill;
+  /**
+   * The host's size and look before placeholders themed and resized it, so
+   * going back to the wireframe (or leaving it empty) restores the drawn shape.
+   */
+  preFill?: { w?: number; h?: number; style?: NodeStyle };
+}
+
+/** Annotation layer (prompt-by-demonstration): comments + draft drawings on the canvas. */
+export type AnnotationKind = 'comment' | 'arrow' | 'box' | 'scribble';
+
+export interface Annotation {
+  id: string;
+  kind: AnnotationKind;
+  /**
+   * Arrow anchors in stage coordinates ([from, …, to]). Legacy single-stroke
+   * scribbles also stored their path here; new scribbles use `strokes`.
+   */
+  points?: PathPoint[];
+  /**
+   * Scribble strokes in stage coordinates: every stroke drawn in one scribble
+   * session, merged into this one annotation (rendered as separate polylines).
+   */
+  strokes?: PathPoint[][];
+  /** Bounding rect in stage coords (box / surround). */
+  rect?: { x: number; y: number; w: number; h: number };
+  /** Comment anchor point in stage coords. */
+  anchor?: PathPoint;
+  /** Comment body text. */
+  text?: string;
+  /** Images dropped into a comment (data URLs), added as prompt context. */
+  images?: string[];
+  /** Target IR nodes this annotation refers to (geometry-resolved or user-set). */
+  targetNodeIds?: string[];
+  /**
+   * The canvas selection when the annotation was drawn. An arrow drawn from
+   * inside a selected component moves that component (with its children),
+   * whichever child the tail visually starts on.
+   */
+  selectedIds?: string[];
+  createdAt: number;
+}
+
+/** One reviewable step of the plan built from annotations (the guardrail before applying). */
+export interface DemoPlanItem {
+  id: string;
+  annotationId: string;
+  /** Short human label of the annotation kind, e.g. "Arrow", "Note". */
+  source: string;
+  /** The nodes the change will apply to; user-editable in the plan overlay. */
+  targetNodeIds: string[];
+  /** The natural-language modification, user-editable before sending. */
+  instruction: string;
+  confidence: ProposalConfidence;
+  /** Images carried from the source comment (data URLs). */
+  images?: string[];
+  /**
+   * What a recognised scribble gesture means (cross-out, arrow, swap, fill).
+   * delete / move / swap are applied deterministically on the IR; editing the
+   * row's instruction drops the intent so the edited text goes to the model.
+   */
+  intent?: DemoIntent;
+  /**
+   * Extra instructions riding on a deterministic step (e.g. the note attached
+   * to an arrow says more than "move it"): the step is applied locally, then
+   * this text goes to the model together with what was already done.
+   */
+  followUp?: string;
+  /** Why this step cannot be applied (e.g. moving a node into itself); it is skipped. */
+  error?: string;
+}
+
+/**
+ * The resolved meaning of a scribble gesture (see annot/gesture.ts). Node ids
+ * are IR ids; `move` carries the exact destination so it needs no model call.
+ */
+export type DemoIntent =
+  | { kind: 'delete'; ids: string[] }
+  | {
+      kind: 'move';
+      id: string;
+      toParentId: string;
+      toIndex: number;
+      /** New absolute x/y (absolute-positioned nodes only), relative to the new parent. */
+      layout?: { x: number; y: number };
+      /** The element the drop point landed next to, when not a bare container. */
+      nextToId?: string;
+      placement?: 'before' | 'after' | 'inside';
+      /** Measured width of the target container (flow moves; layout-fit overflow check). */
+      targetWidth?: number;
+      /** Arrow tool: whether the moved node came from the selection or the arrow tail. */
+      source?: 'selection' | 'tail';
+    }
+  | { kind: 'swap'; ids: [string, string] }
+  | { kind: 'fill'; ids: string[] };

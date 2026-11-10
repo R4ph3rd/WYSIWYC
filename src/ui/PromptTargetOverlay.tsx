@@ -4,10 +4,10 @@ import { useAppStore } from '@/store/appStore';
 import type { PromptRef } from '@/ir/types';
 
 /**
- * Overlay drawn inside the canvas stage. It puts a primary-indigo border (with
+ * Overlay drawn inside the canvas stage. It puts a neutral primary border (with
  * the element's letter ID, matching its chat chip) on every element the current
- * prompt refers to, and a removable pin wherever a here/there location chip
- * points. Node boxes are measured from the live DOM so flow-positioned nodes
+ * prompt refers to, and a removable amber (AI accent) pin wherever a here/there
+ * location chip points. Node boxes are measured from the live DOM so flow-positioned nodes
  * work too; it re-measures whenever the references or the IR change.
  */
 interface Box {
@@ -95,7 +95,7 @@ export function PromptTargetOverlay({
           style={{ left: loc.x, top: loc.y }}
         >
           <div className="flex flex-col items-center">
-            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full bg-slate-900 px-1.5 py-0.5 text-[9px] font-semibold text-white shadow-sm">
+            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full border border-amber-500 bg-amber-400 px-1.5 py-0.5 text-[9px] font-semibold text-amber-950 shadow-sm">
               {loc.label}
               {onRemoveLocation && (
                 <button
@@ -107,7 +107,7 @@ export function PromptTargetOverlay({
                 </button>
               )}
             </span>
-            <Plus className="h-4 w-4 text-slate-900 drop-shadow" strokeWidth={3} />
+            <Plus className="h-4 w-4 text-amber-500 [filter:drop-shadow(0_0_1px_#78350f)]" strokeWidth={3} />
           </div>
         </div>
       ))}

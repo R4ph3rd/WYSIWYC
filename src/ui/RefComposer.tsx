@@ -14,6 +14,7 @@ import {
 } from '@/lib/composer';
 import { cn } from '@/lib/utils';
 import { ExtractMenu } from './ExtractMenu';
+import { AI } from './tokens';
 
 /**
  * The composer is a RICH text+chip field (DirectGPT principles b/c). Rather than
@@ -38,12 +39,13 @@ export interface RefComposerProps {
 }
 
 const CHIP_STYLE: Record<PromptRef['kind'], string> = {
-  // Node + location chips reuse the primary indigo, matching the canvas overlay.
+  // Node chips reuse the neutral primary, matching the canvas outline; location
+  // chips wear the AI accent, matching their amber pin on the canvas.
   node: 'bg-slate-100 text-slate-700 ring-slate-300',
   attribute: 'bg-violet-50 text-violet-700 ring-violet-200',
   param: 'bg-sky-50 text-sky-700 ring-sky-200',
   image: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  location: 'bg-slate-100 text-slate-700 ring-slate-300',
+  location: 'bg-amber-50 text-amber-800 ring-amber-300',
 };
 
 function ChipIcon({ kind }: { kind: PromptRef['kind'] }) {
@@ -268,10 +270,16 @@ export function RefComposer({
           onClick={send}
           disabled={disabled || busy || composerIsEmpty(value)}
           className={cn(
-            'flex items-center justify-center rounded-full bg-slate-900 text-white transition-colors hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-500',
+            'flex items-center justify-center rounded-full transition-colors',
+            // While a call is in flight the button wears the same amber halo
+            // as the canvas Composing… pill; otherwise it is the AI accent fill.
+            busy
+              ? 'wysiwyc-ai-halo cursor-progress'
+              : cn(AI.fill, AI.focus, 'disabled:bg-slate-200 disabled:text-slate-500'),
             lg ? 'h-8 w-8' : 'h-6 w-6',
           )}
-          aria-label="Send"
+          aria-label={busy ? 'Composing…' : 'Send'}
+          aria-busy={busy || undefined}
         >
           {busy ? (
             <Loader2 className={lg ? 'h-4 w-4 animate-spin' : 'h-3 w-3 animate-spin'} />

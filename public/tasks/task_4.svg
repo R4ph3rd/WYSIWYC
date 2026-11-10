@@ -1,20 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="280" height="200" viewBox="0 0 280 200">
-  <rect width="280" height="200" fill="#f8fafc"/>
-  <text x="140" y="28" font-family="sans-serif" font-size="11" font-weight="600" fill="#64748b" text-anchor="middle">Task 4 — Settings Form</text>
-  <!-- Card -->
-  <rect x="24" y="38" width="232" height="148" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1"/>
-  <text x="40" y="58" font-family="sans-serif" font-size="10" font-weight="600" fill="#1e293b">Account Settings</text>
-  <!-- Name row -->
-  <text x="40" y="76" font-family="sans-serif" font-size="8" fill="#94a3b8">Display name</text>
-  <rect x="40" y="82" width="212" height="18" rx="4" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
-  <!-- Email row -->
-  <text x="40" y="112" font-family="sans-serif" font-size="8" fill="#94a3b8">Email</text>
-  <rect x="40" y="118" width="212" height="18" rx="4" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
-  <!-- Toggle row -->
-  <text x="40" y="148" font-family="sans-serif" font-size="8" fill="#1e293b">Email notifications</text>
-  <rect x="208" y="140" width="28" height="16" rx="8" fill="#6366f1"/>
-  <circle cx="226" cy="148" r="6" fill="white"/>
-  <!-- Save button -->
-  <rect x="40" y="162" width="212" height="16" rx="4" fill="#6366f1"/>
-  <text x="146" y="173" font-family="sans-serif" font-size="8" font-weight="600" fill="white" text-anchor="middle">Save changes</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="440" viewBox="0 0 640 440" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">
+  <!-- Task 4 · Profile settings form (accent rose #e11d48) -->
+  <rect width="640" height="440" fill="#fff1f2"/>
+  <rect x="120" y="24" width="400" height="392" rx="16" fill="#ffffff" stroke="#ffe4e6"/>
+  <text x="144" y="60" font-size="16" font-weight="700" fill="#0f172a">Profile settings</text>
+  <text x="144" y="78" font-size="11" fill="#64748b">This information is shown on your public profile.</text>
+  <!-- avatar row -->
+  <circle cx="168" cy="118" r="22" fill="#fecdd3"/>
+  <text x="168" y="123" font-size="13" font-weight="700" fill="#be123c" text-anchor="middle">JD</text>
+  <rect x="204" y="104" width="104" height="28" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="256" y="122" font-size="10" font-weight="600" fill="#334155" text-anchor="middle">Change photo</text>
+  <!-- two inputs side by side -->
+  <text x="144" y="164" font-size="10" font-weight="600" fill="#334155">Full name</text>
+  <rect x="144" y="170" width="170" height="32" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="156" y="190" font-size="11" fill="#0f172a">Jane Doe</text>
+  <text x="326" y="164" font-size="10" font-weight="600" fill="#334155">Email</text>
+  <rect x="326" y="170" width="170" height="32" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="338" y="190" font-size="11" fill="#0f172a">jane@doe.studio</text>
+  <!-- bio -->
+  <text x="144" y="226" font-size="10" font-weight="600" fill="#334155">Bio</text>
+  <rect x="144" y="232" width="352" height="58" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="156" y="252" font-size="11" fill="#94a3b8">A few words about you…</text>
+  <text x="496" y="304" font-size="9" fill="#94a3b8" text-anchor="end">0 / 160</text>
+  <!-- toggle -->
+  <text x="144" y="330" font-size="11" font-weight="600" fill="#0f172a">Email notifications</text>
+  <text x="144" y="346" font-size="10" fill="#64748b">Weekly digest and mentions</text>
+  <rect x="456" y="322" width="40" height="22" rx="11" fill="#e11d48"/>
+  <circle cx="485" cy="333" r="8" fill="#ffffff"/>
+  <!-- footer -->
+  <line x1="144" y1="364" x2="496" y2="364" stroke="#f1f5f9"/>
+  <rect x="316" y="376" width="72" height="30" rx="7" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="352" y="395" font-size="11" font-weight="600" fill="#334155" text-anchor="middle">Cancel</text>
+  <rect x="396" y="376" width="100" height="30" rx="7" fill="#e11d48"/>
+  <text x="446" y="395" font-size="11" font-weight="600" fill="#ffffff" text-anchor="middle">Save changes</text>
 </svg>

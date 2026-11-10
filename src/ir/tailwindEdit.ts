@@ -6,21 +6,54 @@
  * rather than appending a conflicting class.
  */
 
-const COLOR_PREFIXES = ['bg-', 'text-', 'border-', 'from-', 'to-', 'via-', 'ring-', 'fill-'];
+const COLOR_PREFIXES = ['bg-', 'text-', 'border-', 'from-', 'to-', 'via-', 'ring-', 'fill-', 'stroke-'];
+
+/**
+ * True when a utility's value (after the family prefix) names a colour —
+ * `blue-600`, `white`, `[#123456]`, `emerald-500/40` — as opposed to a size,
+ * alignment or position sharing the prefix (`text-sm`, `text-center`,
+ * `border-2`, `from-10%`, `bg-gradient-to-r`).
+ */
+export function isColorValue(value: string): boolean {
+  const v = value.replace(/\/\d+$/, '');
+  return (
+    /^[a-z]+-\d{2,3}$/.test(v) ||
+    /^(?:white|black|transparent|current|inherit)$/.test(v) ||
+    /^\[(?:#|rgb|hsl|color:)/i.test(v)
+  );
+}
+
+/** Split a utility into its variant prefix ("hover:") and its base. */
+function splitVariant(util: string): [string, string] {
+  const colonIdx = util.lastIndexOf(':');
+  return colonIdx >= 0 ? [util.slice(0, colonIdx + 1), util.slice(colonIdx + 1)] : ['', util];
+}
 
 function familyOf(util: string): string | null {
-  // e.g. "bg-blue-600" → "bg-", "hover:bg-blue-700" → "hover:bg-"
-  const colonIdx = util.lastIndexOf(':');
-  const variant = colonIdx >= 0 ? util.slice(0, colonIdx + 1) : '';
-  const base = colonIdx >= 0 ? util.slice(colonIdx + 1) : util;
+  // e.g. "bg-blue-600" → "bg-", "hover:bg-blue-700" → "hover:bg-". Only COLOUR
+  // utilities form a family: "text-sm" must survive a "text-rose-600" recolor.
+  const [variant, base] = splitVariant(util);
   for (const p of COLOR_PREFIXES) {
-    if (base.startsWith(p)) return variant + p;
+    if (base.startsWith(p) && isColorValue(base.slice(p.length))) return variant + p;
   }
   return null;
 }
 
-export function classList(tailwind: string): string[] {
-  return tailwind.split(/\s+/).filter(Boolean);
+/** The colour value of the first utility in `family` (e.g. "from-") on a className, if any. */
+export function colorUtilityValue(tailwind: string, family: string): string | null {
+  for (const util of classList(tailwind)) {
+    if (familyOf(util) === family) return util.slice(family.length);
+  }
+  return null;
+}
+
+/** Remove every colour utility of `family` (e.g. "via-"). */
+export function removeUtilityFamily(tailwind: string, family: string): string {
+  return classList(tailwind).filter((u) => familyOf(u) !== family).join(' ');
+}
+
+export function classList(tailwind: string | undefined): string[] {
+  return (tailwind ?? '').split(/\s+/).filter(Boolean);
 }
 
 /** Replace any utility in the same family as `next`, else append `next`. */

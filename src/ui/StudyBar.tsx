@@ -1,156 +1,116 @@
-import { useEffect, useState } from 'react';
-import { Play, Square, Download, ChevronDown } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { CheckCircle2, ListChecks, Timer } from 'lucide-react';
+import * as Popover from '@radix-ui/react-popover';
 import { useStudyStore } from '@/store/studyStore';
-import type { StudyCondition } from '@/store/studyStore';
-
-const TASKS = [
-  { id: 'task_1', label: 'Task 1 — Login screen' },
-  { id: 'task_2', label: 'Task 2 — Dashboard card' },
-  { id: 'task_3', label: 'Task 3 — Navigation bar' },
-  { id: 'task_4', label: 'Task 4 — Settings form' },
-];
-
-/** Format milliseconds as mm:ss. */
-function formatElapsed(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  return `${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-}
+import { taskById } from '@/study/tasks';
+import { cn } from '@/lib/utils';
+import { ConditionChip, CriteriaList, TargetImage, formatClock } from './study/kit';
 
 /**
- * Study instrumentation bar. Shown only when ?study=1 is in the URL.
- * Participant ID, condition toggle, task picker, Start/Done buttons,
- * live counters (prompts · tokens · elapsed · edits), reference thumbnail.
+ * Task header shown above the editor while a study block runs (/study):
+ * block + condition, the target (click to enlarge), acceptance criteria,
+ * the countdown and the participant's "I'm done" button. The block ends
+ * automatically when the time limit is reached.
  */
 export function StudyBar() {
-  const {
-    activeRun,
-    participantId,
-    condition,
-    taskId,
-    promptCount,
-    tokenCount,
-    editCount,
-    runStartedAt,
-    setParticipantId,
-    setCondition,
-    setTaskId,
-    startRun,
-    endRun,
-    exportDataset,
-  } = useStudyStore();
-
+  const session = useStudyStore((s) => s.session);
+  const current = useStudyStore((s) => s.currentBlock);
+  const blockElapsed = useStudyStore((s) => s.blockElapsed);
+  const endBlock = useStudyStore((s) => s.endBlock);
+  const track = useStudyStore((s) => s.track);
   const [elapsed, setElapsed] = useState(0);
-  useEffect(() => {
-    if (!runStartedAt) { setElapsed(0); return; }
-    const tick = () => setElapsed(Date.now() - runStartedAt);
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [runStartedAt]);
+  const [confirming, setConfirming] = useState(false);
+  const ended = useRef(false);
 
-  const running = activeRun !== null;
+  const block = session?.config.blocks[current];
+  const limitMs = (session?.config.timeLimitMin ?? 10) * 60_000;
+
+  useEffect(() => {
+    ended.current = false;
+    const tick = () => {
+      const e = blockElapsed();
+      setElapsed(e);
+      if (e >= limitMs && !ended.current) {
+        ended.current = true;
+        endBlock('timeout');
+      }
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [blockElapsed, endBlock, limitMs, current]);
+
+  if (!session || !block) return null;
+  const task = taskById(block.taskId)!;
+  const remaining = limitMs - elapsed;
+  const low = remaining < 2 * 60_000;
 
   return (
-    <div className="flex items-center gap-3 border-b border-violet-200 bg-violet-50 px-4 py-1.5 text-[11px]">
-      <span className="font-semibold text-violet-700 uppercase tracking-wider">Study</span>
-
-      <div className="mx-1 h-4 w-px bg-violet-200" />
-
-      {/* Participant ID */}
-      <label className="flex items-center gap-1 text-violet-600">
-        P#
-        <input
-          type="text"
-          value={participantId}
-          onChange={(e) => setParticipantId(e.target.value)}
-          disabled={running}
-          placeholder="id"
-          className="w-14 rounded border border-violet-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-700 outline-none focus:border-violet-400 disabled:opacity-50"
-        />
-      </label>
-
-      {/* Condition toggle */}
-      <div className="flex items-center gap-1 rounded border border-violet-200 bg-white p-0.5">
-        {(['full', 'chat_only'] as StudyCondition[]).map((c) => (
-          <button
-            key={c}
-            disabled={running}
-            onClick={() => setCondition(c)}
-            className={`rounded px-2 py-0.5 font-medium transition-colors disabled:opacity-50 ${
-              condition === c
-                ? 'bg-violet-600 text-white'
-                : 'text-violet-600 hover:bg-violet-50'
-            }`}
-          >
-            {c === 'full' ? 'Full' : 'Chat only'}
-          </button>
-        ))}
+    <div className="flex h-14 shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4" data-testid="study-bar">
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          Block {current + 1}/{session.config.blocks.length}
+        </span>
+        <ConditionChip condition={block.condition} />
       </div>
-
-      {/* Task picker */}
-      <div className="relative flex items-center">
-        <select
-          value={taskId}
-          onChange={(e) => setTaskId(e.target.value)}
-          disabled={running}
-          className="appearance-none rounded border border-violet-200 bg-white py-0.5 pl-2 pr-6 text-[11px] text-slate-700 outline-none focus:border-violet-400 disabled:opacity-50"
-        >
-          {TASKS.map((t) => (
-            <option key={t.id} value={t.id}>{t.label}</option>
-          ))}
-        </select>
-        <ChevronDown className="pointer-events-none absolute right-1.5 h-3 w-3 text-violet-400" />
-      </div>
-
-      {/* Reference thumbnail */}
-      <img
-        src={`/tasks/${taskId}.svg`}
-        alt="Reference"
-        className="h-8 w-14 rounded border border-violet-200 object-cover"
-        onError={(e) => (e.currentTarget.style.display = 'none')}
+      <div className="mx-1 h-8 w-px bg-slate-200" />
+      <TargetImage
+        taskId={task.id}
+        className="h-10 w-[58px] shrink-0"
+        onOpen={() => track('target_view', { subkind: 'task', data: { taskId: task.id } })}
       />
+      <div className="min-w-0">
+        <p className="truncate text-[13px] font-semibold text-slate-800">{task.title}</p>
+        <p className="truncate text-[11px] text-slate-500">{task.goal}</p>
+      </div>
+      <Popover.Root onOpenChange={(o) => o && track('target_view', { subkind: 'criteria', data: { taskId: task.id } })}>
+        <Popover.Trigger asChild>
+          <button className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50">
+            <ListChecks className="h-3.5 w-3.5" /> Criteria
+          </button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content sideOffset={6} align="start" className="z-[70] w-96 rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Done when…</p>
+            <CriteriaList criteria={task.criteria} />
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
 
-      <div className="mx-1 h-4 w-px bg-violet-200" />
-
-      {/* Start / Done */}
-      {!running ? (
-        <button
-          onClick={startRun}
-          disabled={!participantId.trim()}
-          className="flex items-center gap-1 rounded bg-violet-600 px-2.5 py-1 font-semibold text-white transition-colors hover:bg-violet-700 disabled:opacity-40"
+      <div className="ml-auto flex items-center gap-3">
+        <span
+          className={cn(
+            'flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[13px] tabular-nums',
+            low ? 'bg-amber-50 text-amber-800' : 'text-slate-600',
+          )}
+          title={`Time left of ${session.config.timeLimitMin} min`}
+          data-testid="study-timer"
         >
-          <Play className="h-3 w-3" /> Start
-        </button>
-      ) : (
-        <button
-          onClick={endRun}
-          className="flex items-center gap-1 rounded bg-rose-600 px-2.5 py-1 font-semibold text-white transition-colors hover:bg-rose-700"
-        >
-          <Square className="h-3 w-3" /> Done
-        </button>
-      )}
-
-      {/* Live counters */}
-      {running && (
-        <div className="flex items-center gap-3 font-mono text-violet-700">
-          <span title="Prompts sent">{promptCount} prompts</span>
-          <span title="Total tokens">{tokenCount.toLocaleString()} tok</span>
-          <span title="Elapsed time">{formatElapsed(elapsed)}</span>
-          <span title="Canvas edits">{editCount} edits</span>
-        </div>
-      )}
-
-      <div className="ml-auto" />
-
-      {/* Export */}
-      <button
-        onClick={exportDataset}
-        className="flex items-center gap-1 rounded border border-violet-200 bg-white px-2 py-0.5 text-violet-600 transition-colors hover:bg-violet-50"
-        title="Download study dataset (JSON)"
-      >
-        <Download className="h-3 w-3" /> Export
-      </button>
+          <Timer className="h-3.5 w-3.5" />
+          {formatClock(remaining)}
+        </span>
+        {confirming ? (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-slate-500">Finish this task?</span>
+            <button onClick={() => setConfirming(false)} className="rounded-md px-2 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-slate-100">
+              Keep working
+            </button>
+            <button
+              onClick={() => { ended.current = true; endBlock('done'); setConfirming(false); }}
+              className="flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+            >
+              Yes, I’m done
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirming(true)}
+            className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" /> I’m done
+          </button>
+        )}
+      </div>
     </div>
   );
 }
