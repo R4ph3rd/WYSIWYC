@@ -210,6 +210,22 @@ export function AnalysisPage() {
     merge((d) => { addJSON(d, sessions); d.sources.push(`This browser (${sessions.length} sessions)`); });
   }
 
+  async function loadStudy32() {
+    setError(null);
+    try {
+      const res = await fetch(`${import.meta.env.BASE_URL}study_32p_sessions.json`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const d = emptyData();
+      addJSON(d, json);
+      d.sources.push('Calibrated N=32 study dataset');
+      setData(ensureBlocks(dedupe(d)));
+      setLog((l) => [...l, 'Loaded calibrated N=32 study dataset']);
+    } catch (e) {
+      setError(`Could not load /study_32p_sessions.json: ${(e as Error).message}`);
+    }
+  }
+
   function loadDemo() {
     setError(null);
     const d = emptyData();
@@ -295,6 +311,9 @@ export function AnalysisPage() {
               <div className="flex flex-wrap gap-2">
                 <button className={btn} onClick={loadArchive}>
                   <Database className="h-3.5 w-3.5" /> Sessions in this browser
+                </button>
+                <button className={cn(btn, 'border-indigo-300 bg-indigo-50/70 text-indigo-700 hover:bg-indigo-100')} onClick={loadStudy32}>
+                  <FlaskConical className="h-3.5 w-3.5 text-indigo-600" /> Load N=32 study
                 </button>
                 <button className={btn} onClick={loadDemo}>
                   <FlaskConical className="h-3.5 w-3.5" /> Load demo data
